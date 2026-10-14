@@ -14,8 +14,10 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+from core.vsdc.vsdc_reader import ReadContext, ReadResult
+
 from .sgt_corpus import group_sessions
-from .sgt_shadow import SgtShadow
+from .sgt_shadow import BLIND_RETRIES, SgtShadow
 from .sgt_specs import SpecStore
 
 ROW_FIELDS = ("pan", "gstin", "client_name", "filing_type", "period_label", "arn", "status", "filing_preference")
@@ -59,17 +61,22 @@ def replay_session(pages: List[Dict[str, Any]], store: Optional[SpecStore] = Non
                     rows.pop(row["supersedes_dataset_key"], None)
                 rows[row["dataset_key"]] = {k: row.get(k, "") for k in ROW_FIELDS}
 
-        for page in pages:
+        for seq, page in enumerate(pages, 1):
             lines = list(page.get("lines") or [])
-            if page.get("source") == "ocr":
-                state["uia"], ocr.lines = [], lines
-            else:
-                state["uia"], ocr.lines = lines, []
             state["ts"] = max(state["ts"], float(page.get("ts") or state["ts"])) + 0.001
             if page.get("today"):
                 state["today"] = date.fromisoformat(page["today"])
-            sgt.observe(1, page.get("portal") or "", page.get("url") or "", frame=_FakeFrame(),
-                        ocr=ocr, title=page.get("title") or "")
+            # As the capture loop does it: the window's bookkeeping, a read asked by its session,
+            # the result absorbed into that session under its source's policy.
+            portal, url, title = page.get("portal") or "", page.get("url") or "", page.get("title") or ""
+            s = sgt.observe_window(1, None, portal, url, title)
+            if s is not None:
+                ctx = ReadContext(seq=seq, hwnd=1, title=title, portal=portal, url=url, asked_at=state["ts"])
+                sgt.request_made(ctx, s)
+                sgt.absorb(ReadResult(ctx=ctx, source="ocr" if page.get("source") == "ocr" else "uia", lines=lines,
+                                      url_before=url, url_after=url, started_at=state["ts"],
+                                      finished_at=state["ts"]),
+                           frame=_FakeFrame(), ocr=ocr, blind_retries=BLIND_RETRIES)
             collect()
         sgt.end_all("replay end")
         collect()

@@ -7,6 +7,7 @@ count recovers, a pause is never permanent) and the on-disk diagnostics (logs/vs
 """
 import threading
 import time
+from unittest.mock import MagicMock
 
 import pytest
 from PIL import Image
@@ -157,14 +158,18 @@ def test_sgt_reads_again_on_the_next_tick_after_a_busy_skip(tmp_path):
     assert sgt.take_diag()["reads"] == 0
 
 
-def test_sgt_counts_a_blind_gst_page_as_skipped(tmp_path):
+def test_sgt_counts_a_blind_gst_page_as_ocr_read(tmp_path):
+    """OCR runs on every portal now (never-miss blueprint 5.2): a blind GST page is read by OCR."""
     sgt = SgtShadow(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
                     read_uia=lambda h: {"lines": []}, log_dir=tmp_path, echo=lambda m: None,
                     notify=lambda *a: None)
+    ocr = MagicMock()
+    ocr.scan_image.return_value = {"lines": ["Dashboard", "x", "y"]}
     sgt.observe(1, "GST Portal", "https://services.gst.gov.in/services/auth/fowelcome",
-                frame=Image.new("RGB", (8, 8), (1, 1, 1)))
+                frame=Image.new("RGB", (8, 8), (1, 1, 1)), ocr=ocr)
     d = sgt.take_diag()
-    assert d["reads"] == 1 and d["blind"] == 1 and d["skipped"] == 1 and d["portal"] == "GST Portal"
+    assert d["reads"] == 1 and d["blind"] == 1 and d["ocr"] == 1 and d["skipped"] == 0
+    assert d["portal"] == "GST Portal" and d["last_source"] == "ocr"
 
 
 # ── logs/vsdc.log ───────────────────────────────────────────────────────────────

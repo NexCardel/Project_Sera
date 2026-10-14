@@ -263,7 +263,8 @@ class TestRouter:
                 clock.advance(0.35)
                 assert harness.tick() is None
                 settle()
-            fake.observe.assert_called_once()
+            fake.absorb.assert_called_once()                 # WP5: the read lands in the session that asked
+            assert fake.request_made.call_count >= 1             # every page read asked is noted (the burst goes on)
         finally:
             r._drop_capture()
 

@@ -65,9 +65,19 @@ class FakeSgt:
         self.ended = []
         self.want = False
 
-    def observe(self, hwnd, portal, url, frame=None, ocr=None, title="", tab=None, read=None):
-        self.observed.append(SimpleNamespace(hwnd=hwnd, portal=portal, url=url, frame=frame, title=title,
-                                             tab=tab, read=read))
+    def observe_window(self, hwnd, tab, portal, url, title=""):
+        return self.session
+
+    session = object()                                        # None = a logout page
+
+    def request_made(self, ctx, s):
+        pass
+
+    def absorb(self, r, frame=None, ocr=None, now=None, blind_retries=0):
+        from core.vsdc import vsdc_scope
+        self.observed.append(SimpleNamespace(hwnd=r.ctx.hwnd, portal=vsdc_scope.portal_for_url(r.url) or r.ctx.portal,
+                                             url=vsdc_scope.sanitize_page_url(r.url), frame=frame, title=r.ctx.title,
+                                             tab=r.tab_after, read={"lines": list(r.lines), "docs": r.docs}))
 
     def wants_read(self, hwnd):
         return self.want

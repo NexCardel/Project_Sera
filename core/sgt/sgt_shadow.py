@@ -19,7 +19,10 @@ captures, never page reads. Everything is also written to a local log.
 Per browser window (one client per session, two windows = two sessions):
 
   read      UIA first; OCR of the screenshot when UIA comes back blind (a canvas-painted
-            page shows UIA nothing, or only Flutter's "Enable accessibility" button).
+            page shows UIA nothing, or only Flutter's "Enable accessibility" button), on
+            every portal - OCR only ever adds (SOURCE_POLICY). With the capture loop
+            (core/vsdc/vsdc_capture) a read is asked for by observe_window's session and
+            absorbed into that session when it comes back (absorb).
             A page is only re-read when it changed - the URL, the screenshot's 32x32
             hash, or 15 s passing - so a still page costs one hash, not one read.
   profile   latches by default: once found it is no longer looked for. A spec with
@@ -105,10 +108,24 @@ IDLE_REASON = "idle 2 hr"
 CLIENT_LINK_SPEC = "client_db:user_id"       # the "spec" of a PAN / GSTIN taken from the saved client that owns the portal user ID
 IDENTITY_PROBLEM = "form and period are not known yet"      # why an ack-only row waits (see _queue)
 RESUME_WINDOW_SEC = 4 * 3600
-# Portals whose pages are never read by OCR: a canvas read there loses the label markers
-# ("Period •") and used to clear values the accessibility tree had just set (GST bug, 2026-10-06).
-# A blind page of these portals is simply not read.
-NO_OCR_PORTALS = frozenset({"GST Portal"})
+# What a read may change, by where its text came from (SGT never-miss blueprint 5.2 with R6). OCR
+# is allowed on every portal but only ever ADDS: it never sets the client or any profile field,
+# fills a piece of the dataset in progress only where none exists (a canvas read loses label
+# markers such as "Period •", which once cleared values UIA had just set: GST, 2026-10-06), and
+# creates a row or raises a status only together with that dataset's own ARN/ack.
+SOURCE_POLICY = {
+    "uia": {"profile": "all", "pieces": "set_change_clear", "datasets": "merge_follow", "identity_check": True},
+    "ocr": {"profile": "none", "pieces": "fill_empty_only", "datasets": "merge_add_only", "identity_check": False},
+}
+BLIND_RETRIES = 2               # a page that read fine before is read again this often before OCR
+BLIND_RETRY = "blind-retry"     # absorb()'s answer: the capture loop asks for the page again
+RESULT_MAX_AGE_SEC = 60.0       # as core/vsdc/vsdc_reader: an older result is dropped, never absorbed
+OWNERS_KEPT = 500               # requests remembered (request_made) at most
+CLOSED_RING = 20                # ended sessions a late result may still land in...
+CLOSED_KEEP_SEC = 300.0         # ...for this long
+# Only these ends let a late result in (R1): the next page in that tab is still the same login.
+# Never a logout, a login page or another client's PAN/GSTIN - the read may show the next client.
+ABSORB_AFTER_END = ("idle", "window closed")
 REREAD_AFTER_SEC = 15.0
 MIN_UIA_LINES = 3               # fewer than this and the page is treated as blind
 MISSES_TO_CLEAR = 2             # reads in a row a piece must be missing from its page to be cleared
@@ -174,6 +191,10 @@ class _Slot:
     lowered: bool = False               # its status was just lowered on purpose: the tracker must accept it
     confirmed: bool = False             # ... and the user said yes to it (a complete row is lowered only then)
     demotion_asked: Set[str] = field(default_factory=set)   # (status, page visit) pairs already put to the user
+    # "uia" | "ocr" | "recovered": what the row rests on now. An OCR-only row becomes "uia" once a UIA
+    # read shows the same ARN. first_seen_as: what first saw it.
+    evidence_source: str = "uia"
+    first_seen_as: str = ""
 
     @property
     def arn(self) -> Optional[str]:
@@ -234,7 +255,8 @@ class _Session:
     blind_pages: int = 0
     read_ms: float = 0.0
     conflicts: int = 0
-    ocr_skips: int = 0                  # blind reads of a no-OCR portal (see NO_OCR_PORTALS)
+    ocr_skips: int = 0                  # always 0 since OCR runs on every portal (kept for old logs)
+    good_lines: Dict[str, int] = field(default_factory=dict)    # page -> lines of its last good UIA read
     visit: int = 0                      # +1 whenever the page link changes: one stay on one page
     untied: Set[str] = field(default_factory=set)   # page visits whose bare submit message was already reported
     draft: _Draft = field(default_factory=_Draft)
@@ -366,6 +388,15 @@ class SgtShadow:
         # counts and the portal only, never a page's text.
         self._diag: Dict[str, Any] = self._fresh_diag()
         self._sdis_doc: Optional[Dict[str, Any]] = None   # the containers document instances were built under
+        # The capture loop's reads (blueprint 6.1): ReadContext.seq -> [session id, asked_at, cut]. A
+        # result lands in the session that asked, never in the one in view when it comes back. `cut`
+        # names the boundary (logout, login page, another client) that session crossed since: then
+        # the result is dropped, because the page it read may already be the next client's (R1).
+        self._owners: "OrderedDict[int, List[Any]]" = OrderedDict()
+        # Ended sessions, for a result that comes back after its session ended: id -> (ended, session, reason)
+        self._closed: "OrderedDict[str, Tuple[float, _Session, str]]" = OrderedDict()
+        self._policy: Dict[str, str] = SOURCE_POLICY["uia"]    # the source policy of the read being absorbed
+        self._url_changed = False                # the last observe_window moved its session to another page
         if self._state_path is not None:
             self._recover()
 
@@ -399,14 +430,57 @@ class SgtShadow:
     def observe(self, hwnd: int, portal: Optional[str], url: str, frame: Any = None,
                 ocr: Any = None, title: str = "", tab: Optional[str] = None,
                 read: Optional[Dict[str, Any]] = None) -> Optional[PageResult]:
-        """tab: the id of the browser tab in front (None = not known: the window is one session,
-        as before tabs were told apart). read: the page read the capture loop already made
-        ({"lines", "docs", "ms"}; core/vsdc/vsdc_capture) - absorbed as it is, with no read and no
-        change gate here. Until WP5's absorb() replaces it."""
+        """observe_window and, when the page changed, a read of it absorbed at once (replay, tests,
+        and anything without a capture loop). tab: the id of the browser tab in front (None = not
+        known: the window is one session, as before tabs were told apart). read: a page read
+        already made ({"lines", "docs", "ms"}) - absorbed as it is, with no read and no change gate."""
         try:
             return self._observe(hwnd, portal or "", url or "", frame, ocr, title or "", tab or None, read)
         except Exception as e:                  # shadow mode must never disturb capture
             self._echo(f"[SGT] {self._tag} error, page skipped: {e}")
+            return None
+
+    def observe_window(self, hwnd: int, tab: Optional[str], portal: Optional[str], url: str,
+                       title: str = "") -> Optional[_Session]:
+        """Session bookkeeping for the window in view (tab switch, portal switch, login/logout link,
+        idle, parked resume, claiming the tab) - no read. The session in view, or None on a logout
+        page (nothing about a client is read there)."""
+        try:
+            return self._observe_window(hwnd, portal or "", url or "", tab or None, self._clock())
+        except Exception as e:
+            self._echo(f"[SGT] {self._tag} error, window skipped: {e}")
+            return None
+
+    def request_made(self, ctx: Any, s: Optional[_Session] = None) -> None:
+        """The capture loop asked for a page read (a vsdc_reader.ReadContext) while `s` (default: the
+        session in view in ctx.hwnd) was the window's session: its result belongs to that session."""
+        try:
+            s = s if s is not None else self._sessions.get(ctx.hwnd)
+            if s is None:
+                return
+            asked = float(ctx.asked_at or 0.0)
+            self._owners[ctx.seq] = [s.session_id, asked, ""]
+            while self._owners:
+                seq, (_, at, _) = next(iter(self._owners.items()))
+                if len(self._owners) <= OWNERS_KEPT and asked - at <= RESULT_MAX_AGE_SEC:
+                    break
+                self._owners.pop(seq)
+        except Exception as e:
+            self._echo(f"[SGT] {self._tag} request not noted: {type(e).__name__}")
+
+    def absorb(self, result: Any, frame: Any = None, ocr: Any = None, now: Optional[float] = None,
+               blind_retries: int = 0) -> Any:
+        """Resolves and merges one finished read (a vsdc_reader.ReadResult) into the session that asked
+        for it (request_made) - in view, set aside, or ended by idle or a closed window - under the
+        SOURCE_POLICY of its source. Dropped: an error, a torn read (R1), a result older than
+        RESULT_MAX_AGE_SEC (now: the reader's clock), an unknown owner, an owner that crossed a
+        boundary since. frame/ocr: the screenshot taken when the read was asked, for a blind page.
+        blind_retries: how often the loop already re-read this page. Returns the PageResult, None,
+        or BLIND_RETRY (a page that read fine before came back blind: ask again before OCR)."""
+        try:
+            return self._absorb_result(result, frame, ocr, now, blind_retries)
+        except Exception as e:
+            self._echo(f"[SGT] {self._tag} error, read skipped: {e}")
             return None
 
     def wants_read(self, hwnd: int) -> bool:
@@ -507,11 +581,113 @@ class SgtShadow:
     def _observe(self, hwnd: int, portal: str, url: str, frame: Any, ocr: Any, title: str = "",
                  tab: Optional[str] = None, read: Optional[Dict[str, Any]] = None) -> Optional[PageResult]:
         now = self._clock()
+        s = self._observe_window(hwnd, portal, url, tab, now)
+        if s is None:
+            return None
+        h = _frame_hash(frame)
+        changed = (read is not None or self._url_changed or h is None or h != s.last_hash
+                   or (now - s.last_read) >= REREAD_AFTER_SEC)
+        sgt_i = self._sgt_i    # one read: Settings may detach it from another thread mid-tick
+        if not changed and sgt_i is not None:
+            changed = sgt_i.wants_read(s.session_id)   # SGT-I may only ask for MORE reads
+        scc = self._scc        # one read, as sgt_i
+        if not changed and scc is not None:
+            changed = scc.wants_read(s.session_id)     # SCC-U too: at most 30 s after a copy
+        prev_hash, prev_read = s.last_hash, s.last_read
+        s.last_hash = h
+        if not changed:
+            return None
+        s.last_read = now
+
+        t0 = time.perf_counter()
+        res = read if read is not None else (self._read_uia(hwnd) or {})
+        if res.get("busy"):
+            # The previous UIA read is still running (a slow page, not a hung one): this page was
+            # not read at all, so it must not count as read - the next tick asks again.
+            s.last_hash, s.last_read = prev_hash, prev_read
+            self._diag["busy"] += 1
+            self._report(self._on_read, False, 0.0, "busy")
+            return None
+        out = self._absorb_lines(hwnd, s, portal, url, title, tab, list(res.get("lines") or []), "uia",
+                                 docs=(read.get("docs") if read is not None else None), own_read=read is None,
+                                 read_ms=float(res.get("ms") or 0.0) if read is not None else 0.0, t0=t0,
+                                 frame=frame, ocr=ocr, now=now, h=h, blind_retries=BLIND_RETRIES, in_view=True)
+        return out if isinstance(out, PageResult) else None
+
+    def _absorb_result(self, r: Any, frame: Any, ocr: Any, now: Optional[float],
+                       blind_retries: int) -> Any:
+        t0 = time.perf_counter()
+        when = self._clock()
+        self._prune_closed(when)
+        ctx = r.ctx
+        owner = self._owners.pop(ctx.seq, None)
+        why = ""
+        if getattr(r, "error", ""):
+            why = "error"
+        elif r.torn:
+            why = f"torn ({r.torn})"            # R1: both kinds; the loop asks again
+        elif now is not None and now - float(ctx.asked_at or r.started_at or 0.0) > RESULT_MAX_AGE_SEC:
+            why = "too old"
+        elif owner is None:
+            why = "owner unknown"
+        elif owner[2]:
+            why = f"its session crossed a boundary ({owner[2]})"
+        hwnd = ctx.hwnd
+        s, in_view, ended = None, False, ""
+        if not why:
+            s = self._sessions.get(hwnd)
+            in_view = s is not None and s.session_id == owner[0]
+            if not in_view:
+                s = next((x for x in self._shelf.get(hwnd) or [] if x.session_id == owner[0]), None)
+            if s is None and owner[0] in self._closed:
+                _, s, ended = self._closed[owner[0]]
+                if not _absorbs_after(ended):
+                    s, why = None, f"its session ended ({ended})"
+            if s is None and not why:
+                why = "its session is gone"
+        from core.vsdc import vsdc_scope
+        url = vsdc_scope.sanitize_page_url(r.url) if r.url else ""
+        if not why and _LOGOUT.search(url):
+            why = "logout page"
+        if why:
+            self._diag["dropped"] += 1
+            if s is not None or owner is not None and owner[2]:
+                self._echo(f"[SGT] {self._tag} a read was not absorbed: {why}")
+            return None
+        portal = vsdc_scope.portal_for_url(url) or ctx.portal or s.portal
+        if in_view:
+            s.last_read = when                  # SGT's clock; the result's own times are the reader's
+        out = self._absorb_lines(hwnd, s, portal, url, ctx.title or "", r.tab_after, list(r.lines or []),
+                                 r.source or "uia", docs=r.docs, own_read=False, read_ms=r.ms, t0=t0,
+                                 frame=frame, ocr=ocr, now=when, h=None, blind_retries=blind_retries,
+                                 in_view=in_view)
+        if ended and isinstance(out, PageResult):
+            # Late, after an idle end or a closed window: the read was asked while this session was the
+            # window's, and its tab and page did not change during it. Its rows go out as usual.
+            self._close_draft(s, self.store.get().current_rules, f"late result after session end ({ended})", url)
+            self._event(s, "late_absorbed_after_end", ended=ended, page=url, source=r.source or "uia")
+        return out
+
+    def _cut(self, session_id: str, why: str) -> None:
+        """`session_id` crossed a boundary: a read it asked for and has not had back is never absorbed."""
+        for o in self._owners.values():
+            if o[0] == session_id and not o[2]:
+                o[2] = why
+
+    def _prune_closed(self, now: float) -> None:
+        while self._closed:
+            sid, (ended, _, _) = next(iter(self._closed.items()))
+            if len(self._closed) <= CLOSED_RING and now - ended <= CLOSED_KEEP_SEC:
+                break
+            self._closed.pop(sid)
+
+    def _observe_window(self, hwnd: int, portal: str, url: str, tab: Optional[str], now: float) -> Optional[_Session]:
         if self._state_dirty:
             self._save_state()              # the last change before a still page must not wait for the next one
         self._apply_demotion_answers()
         self._end_idle(now)
         self._daily_health_check()
+        self._prune_closed(now)
         s = self._sessions.get(hwnd)
         if tab and s is not None and s.tabs and tab not in s.tabs:
             # The window shows another of its tabs. Each tab has its own session (2026-10-13): a
@@ -616,6 +792,7 @@ class SgtShadow:
         self._claim_tab(hwnd, s, tab)
 
         url_changed = url != s.last_url
+        self._url_changed = url_changed         # for observe()'s change gate
         if url_changed:
             s.last_url = url
             s.visit += 1
@@ -626,50 +803,40 @@ class SgtShadow:
         # Login pages ARE read: the ITR password page shows the PAN being logged into. The
         # login keyword above already closed the previous client's session, so what is read
         # here belongs to the new one.
+        return s
 
-        h = _frame_hash(frame)
-        changed = (read is not None or url_changed or h is None or h != s.last_hash
-                   or (now - s.last_read) >= REREAD_AFTER_SEC)
+    def _absorb_lines(self, hwnd: int, s: _Session, portal: str, url: str, title: str, tab: Optional[str],
+                      lines: List[str], source: str, docs: Optional[List[Any]], own_read: bool, read_ms: float,
+                      t0: float, frame: Any, ocr: Any, now: float, h: Any, blind_retries: int,
+                      in_view: bool) -> Any:
+        """One page read of `s`, from its lines on. in_view: `s` is the window's session in view (not
+        one set aside or ended since the read was asked: then it never switches the window's session)."""
         sgt_i = self._sgt_i    # one read: Settings may detach it from another thread mid-tick
-        if not changed and sgt_i is not None:
-            changed = sgt_i.wants_read(s.session_id)   # SGT-I may only ask for MORE reads
-        scc = self._scc        # one read, as sgt_i; also the host the page is handed to below
-        if not changed and scc is not None:
-            changed = scc.wants_read(s.session_id)     # SCC-U too: at most 30 s after a copy
-        prev_hash, prev_read = s.last_hash, s.last_read
-        s.last_hash = h
-        if not changed:
-            return None
-        s.last_read = now
-
-        t0 = time.perf_counter()
-        res = read if read is not None else (self._read_uia(hwnd) or {})
-        if res.get("busy"):
-            # The previous UIA read is still running (a slow page, not a hung one): this page was
-            # not read at all, so it must not count as read - the next tick asks again.
-            s.last_hash, s.last_read = prev_hash, prev_read
-            self._diag["busy"] += 1
-            self._report(self._on_read, False, 0.0, "busy")
-            return None
-        lines = list(res.get("lines") or [])
-        source = "uia"
+        scc = self._scc        # likewise; also the host the page is handed to below
         self._diag["reads"] += 1
         self._diag["portal"] = portal or "?"
-        if is_blind(lines):
+        if source == "uia" and is_blind(lines):
+            if blind_retries < BLIND_RETRIES and s.good_lines.get(url, 0) > MIN_UIA_LINES:
+                # This page read fine before: most likely a half-drawn page (Chromium after idle).
+                self._report(self._on_read, False, read_ms, source)
+                return BLIND_RETRY
             s.blind_pages += 1
             self._diag["blind"] += 1
             lines = []
-            if portal in NO_OCR_PORTALS:
-                self._diag["skipped"] += 1
-                s.ocr_skips += 1
-                if s.ocr_skips == 1:
-                    self._echo(f"[SGT] {self._tag} {portal}: page unreadable by UI Automation - OCR is off here, skipped")
-            elif ocr is not None and frame is not None:
+            if ocr is not None and frame is not None:      # every portal, add-only (5.2, R6)
                 lines = list((ocr.scan_image(frame, region_type="full") or {}).get("lines") or [])
                 source = "ocr"
                 s.ocr_reads += 1
                 self._diag["ocr"] += 1
-        read_ms = (time.perf_counter() - t0) * 1000 + (float(res.get("ms") or 0.0) if read is not None else 0.0)
+        elif source == "uia":
+            s.good_lines.pop(url, None)
+            s.good_lines[url] = len(lines)
+            while len(s.good_lines) > 50:
+                s.good_lines.pop(next(iter(s.good_lines)))
+        elif source == "ocr":
+            s.ocr_reads += 1
+            self._diag["ocr"] += 1
+        read_ms += (time.perf_counter() - t0) * 1000
         s.read_ms += read_ms
         s.reads += 1
         self._diag["last_lines"] = len(lines)
@@ -677,19 +844,30 @@ class SgtShadow:
         self._report(self._on_read, bool(lines) and not is_blind(lines), read_ms, source)
         if not lines:
             return None
+        self._policy = SOURCE_POLICY.get(source, SOURCE_POLICY["ocr"])
+        try:
+            return self._absorb_page(hwnd, s, portal, url, title, tab, lines, source, docs, own_read,
+                                     now, h, in_view, sgt_i, scc)
+        finally:
+            self._policy = SOURCE_POLICY["uia"]
+
+    def _absorb_page(self, hwnd: int, s: _Session, portal: str, url: str, title: str, tab: Optional[str],
+                     lines: List[str], source: str, docs: Optional[List[Any]], own_read: bool, now: float,
+                     h: Any, in_view: bool, sgt_i: Any, scc: Any) -> Optional[PageResult]:
+        policy = self._policy
         today = self._today()
         # The capture loop's read carries the nodes of the same read: no second read for them.
-        nodes = (list(read.get("docs") or []) or None) if read is not None and source == "uia" else None
+        nodes = (list(docs or []) or None) if source == "uia" else None
         if self._recorder is not None:
             record_nodes = self._recorder.enabled and sgt_i is not None and sgt_i.active
-            if read is None:
+            if own_read:
                 nodes = self._nodes_for_recording(hwnd) if record_nodes else None
             self._recorder.record(session=s.session_id, portal=portal, url=url, title=title,
                                   source=source, lines=lines, ts=now, today=today,
                                   nodes=nodes if record_nodes else None)
         sdis = self._sdis
         try:
-            if sdis is not None and sdis.enabled:
+            if sdis is not None and sdis.enabled and in_view:
                 sdis.offer(hwnd, s.session_id, portal, url, title)
         except Exception:
             pass                                # SDIS never disturbs SGT
@@ -716,7 +894,14 @@ class SgtShadow:
         self._report(self._on_hits, s.session_id,
                      bool(s.profile or res.profile or res.current or res.datasets),
                      not _LOGIN.search(url or ""))
-        clash = None if res.is_list else self._identity_conflict(s, res)
+        if policy["profile"] == "none":
+            res.profile.clear()                 # OCR never names, splits or switches a client (5.2)
+        clash = None if res.is_list or not policy["identity_check"] else self._identity_conflict(s, res)
+        if clash and not in_view:
+            # A late read of a session set aside or ended names another client: nothing of it is taken.
+            self._event(s, "page", change="late read names another client - not absorbed", field=clash, page=url)
+            self._echo(f"[SGT] {self._tag} a late read shows another {clash.upper()} - not absorbed")
+            return None
         if clash:
             # Another client's PAN/GSTIN: this window moved to someone else without passing a
             # login page (another tab). That is not a boundary either: the session is set aside
@@ -727,6 +912,10 @@ class SgtShadow:
             seen = getattr(res.profile.get(clash), "value", None)
             first_read = bool(tab) and tab in s.unread_tabs
             s.unread_tabs.discard(tab)
+            if not first_read:
+                # The same tab now shows someone else: a read this session asked for and has not had
+                # back may show them too (R1). A new tab's first page is only a tab switch.
+                self._cut(s.session_id, "another client")
             self._shelve(hwnd, s)
             back = self._unshelve(hwnd, portal, key=clash, value=seen) if seen else None
             if back is not None:
@@ -751,7 +940,7 @@ class SgtShadow:
                 for k in _CLIENT_KEYS:
                     res.profile.pop(k, None)
             self._claim_tab(hwnd, s, tab)
-        elif not res.is_list:
+        elif not res.is_list and in_view:
             # A session that has no client yet (one born from a stray PAN/GSTIN, say) meets the
             # page of a client this window already has a session for: that session comes back.
             for k in _CLIENT_KEYS:
@@ -834,6 +1023,11 @@ class SgtShadow:
     def _update_draft(self, s: _Session, res: PageResult, url: str, source: str, rules: Any) -> None:
         d = s.draft
         seen = res.current
+        fill_only = self._policy["pieces"] == "fill_empty_only"
+        if fill_only:
+            # OCR: only a field nothing has set yet, and never the status (wording alone never
+            # promotes, R6). Nothing it reads or misses changes or clears a piece.
+            seen = {f: h for f, h in seen.items() if f not in d.pieces and f != "status"}
         if self._foreign_pans:
             # Another client's PAN is readable on this page: its TEXT may be about them, so only
             # what the link and window title say (the filing wizard's form and year) is used.
@@ -855,7 +1049,7 @@ class SgtShadow:
         # half-drawn page cannot wipe a good value.
         now = self._clock()
         for fld, piece in list(d.pieces.items()):
-            if piece["page"] != url:
+            if piece["page"] != url or fill_only:
                 continue
             if fld in seen:
                 piece["misses"], piece["missing_since"] = 0, None
@@ -888,6 +1082,8 @@ class SgtShadow:
         trial.update({f: h.value for f, h in seen.items()})
         after = compose(trial, rules).get("period")
         if before and after and before != after:
+            if fill_only:
+                return                          # OCR never opens another dataset
             self._close_draft(s, rules, "a different period was opened", url)
             d = s.draft
         for fld, hit in seen.items():
@@ -905,6 +1101,8 @@ class SgtShadow:
         period_now = d.values(rules).get("period")
         if period_now:
             d.last_period = period_now
+        if fill_only:
+            return                              # a row from OCR needs its own ARN (R6): the next UIA read or the end writes it
         # Complete already? Then it is a dataset now - written at once rather than when it
         # closes, so quitting the app (or a crash) in the middle of a filing loses nothing.
         # It keeps building; later pieces update the same row.
@@ -1179,12 +1377,13 @@ class SgtShadow:
 
     @staticmethod
     def _fresh_diag() -> Dict[str, Any]:
-        return {"reads": 0, "blind": 0, "skipped": 0, "ocr": 0, "busy": 0,
+        # "skipped" stays 0 (blind pages of every portal go to OCR now); kept for the heartbeat's format.
+        return {"reads": 0, "blind": 0, "skipped": 0, "ocr": 0, "busy": 0, "dropped": 0,
                 "last_lines": None, "last_source": None, "portal": None}
 
     def take_diag(self) -> Dict[str, Any]:
-        """Page reads since the last call - total, blind (UIA gave nothing usable), blind and
-        skipped (a no-OCR portal such as GST), read by OCR, skipped because UIA was still busy -
+        """Page reads since the last call - total, blind (UIA gave nothing usable), read by OCR,
+        dropped (absorb: torn, too old, owner gone), skipped because UIA was still busy -
         the last read's line count and source, the open sessions. Resets the counts."""
         out, self._diag = self._diag, self._fresh_diag()
         out["sessions"] = len(self._sessions)
@@ -1309,7 +1508,8 @@ class SgtShadow:
             "status_confirmed": bool(lowered and confirmed),     # a complete (ARN + verified) row yields only to this
             "raw_payload": {
                 "source": {"engine": "SGT", "mode": self.mode, "record": slot.record, "confidence": slot.confidence,
-                           "identity": s.confirm_note or "not confirmed yet"},
+                           "identity": s.confirm_note or "not confirmed yet",
+                           "evidence_source": slot.evidence_source, "first_seen_as": slot.first_seen_as},
                 "sgt_dataset": v,
                 "client_profile": prof,
                 "timeline": list(s.timeline),
@@ -1471,11 +1671,12 @@ class SgtShadow:
         # Datapoints built from parts (first + middle + last name): offered like any other
         # value, so the joined name goes through the same promotion rule as a read one.
         prules = getattr(registry, "profile_rules", None)
-        if prules is not None and prules.compose:
-            held = {k: v["value"] for k, v in s.profile.items()}
-            for fld, value in compose_values(held, prules.compose).items():
-                self._offer_profile(s, fld, value, f"compose:{fld}", 92, url, source, registry)
-        self._link_client(s, url, source, registry)
+        if self._policy["profile"] == "all":
+            if prules is not None and prules.compose:
+                held = {k: v["value"] for k, v in s.profile.items()}
+                for fld, value in compose_values(held, prules.compose).items():
+                    self._offer_profile(s, fld, value, f"compose:{fld}", 92, url, source, registry)
+            self._link_client(s, url, source, registry)
         self._announce_profile(s, before_identity=not had_client)
         rules = registry.current_rules if registry is not None else None
         for ds in res.datasets:
@@ -1599,6 +1800,9 @@ class SgtShadow:
             values["status_evidence"] = ds.evidence("status")
         whole = self._is_whole_page(registry, ds.record)
         message_only = whole and bool(values.get("status")) and not values.get("arn")
+        add_only = self._policy["datasets"] == "merge_add_only"
+        if message_only and add_only:
+            return                              # OCR wording with no ARN of its own never promotes (R6)
         if message_only:
             if not self._tie_message(s, values, url, source):
                 return
@@ -1608,8 +1812,8 @@ class SgtShadow:
                 # Submitted: the dataset being built is this one, and it is finished.
                 s.draft = _Draft()
                 self._event(s, "current", change="completed by a submission", arn=values["arn"], page=url)
-        self._merge_values(s, values, ds.record, ds.confidence, url, source, claimed=claimed, follow=whole,
-                           status_explicit=bool(values.get("status")))
+        self._merge_values(s, values, ds.record, ds.confidence, url, source, claimed=claimed,
+                           follow=whole and not add_only, status_explicit=bool(values.get("status")))
 
     def _request_demotion(self, s: _Session, slot: _Slot, old: str, new: str, evidence: str,
                           stamp: str, url: str) -> None:
@@ -1680,6 +1884,10 @@ class SgtShadow:
         """
         if not values.get("arn") and not (values.get("form") and values.get("period")):
             return None                         # nothing to key it on - not a dataset yet
+        add_only = self._policy["datasets"] == "merge_add_only"
+        # OCR (R6): a row is created, or its status raised, only by a read that also gives the
+        # dataset's own ARN/ack (the resolver's label, shape and date checks already passed).
+        with_id = bool(values.get("arn")) or not add_only
         values = dict(values)
         self._apply_identifier(s, values)
         if not values.get("status"):
@@ -1688,9 +1896,12 @@ class SgtShadow:
         slot = self._find_slot(s, values, stamp, follow)
         if slot is not None and claimed:
             slot.claimed = sorted(set(slot.claimed or []) | set(claimed))
+        if slot is None and not with_id:
+            return None
         if slot is None:
             slot = _Slot(dict(values), record, confidence, url, claimed=claimed)
-            slot.owner = {k: stamp for k in values}
+            slot.owner = {} if add_only else {k: stamp for k in values}
+            slot.evidence_source = slot.first_seen_as = "ocr" if add_only else "uia"
             s.slots.append(slot)
             self._queue(s, slot)
             self._event(s, "dataset", change="new", record=record, values=values,
@@ -1709,14 +1920,17 @@ class SgtShadow:
             return slot
         ds_record = record
         changes = {}
+        if not add_only and slot.evidence_source == "ocr" and slot.arn and values.get("arn") == slot.arn:
+            slot.evidence_source = "uia"        # a UIA read shows the same ARN: the row no longer rests on OCR
+            changes["evidence_source"] = ["ocr", "uia"]
         for k, v in values.items():
             old = slot.values.get(k)
             if k == "status_evidence":
                 continue                        # travels with the status, below
             mine = follow and slot.owner.get(k) == stamp
             if k == "status":
-                up = old is None or submit_level(v) > submit_level(old)
-                corrected = (not up) and mine and status_explicit and v != old
+                up = (old is None or submit_level(v) > submit_level(old)) and with_id
+                corrected = (not up) and mine and status_explicit and v != old and not add_only
                 if corrected and slot.arn:
                     # A filing with an ARN: lowering its status is risky - ask, never assume.
                     self._request_demotion(s, slot, old, v, values.get("status_evidence") or "", stamp, url)
@@ -1732,7 +1946,8 @@ class SgtShadow:
                         slot.values["status_evidence"] = values["status_evidence"]
             elif old is None:
                 slot.values[k] = v
-                slot.owner[k] = stamp
+                if not add_only:
+                    slot.owner[k] = stamp
                 changes[k] = [None, v]
             elif old != v:
                 if mine and k in self._FOLLOW:
@@ -1815,6 +2030,12 @@ class SgtShadow:
 
     def _finish(self, s: _Session, reason: str) -> None:
         self._retire_tabs(s)
+        # Kept a while for a read it asked for that has not come back (absorb); after a logout, a
+        # login page or the like, such a read is dropped instead (R1).
+        self._closed[s.session_id] = (self._clock(), s, reason)
+        self._closed.move_to_end(s.session_id)
+        if not _absorbs_after(reason):
+            self._cut(s.session_id, reason)
         if not s.has_content:
             return
         if not self._client_pan(s):
@@ -1839,7 +2060,7 @@ class SgtShadow:
         self._alert_unknown_client(s)
         payload = self.would_be_payload(s)
         stats = {"reads": s.reads, "ocr_reads": s.ocr_reads, "blind_pages": s.blind_pages,
-                 "read_ms_total": round(s.read_ms, 1), "conflicts": s.conflicts, "ocr_skipped": s.ocr_skips,
+                 "read_ms_total": round(s.read_ms, 1), "conflicts": s.conflicts,
                  "minutes": round((s.last_seen - s.started) / 60, 1)}
         self._event(s, "session_end", reason=reason, payload=payload, stats=stats)
         who = payload["client_profile"].get("name") or payload["client_profile"].get("pan") \
@@ -2003,6 +2224,12 @@ class SgtShadow:
                           "session": s.session_id, "portal": s.portal, "capture_browser": s.browser, **data})
 
 
+def _absorbs_after(reason: str) -> bool:
+    """A late result may still land in a session that ended this way (ABSORB_AFTER_END)."""
+    r = (reason or "").lower()
+    return any(r == x or r.startswith(x + " ") for x in ABSORB_AFTER_END)
+
+
 def _browser_of(hwnd: int) -> str:
     """'chrome' | 'msedge' | 'firefox' | ... for a window, '' when it cannot be read (a test's fake window)."""
     try:
@@ -2020,7 +2247,8 @@ def _session_to_json(s: _Session) -> Dict[str, Any]:
         "strict_block": s.strict_block, "tabs": sorted(s.tabs),
         "slots": [{"values": sl.values, "record": sl.record, "confidence": sl.confidence,
                    "first_page": sl.first_page, "sent_key": sl.sent_key, "held": sl.held,
-                   "claimed": sl.claimed, "waived": sl.waived} for sl in s.slots],
+                   "claimed": sl.claimed, "waived": sl.waived, "evidence_source": sl.evidence_source,
+                   "first_seen_as": sl.first_seen_as} for sl in s.slots],
         "draft": {f: {k: v for k, v in piece.items() if isinstance(v, (str, int, float, bool, type(None)))}
                   for f, piece in s.draft.pieces.items()},
         "draft_slot": s.slots.index(s.draft.slot) if s.draft.slot in s.slots else None,
@@ -2042,7 +2270,8 @@ def _session_from_json(raw: Dict[str, Any]) -> _Session:
     for sl in raw.get("slots") or []:
         s.slots.append(_Slot(dict(sl["values"]), sl.get("record") or CURRENT_RECORD, int(sl.get("confidence") or 0),
                              sl.get("first_page") or "", sl.get("sent_key"), sl.get("held"), sl.get("claimed"),
-                             waived=bool(sl.get("waived"))))
+                             waived=bool(sl.get("waived")), evidence_source=str(sl.get("evidence_source") or "uia"),
+                             first_seen_as=str(sl.get("first_seen_as") or "")))
     s.draft = _Draft(pieces={f: dict(pc) for f, pc in (raw.get("draft") or {}).items()},
                      claims=list(raw.get("draft_claims") or []))
     idx = raw.get("draft_slot")

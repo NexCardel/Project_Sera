@@ -1,8 +1,8 @@
 """
 GST fixes of 2026-10-06 (docs/sgt-gst-fixes-plan.md). The sequences are the ones in the SGT log:
 a finished June GSTR-3B row must never be rewritten to another period by a dashboard dropdown, a
-status read for one return must never land on another, OCR is never used on the GST portal, and a
-quarter is recorded by its end month.
+status read for one return must never land on another, OCR on the GST portal only ever adds (it was
+banned there until the never-miss blueprint's source policy), and a quarter is recorded by its end month.
 """
 from unittest.mock import MagicMock
 
@@ -125,19 +125,25 @@ class TestFinishedReturnsAreNeverRewritten:
         assert any("SEPTEMBER" in k for k in sent_keys(sent))
 
 
-class TestNoOcrOnGst:
-    def test_a_blind_gst_page_is_never_sent_to_ocr(self, tmp_path):
+class TestOcrOnGstIsAddOnly:
+    def test_a_blind_gst_page_is_sent_to_ocr_add_only(self, tmp_path):
+        """Owner decision (constraint 7, never-miss blueprint 5.2): OCR runs on GST too, and only adds -
+        the 2026-10-06 'Period •' read can no longer move or clear the June return UIA read."""
         r = Rig(tmp_path)
         ocr = MagicMock()
         ocr.scan_image.return_value = {"lines": ["Period •", "September", "x", "y"]}
         client(r)
         r.see(R3B, r3b_page("June", "Filed"), shade=100, portal=GST)
+        r.sgt.drain()
         r.page = ["Enable accessibility"]
         r.clock[0] += 30
-        res = r.sgt.observe(1, GST, RET_DASH, frame=frame(150), ocr=ocr)
-        assert res is None and ocr.scan_image.call_count == 0
+        r.sgt.observe(1, GST, RET_DASH, frame=frame(150), ocr=ocr)
+        assert ocr.scan_image.call_count == 1
+        assert r.sgt.drain() == []                       # nothing written, moved or lowered
+        assert not [e for e in r.events("current") if e.get("change") in ("cleared", "changed")]
+        assert not [e for e in r.events("dataset") if e.get("change") in ("moved", "updated")]
         r.sgt.end_all("t")
-        assert r.events("session_end")[-1]["stats"]["ocr_skipped"] >= 1
+        assert "ocr_skipped" not in r.events("session_end")[-1]["stats"]
 
     def test_itr_still_uses_ocr(self, tmp_path):
         r = Rig(tmp_path)

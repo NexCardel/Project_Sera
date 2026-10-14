@@ -87,11 +87,13 @@ class TestReading:
     def test_blind_page_falls_back_to_ocr(self, tmp_path):
         r = Rig(tmp_path)
         ocr = MagicMock()
-        ocr.scan_image.return_value = {"lines": PROFILE_PAGE}
+        ocr.scan_image.return_value = {"lines": PROFILE_PAGE + filed_page()}
         r.see(PROFILE_URL, ["Enable accessibility"], ocr=ocr)
         ocr.scan_image.assert_called_once()
-        assert r.events("profile")[0]["source"] == "ocr"
-        assert {e["field"] for e in r.events("profile")} == {"name", "pan", "dob"}
+        # OCR only adds (never-miss blueprint 5.2, D3): the ack's row, never the client's profile.
+        assert r.events("profile") == []
+        new = [e for e in r.events("dataset") if e.get("change") == "new"]
+        assert new and new[0]["source"] == "ocr" and new[0]["values"]["arn"] == "123456789150925"
 
     def test_blind_page_without_ocr_captures_nothing(self, tmp_path):
         r = Rig(tmp_path)
@@ -673,7 +675,7 @@ class TestSwitch:
         r.apply_engine_settings(True, True, False, sgt="shadow")
         seen = []
         fake = MagicMock()
-        fake.observe.side_effect = lambda *a, **k: seen.append((a, k))
+        fake.absorb.side_effect = lambda *a, **k: seen.append((a, k))
         fake.pending.return_value = 0                   # no tracker rows waiting
         fake.wants_read.return_value = False
         r._sgt = fake
@@ -687,9 +689,11 @@ class TestSwitch:
                 outs.append(harness.tick())
                 settle()
             assert outs == [None, None, None] and len(seen) == 1
-            (hwnd, portal, url), kw = seen[0]
-            assert (hwnd, portal) == (4242, "Income Tax") and "eportal.incometax.gov.in" in url
-            assert kw["frame"] is not None and kw["read"]["lines"] == ["Dashboard"]
+            (res,), kw = seen[0]
+            assert res.ctx.hwnd == 4242 and "eportal.incometax.gov.in" in res.url
+            assert kw["frame"] is not None and list(res.lines) == ["Dashboard"]
+            win = fake.observe_window.call_args.args
+            assert (win[0], win[2]) == (4242, "Income Tax")
         finally:
             r._drop_capture()
 
@@ -708,6 +712,8 @@ class TestSwitch:
                 harness.tick()
                 settle()
             r._sgt.observe.assert_not_called()
+            r._sgt.observe_window.assert_not_called()
+            r._sgt.absorb.assert_not_called()
             assert r.capture_backend.reads == []        # not a line of it was read
         finally:
             r._drop_capture()

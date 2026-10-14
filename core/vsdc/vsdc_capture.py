@@ -43,6 +43,7 @@ READ_GAP_FACTOR = 1.0         # a 500 ms page is read at most every ~1 s: 50 % d
 BURST_READS = 3               # after a URL change: 3 reads, BURST_GAP_SEC apart, whatever the frame does
 BURST_GAP_SEC = 0.3
 TORN_RETRIES = 3              # a torn read is asked again at most this often per page visit (R1)
+REASON_BLIND_RETRY = "blind-retry"   # SGT's absorb asks for it (sgt_shadow.BLIND_RETRIES, then OCR)
 SCOPE_POLL_SEC = 1.0          # a URL-only read is asked once the window's URL is this old (< URL_FRESH_SEC)
 SCOPE_GRACE_SEC = 8.0         # the router's _SCOPE_GRACE_SEC: no readable URL, portal title, verified this recently
 STATE_KEEP_SEC = 600.0        # a window not watched for this long is forgotten (its SGT sessions are not ended)
@@ -239,7 +240,8 @@ class CaptureLoop:
             if not r.url_only:
                 ws.wanted = ws.wanted or "frame"
             return
-        if r.finished_at >= ws.url_at:
+        newest = r.finished_at >= ws.url_at
+        if newest:
             self._learn_url(ws, r)
         if r.url_only:
             return
@@ -252,7 +254,7 @@ class CaptureLoop:
             return
         if not r.scope_rule:                # nothing on the page was in scope: nothing was read
             return
-        self._absorb_compat(r, frame)
+        self._absorb(r, ws, frame, newest)
 
     def _answered(self) -> None:
         try:
@@ -272,17 +274,25 @@ class CaptureLoop:
             if url and self._scope.is_in_scope_url(url):
                 ws.burst_left = BURST_READS
 
-    def _absorb_compat(self, r: ReadResult, frame: Any) -> None:
-        """Until WP5's sgt.absorb(r): the read goes through observe() as the page SGT would have
-        read itself, under the URL, tab and title of the read (never of the window now)."""
+    def _absorb(self, r: ReadResult, ws: WindowState, frame: Any, newest: bool) -> None:
+        """SGT takes the read into the session that asked for it (blueprint 6.1). When this read is
+        the newest word on the window's page, SGT's bookkeeping sees that page first, so a logout or
+        login page reached during the read ends the session before its text could land there (R1)."""
         if self._sgt is None:
             return
-        url = r.url
-        portal = self._scope.portal_for_url(url) or r.ctx.portal
+        if newest:
+            url = self._scope.sanitize_page_url(r.url)
+            portal = self._scope.portal_for_url(r.url) or r.ctx.portal
+            self._sgt.observe_window(r.ctx.hwnd, r.tab_after, portal, url, r.ctx.title)
         self._counts["absorbed"] += 1
-        self._sgt.observe(r.ctx.hwnd, portal, self._scope.sanitize_page_url(url), frame=frame, ocr=self._ocr,
-                          title=r.ctx.title, tab=r.tab_after,
-                          read={"lines": list(r.lines), "docs": r.docs, "ms": r.ms})
+        out = self._sgt.absorb(r, frame=frame, ocr=self._ocr, now=self._clock(), blind_retries=ws.blind_retries)
+        if isinstance(out, str) and out == REASON_BLIND_RETRY:
+            ws.blind_retries += 1           # a page that read fine before came back blind: again, 0.3 s on
+            ws.retry = ws.retry or REASON_BLIND_RETRY
+        else:
+            from core.sgt.sgt_shadow import is_blind
+            if not is_blind(list(r.lines)):
+                ws.blind_retries = 0
 
     # ---- one window ----------------------------------------------------------------------------
 
@@ -315,6 +325,13 @@ class CaptureLoop:
             ws.last_sig = None              # nothing of a page outside the portals is kept
             return
         self._diag.update(portal=portal, page=self._scope.sanitize_page_url(ws.url) if fresh else None)
+        owner = None
+        if self._sgt is not None:
+            # SGT's session bookkeeping for the page in view; a read asked now belongs to `owner`.
+            owner = self._sgt.observe_window(w.hwnd, ws.tab, portal,
+                                             self._scope.sanitize_page_url(ws.url) if ws.url else "", w.title)
+            if owner is None:
+                return                      # a logout page: nothing about a client is read there
 
         # Pixels only: one screenshot and its signature.
         try:
@@ -331,13 +348,13 @@ class CaptureLoop:
         if ws.pending_seq or not self._spaced(ws, reason, now):
             ws.wanted = reason              # asked as soon as the read in flight is answered
             return
-        status = self._request(w, ws, now, reason, sig, img, portal)
+        status = self._request(w, ws, now, reason, sig, img, portal, owner)
         if status in ("started", "queued"):
             ws.wanted = ""
             ws.last_sig, ws.last_request_at = sig, now
             if reason in ("url", "burst"):
                 ws.burst_left -= 1
-            elif reason == "torn-retry":
+            elif reason in ("torn-retry", REASON_BLIND_RETRY):
                 ws.retry = ""
         else:
             ws.wanted = reason              # paused / no lane: health shows it; OCR is WP7's
@@ -361,12 +378,12 @@ class CaptureLoop:
     def _spaced(ws: WindowState, reason: str, now: float) -> bool:
         if not ws.last_read_finished:
             return True
-        quick = reason in ("url", "burst", "torn-retry")
+        quick = reason in ("url", "burst", "torn-retry", REASON_BLIND_RETRY)
         gap = max(BURST_GAP_SEC if quick else MIN_READ_GAP_SEC, READ_GAP_FACTOR * ws.last_read_ms / 1000.0)
         return now - ws.last_read_finished >= gap
 
     def _request(self, w: WindowInfo, ws: WindowState, now: float, reason: str, sig: Optional[bytes],
-                 img: Any = None, portal: str = "") -> str:
+                 img: Any = None, portal: str = "", owner: Any = None) -> str:
         url = self._scope.sanitize_page_url(ws.url) if ws.url else ""
         ctx = ReadContext(seq=next(_seq), hwnd=w.hwnd, title=w.title, portal=portal or ws.portal, url=url,
                           url_source=ws.url_source or ("title" if not url else ""), tab=ws.tab, frame_sig=sig,
@@ -380,6 +397,8 @@ class CaptureLoop:
             ws.pending_seq, ws.pending_at = ctx.seq, now
             ws.frame, ws.frame_seq = img, ctx.seq
             self._counts["asked"] += 1
+            if self._sgt is not None and owner is not None:
+                self._sgt.request_made(ctx, owner)
             try:
                 self._health.requested(ctx)
             except Exception:
