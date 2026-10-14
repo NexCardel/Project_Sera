@@ -976,59 +976,8 @@ class VSDCRouter:
         """
         if not self._uia or not hwnd:
             return None
-
-        # Fast-path: Check cached address bar element for this hwnd (< 0.2ms)
-        cached = self._cached_address_elements.get(hwnd)
-        if cached:
-            edit, val_obj = cached
-            try:
-                url_val = val_obj.CurrentValue
-                if url_val and ("." in url_val or "/" in url_val):
-                    return url_val
-            except Exception:
-                # Element is stale or invalidated (e.g. navigation or tab closed)
-                self._cached_address_elements.pop(hwnd, None)
-
-        try:
-            element = self._uia.ElementFromHandle(hwnd)
-            if not element:
-                return None
-
-            # Look for Edit control (Address bar) - or a ComboBox, which is what Firefox's bar is
-            # UIA_EditControlTypeId = 50004, UIA_ComboBoxControlTypeId = 50003
-            condition = self._uia.CreateOrCondition(
-                self._uia.CreatePropertyCondition(self._uia_client.UIA_ControlTypePropertyId, 50004),
-                self._uia.CreatePropertyCondition(self._uia_client.UIA_ControlTypePropertyId, 50003),
-            )
-            edits = element.FindAll(self._uia_client.TreeScope_Descendants, condition)
-            if not edits:
-                return None
-
-            count = edits.Length
-            for i in range(count):
-                edit = edits.GetElement(i)
-                try:
-                    name = (edit.CurrentName or "").lower()
-                    auto_id = (edit.CurrentAutomationId or "").lower()
-                    # Address bar indicators across Chrome, Edge, Brave, Firefox
-                    if any(k in name for k in ("address", "search", "url")) or any(k in auto_id for k in ("address", "url", "view_")):
-                        val_pattern = edit.GetCurrentPattern(self._uia_client.UIA_ValuePatternId)
-                        if val_pattern:
-                            val_obj = val_pattern.QueryInterface(self._uia_client.IUIAutomationValuePattern)
-                            url_val = val_obj.CurrentValue
-                            if url_val and ("." in url_val or "/" in url_val):
-                                if len(self._cached_address_elements) > 20:
-                                    self._cached_address_elements.clear()
-                                self._cached_address_elements[hwnd] = (edit, val_obj)
-                                return url_val
-                except Exception:
-                    continue
-
-        except Exception as e:
-            # Silently handle transient UIA errors (e.g. during alt-tab)
-            pass
-
-        return None
+        # One helper for both readers (the reader v2's lanes call it on their own threads).
+        return vsdc_uia_text.address_bar_here(self._uia, self._uia_client, hwnd, self._cached_address_elements)
 
     def _health_hud(self, title: str, subtitle: str = "") -> None:
         """A capture-health HUD event. Straight to the callback, not through this tick's buffer: the

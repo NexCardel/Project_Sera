@@ -299,25 +299,109 @@ def selected_tab_id(hwnd: int, timeout_sec: float = 1.0) -> Optional[str]:
         cache = getattr(_tls, "tabs", None)
         if cache is None:
             cache = _tls.tabs = {}
-        items, searched = cache.get(hwnd) or ([], 0.0)
-        if items:
-            found = _selected_among(uia_client, items)
-            if found:
-                return found
-        elif searched and time.monotonic() - searched < NO_TABS_RECHECK_SEC:
-            return None             # no tab strip here (an app window, full screen): not every tick
-        root = uia.ElementFromHandle(hwnd)
-        if not root:
-            return None
-        cond = uia.CreatePropertyCondition(uia_client.UIA_ControlTypePropertyId, UIA_TABITEM_CONTROL_TYPE_ID)
-        coll = root.FindAll(uia_client.TreeScope_Descendants, cond)
-        items = [coll.GetElement(i) for i in range(coll.Length)] if coll else []
-        if len(cache) > 20:
-            cache.clear()
-        cache[hwnd] = (items, time.monotonic())
-        return _selected_among(uia_client, items)
+        return selected_tab_id_here(uia, uia_client, hwnd, cache)
 
     return _run_with_timeout(_do, timeout_sec)
+
+
+# ---- helpers shared by both readers (this module's pool and core/vsdc/vsdc_reader's lanes) ----
+# Each runs on the calling thread with the caller's own UIA objects and caches, so the two readers
+# cannot drift apart.
+
+def selected_tab_id_here(uia, uia_client, hwnd: int, cache: Dict[int, Any], root: Any = None) -> Optional[str]:
+    """selected_tab_id's work on the calling thread. cache: that thread's hwnd -> (tab items,
+    when searched). root is fetched only when the tab strip has to be searched again."""
+    items, searched = cache.get(hwnd) or ([], 0.0)
+    if items:
+        found = _selected_among(uia_client, items)
+        if found:
+            return found
+    elif searched and time.monotonic() - searched < NO_TABS_RECHECK_SEC:
+        return None             # no tab strip here (an app window, full screen): not every tick
+    root = root or uia.ElementFromHandle(hwnd)
+    if not root:
+        return None
+    cond = uia.CreatePropertyCondition(uia_client.UIA_ControlTypePropertyId, UIA_TABITEM_CONTROL_TYPE_ID)
+    coll = root.FindAll(uia_client.TreeScope_Descendants, cond)
+    items = [coll.GetElement(i) for i in range(coll.Length)] if coll else []
+    if len(cache) > 20:
+        cache.clear()
+    cache[hwnd] = (items, time.monotonic())
+    return _selected_among(uia_client, items)
+
+
+def address_bar_here(uia, uia_client, hwnd: int, cache: Dict[int, Any], root: Any = None) -> Optional[str]:
+    """The browser's address bar text, on the calling thread (VSDCRouter.extract_browser_url and
+    the reader's lanes). cache: hwnd -> (edit, value pattern) of the bar found last time, asked
+    again first (under 0.2 ms); the window is searched only when that fails. A property read
+    only: the bar is never focused or typed into."""
+    cached = cache.get(hwnd)
+    if cached:
+        _edit, val_obj = cached
+        try:
+            url_val = val_obj.CurrentValue
+            if url_val and ("." in url_val or "/" in url_val):
+                return url_val
+        except Exception:
+            # Element is stale or invalidated (e.g. navigation or tab closed)
+            cache.pop(hwnd, None)
+
+    try:
+        element = root or uia.ElementFromHandle(hwnd)
+        if not element:
+            return None
+
+        # Look for Edit control (Address bar) - or a ComboBox, which is what Firefox's bar is
+        condition = uia.CreateOrCondition(
+            uia.CreatePropertyCondition(uia_client.UIA_ControlTypePropertyId, UIA_EDIT_CONTROL_TYPE_ID),
+            uia.CreatePropertyCondition(uia_client.UIA_ControlTypePropertyId, UIA_COMBOBOX_CONTROL_TYPE_ID),
+        )
+        edits = element.FindAll(uia_client.TreeScope_Descendants, condition)
+        if not edits:
+            return None
+
+        for i in range(edits.Length):
+            edit = edits.GetElement(i)
+            try:
+                name = (edit.CurrentName or "").lower()
+                auto_id = (edit.CurrentAutomationId or "").lower()
+                # Address bar indicators across Chrome, Edge, Brave, Firefox
+                if any(k in name for k in ("address", "search", "url")) or any(k in auto_id for k in ("address", "url", "view_")):
+                    val_pattern = edit.GetCurrentPattern(uia_client.UIA_ValuePatternId)
+                    if val_pattern:
+                        val_obj = val_pattern.QueryInterface(uia_client.IUIAutomationValuePattern)
+                        url_val = val_obj.CurrentValue
+                        if url_val and ("." in url_val or "/" in url_val):
+                            if len(cache) > 20:
+                                cache.clear()
+                            cache[hwnd] = (edit, val_obj)
+                            return url_val
+            except Exception:
+                continue
+    except Exception:
+        pass        # transient UIA errors (e.g. during alt-tab)
+    return None
+
+
+def documents_with_urls(uia, uia_client, root) -> List[tuple]:
+    """Every Document element in the window as (element, url, offscreen), in one
+    FindAllBuildCache that caches only IsOffscreen, Value and FrameworkId - no page content.
+    Chromium and Gecko give the page's URL as the Document's Value ("" when it gives none). The
+    elements keep their live reference, so a Document that passes the scope gate can then be read
+    (core/sgt_i/uia_nodes.read_cached_subtree)."""
+    from core.sgt_i import uia_nodes
+
+    condition = uia.CreatePropertyCondition(uia_client.UIA_ControlTypePropertyId, UIA_DOCUMENT_CONTROL_TYPE_ID)
+    request = uia_nodes.build_cache_request(uia, False, uia_nodes.URL_ONLY_PROPERTIES)
+    found = root.FindAllBuildCache(uia_client.TreeScope_Descendants, condition, request)
+    out = []
+    for i in range(found.Length if found else 0):
+        el = found.GetElement(i)
+        url = uia_nodes._cached(el, uia_nodes.PID_VALUE)
+        offscreen = uia_nodes._cached(el, uia_nodes.PID_IS_OFFSCREEN)     # cached: no extra round trip
+        out.append((el, url.strip() if isinstance(url, str) else "",
+                    bool(offscreen) if offscreen is not None else _is_offscreen(el)))
+    return out
 
 
 def is_available(timeout_sec: float = DEFAULT_TIMEOUT_SEC) -> bool:

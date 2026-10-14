@@ -15,8 +15,9 @@ allowed to switch reader. This tool is the actual gate check, in three modes:
                               node dump. Nothing does yet (that's W2-4); until then this mode
                               reports 0 comparable records rather than failing.
   live      (best effort)  - an already-open window matched by --title, read with BOTH real
-                              readers. Strictly a read of what is already on screen - this tool
-                              never opens, clicks or types anything.
+                              readers, then with the reader v2 (core/vsdc/vsdc_reader, never-miss
+                              WP3), whose lines must equal today's too. Strictly a read of what is
+                              already on screen - this tool never opens, clicks or types anything.
 
 Usage:
   python tools/sgt_lines_equivalence.py                    # synthetic + corpus
@@ -310,7 +311,34 @@ def check_live(title: str) -> Optional[Tuple[str, List[Diff]]]:
         return None
     rebuilt = nodes_mod.lines_from_nodes(docs, include_selection=True)
     diffs = _diff_lines(today, rebuilt)
-    return (title, diffs) if diffs else None
+    if diffs:
+        return title, diffs
+    v2 = read_with_reader_v2(hwnd)
+    if v2 is None:
+        return title, [(0, "(reader v2 gave no result)", None)]
+    v2_diffs = _diff_lines(today, v2.lines)
+    return (title + " [reader v2]", v2_diffs) if v2_diffs else None
+
+
+def read_with_reader_v2(hwnd: int, timeout_sec: float = 15.0):
+    """The same window read by core/vsdc/vsdc_reader (MTA lane, Document URL first, one cached
+    call per in-scope Document). Prints which scope rule applied and the error, never the URL."""
+    import time
+    from core.vsdc.vsdc_reader import PageReader, ReadContext
+
+    reader = PageReader(diag=lambda _text: None)
+    try:
+        reader.request(ReadContext(seq=1, hwnd=hwnd, asked_at=time.monotonic(), reason="frame"))
+        end = time.monotonic() + timeout_sec
+        while time.monotonic() < end:
+            for r in reader.results():
+                print(f"  reader v2: {len(r.lines)} line(s), {len(r.docs)} document(s), "
+                      f"rule={r.scope_rule or 'none (not in scope)'}, {r.ms:.0f} ms, error={r.error or 'none'}")
+                return r
+            time.sleep(0.05)
+        return None
+    finally:
+        reader.close()
 
 
 # ---------------------------------------------------------------------------------------------

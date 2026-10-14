@@ -137,15 +137,25 @@ def _walk(el, parent: int, depth: int, out: List[Dict[str, Any]]) -> None:
         _walk(child, len(out) - 1, depth + 1, out)
 
 
-def build_cache_request(uia, raw_view: bool = False):
+URL_ONLY_PROPERTIES = (PID_IS_OFFSCREEN, PID_VALUE, PID_FRAMEWORK_ID)
+
+
+def build_cache_request(uia, raw_view: bool = False, properties: Optional[tuple] = None):
     """The CacheRequest: every property in _CACHED_PROPERTIES, over the whole subtree. The
-    default tree filter is UIA's control view; raw_view=True caches every raw element."""
+    default tree filter is UIA's control view; raw_view=True caches every raw element.
+
+    properties (the reader's URL-only request, URL_ONLY_PROPERTIES): only those, of the found
+    element itself - no page content - and the element keeps its live reference, so the page
+    can be read from it afterwards (read_cached_subtree)."""
     request = uia.CreateCacheRequest()
-    for pid in _CACHED_PROPERTIES:
+    for pid in (properties or _CACHED_PROPERTIES):
         try:
             request.AddProperty(pid)
         except Exception:
             pass     # an older Windows without this property id - the node just lacks it
+    if properties:
+        request.TreeScope = _SCOPE_ELEMENT
+        return request
     request.TreeScope = _SCOPE_SUBTREE
     request.AutomationElementMode = _ELEMENT_MODE_NONE
     if raw_view:
@@ -196,15 +206,28 @@ def _read_docs(uia: Any, uia_client: Any, hwnd: int, raw_view: bool) -> Dict[str
         return empty
     condition = uia.CreatePropertyCondition(uia_client.UIA_ControlTypePropertyId, CT_DOCUMENT)
     found = root.FindAllBuildCache(_SCOPE_DESCENDANTS, condition, build_cache_request(uia, raw_view))
-    docs: List[List[Dict[str, Any]]] = []
     elements = [found.GetElement(d) for d in range(found.Length if found else 0)]
-    for element in uia_text.onscreen_only(elements):     # never a background tab's page
-        nodes: List[Dict[str, Any]] = []
-        _walk(element, -1, 0, nodes)
-        if nodes and _cached(element, PID_FRAMEWORK_ID) == uia_text.FRAMEWORK_GECKO:
-            nodes[0][GECKO_KEY] = True      # lines_from_nodes applies Gecko's two line rules
-        docs.append(nodes)
-    return {"docs": docs}
+    # never a background tab's page
+    return {"docs": [_nodes_of(element) for element in uia_text.onscreen_only(elements)]}
+
+
+def _nodes_of(element) -> List[Dict[str, Any]]:
+    """A Document whose subtree is in the cache, as its pre-order node list."""
+    from core.vsdc import vsdc_uia_text as uia_text
+
+    nodes: List[Dict[str, Any]] = []
+    _walk(element, -1, 0, nodes)
+    if nodes and _cached(element, PID_FRAMEWORK_ID) == uia_text.FRAMEWORK_GECKO:
+        nodes[0][GECKO_KEY] = True      # lines_from_nodes applies Gecko's two line rules
+    return nodes
+
+
+def read_cached_subtree(uia: Any, uia_client: Any, element: Any, raw_view: bool = False) -> List[Dict[str, Any]]:
+    """One Document (found by the reader's URL-only request, so it has a live reference) read in
+    one cached call: BuildUpdatedCache over its subtree, then walked in-process. The reader v2
+    (core/vsdc/vsdc_reader) reads only the Documents whose own URL passed the scope gate."""
+    updated = element.BuildUpdatedCache(build_cache_request(uia, raw_view))
+    return _nodes_of(updated) if updated else []
 
 
 def lines_from_nodes(docs: List[List[Dict[str, Any]]], include_selection: bool = False,
