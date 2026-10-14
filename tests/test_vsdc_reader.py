@@ -507,9 +507,15 @@ def test_flash_ocr_fires_during_a_heavy_read(cleanup):
     scope_open = clock() - r.finished_at < vsdc_reader.URL_FRESH_SEC and r.url == PORTAL
     lane_busy = reader.inflight(1) is not None
     assert scope_open and lane_busy
+    from core.vsdc import vsdc_gate
+    big = vsdc_gate.FLASH_MIN_CELLS
+    assert vsdc_gate.flash_wanted(big, reader.inflight(1) is not None, reader.page_ms(1, PORTAL), reader.paused())
     gate.set()
     collect(reader, 1)
     assert reader.page_ms(1, PORTAL) >= 3000          # the next frame on this page counts as slow too
+    # the read is over, but the page is known to be slow: the flash trigger still fires for the next toast
+    assert vsdc_gate.flash_wanted(big, reader.inflight(1) is not None, reader.page_ms(1, PORTAL), reader.paused())
+    assert not vsdc_gate.flash_wanted(big - 1, True, reader.page_ms(1, PORTAL), reader.paused())
 
 
 # ---- R9: at most one heavy read per browser process ---------------------------------------

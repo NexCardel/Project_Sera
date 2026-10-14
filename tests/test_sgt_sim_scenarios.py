@@ -102,7 +102,6 @@ def test_r2_a_page_change_during_a_5s_read_is_noticed_within_two_seconds(sim):
     assert ws.pending_seq and ws.url.endswith("dashboard"), "the new address was not learned during the read"
 
 
-@pytest.mark.xfail(strict=True, reason="WP7 wires the OCR flash trigger for a toast during a heavy read")
 def test_r2_toast_during_a_5s_read(sim):
     """An ARN toast that lives 1.5 s on a page whose read takes 5 s: no UIA read can see it; the OCR flash must."""
     c = make_client(9)
@@ -246,13 +245,21 @@ def test_c1_toast_one_second_on_a_light_page_is_caught(sim):
     go(sim, b, [sub], t + 20.0)
 
 
-@pytest.mark.xfail(strict=True, reason="WP7 wires the OCR flash trigger")
 def test_c1_toast_one_second_on_a_heavy_page_is_caught_by_ocr(sim):
     c = make_client(151)
     b = Browser()
     _w, tab = _start(b)
     t, sub = gst_filing(tab, 2.0, c, 1, success_read_ms=3000.0, arn_toast_sec=1.0)
     go(sim, b, [sub], t + 20.0)
+
+
+def test_c1_toast_one_second_on_heavy_page_is_caught_by_ocr(sim):
+    c = make_client(152)
+    b = Browser()
+    _w, tab = _start(b)
+    t, sub = gst_filing(tab, 2.0, c, 1, read_ms=2000.0, arn_toast_sec=1.0)
+    h = go(sim, b, [sub], t + 25.0)
+    assert h.counts["loop_ocr_absorbed"] >= 1
 
 
 @pytest.mark.parametrize("seconds", [2.5, 4.0])

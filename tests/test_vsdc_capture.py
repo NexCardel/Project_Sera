@@ -304,6 +304,193 @@ def test_sgt_i_can_ask_for_a_read(rig):
     assert [c.reason for c in r.page_reads()] == ["wants_read"]
 
 
+# ── The OCR triggers (blueprint 5.1, WP7) ───────────────────────────────────────────────────────
+
+class FakeLane:
+    """Stands in for the OCR lane: records what the loop sends; `accept` plays the per-window gap."""
+
+    def __init__(self):
+        self.requests = []
+        self.accept = True
+        self.finished = []
+        self.closed = []
+
+    def available(self):
+        return True
+
+    def ready(self, hwnd):
+        return self.accept
+
+    def request(self, img, ctx):
+        if not self.accept:
+            return False
+        self.requests.append(ctx)
+        return True
+
+    def results(self):
+        out, self.finished = self.finished, []
+        return out
+
+    def close_window(self, hwnd):
+        self.closed.append(hwnd)
+
+    def close(self):
+        pass
+
+    def finish(self, ctx, lines=("Fictional toast",), tab=None):
+        from core.vsdc.vsdc_reader import ReadResult
+        tab = ctx.tab if tab is None else tab
+        self.finished.append(ReadResult(ctx=ctx, source="ocr", lines=list(lines), docs=[], doc_urls=[], tab_before=tab,
+                                        tab_after=tab, url_before=ctx.url, url_after=ctx.url, started_at=ctx.asked_at,
+                                        finished_at=ctx.asked_at, scope_rule=ctx.url_source or "title"))
+
+
+def ocr_rig(rig, **kw):
+    r = rig(**kw)
+    r.lane = FakeLane()
+    r.loop._ocr_lane = r.lane
+    r.absorbed = []
+    absorb = r.sgt.absorb
+    r.sgt.absorb = lambda res, *a, **k: (r.absorbed.append(res.source), absorb(res, *a, **k))[1]
+    return r
+
+
+TOAST = (0, 0, 79, 39)                                            # 8 x 4 cells of a 320 px picture
+
+
+def test_a_toast_on_a_quick_idle_page_is_left_to_uia(rig):
+    r = ocr_rig(rig)
+    r.warm()
+    r.platform.paint(TOAST)
+    r.step(2)
+    assert r.lane.requests == []
+    assert r.page_reads("frame")                                  # the page read is what sees it
+
+
+def test_flash_ocr_fires_when_uia_is_inflight(rig):
+    r = ocr_rig(rig)
+    r.warm()
+    gate = threading.Event()
+    r.win.docs[0].gates.append(gate)
+    r.platform.paint((0, 200, 39, 209))                           # a small change: the page read starts and blocks
+    r.clock.advance(TICK)
+    r.loop.tick()
+    wait_until(lambda: r.reader.inflight(HWND) is not None)
+    assert r.lane.requests == []
+    r.platform.paint(TOAST)
+    r.clock.advance(TICK)
+    r.loop.tick()
+    gate.set()
+    r.settle()
+    assert [c.reason for c in r.lane.requests] == ["flash"]
+    assert r.lane.requests[0].hwnd == HWND and r.lane.requests[0].tab == "tab-1"
+
+
+def test_flash_ocr_fires_when_uia_is_slow(rig):
+    r = ocr_rig(rig)
+    r.warm()
+    r.reader.page_ms = lambda hwnd, url: vsdc_gate.FLASH_UIA_SLOW_MS + 100
+    r.platform.paint(TOAST)
+    r.step(1)
+    assert [c.reason for c in r.lane.requests] == ["flash"]
+
+
+def test_ocr_runs_while_uia_is_paused(rig):
+    r = ocr_rig(rig)
+    r.warm()
+    r.reader.paused = lambda: True
+    r.reader.request = lambda ctx: "paused"                       # what the reader answers while paused
+    r.platform.paint(TOAST)
+    r.step(1)
+    assert [c.reason for c in r.lane.requests] == ["paused"]
+    r.platform.paint((0, 100, 159, 199), shade=60)                # every further big change asks again
+    r.step(1)
+    assert [c.reason for c in r.lane.requests] == ["paused", "paused"]
+
+
+def test_green_box_triggers_ocr_once(rig):
+    r = ocr_rig(rig)
+    r.warm()
+    r.platform.paint((20, 150, 300, 230), shade=0)
+    r.platform.img = _green(r.platform.img, (20, 40, 300, 100))
+    r.step(1)
+    assert [c.reason for c in r.lane.requests] == ["green"]
+    r.step(20)                                                    # the banner stays: no second scan
+    assert [c.reason for c in r.lane.requests] == ["green"]
+
+
+def _green(img, box):
+    img = img.copy()
+    ImageDraw.Draw(img).rectangle(box, fill=(30, 150, 70))
+    return img
+
+
+def test_a_scan_the_lane_refuses_is_asked_again(rig):
+    r = ocr_rig(rig)
+    r.warm()
+    r.lane.accept = False                                         # the window had a scan within the last second
+    r.reader.page_ms = lambda hwnd, url: vsdc_gate.FLASH_UIA_SLOW_MS + 100
+    r.platform.paint(TOAST)
+    r.step(2)
+    assert r.lane.requests == []
+    r.lane.accept = True
+    r.step(1)
+    assert [c.reason for c in r.lane.requests] == ["flash"]
+    r.step(3)
+    assert len(r.lane.requests) == 1                              # asked once, not again and again
+
+
+def test_an_ocr_scan_is_absorbed_only_after_a_read_confirms_its_tab(rig):
+    r = ocr_rig(rig)
+    r.warm()
+    r.reader.page_ms = lambda hwnd, url: vsdc_gate.FLASH_UIA_SLOW_MS + 100
+    r.platform.paint(TOAST)
+    r.step(1)
+    (ctx,) = r.lane.requests
+    r.lane.finish(ctx)
+    r.loop._release_ocr(r.clock())
+    assert "ocr" not in r.absorbed                                # nothing yet proves the tab was in front
+    r.step(2)
+    assert r.absorbed.count("ocr") == 1
+
+
+def test_an_ocr_scan_taken_across_a_tab_switch_is_dropped(rig):
+    r = ocr_rig(rig)
+    r.warm()
+    r.reader.page_ms = lambda hwnd, url: vsdc_gate.FLASH_UIA_SLOW_MS + 100
+    r.win.tab = "tab-2"                                           # the user just switched tab: the loop does not know yet
+    r.platform.paint(TOAST)                                       # so this picture is the new page, taken as the old one
+    r.step(1)
+    (ctx,) = r.lane.requests
+    assert ctx.tab == "tab-1"
+    r.lane.finish(ctx)
+    r.step(3)
+    assert "ocr" not in r.absorbed
+
+
+def test_an_ocr_scan_from_before_sgt_was_switched_off_is_never_absorbed(rig):
+    r = ocr_rig(rig)
+    r.warm()
+    r.reader.page_ms = lambda hwnd, url: vsdc_gate.FLASH_UIA_SLOW_MS + 100
+    r.platform.paint(TOAST)
+    r.step(1)
+    (ctx,) = r.lane.requests
+    r.lane.finish(ctx)
+    r.loop.end_all("SGT switched off")
+    r.step(3)
+    assert "ocr" not in r.absorbed
+
+
+def test_a_closed_window_is_forgotten_by_the_lane(rig):
+    r = ocr_rig(rig)
+    r.warm()
+    r.platform.alive.clear()
+    r.win.closed = True
+    r.platform.fg = 0
+    r.step(int(vsdc_capture.PRUNE_EVERY_SEC / TICK) + 2)
+    assert HWND in r.lane.closed
+
+
 # ── The router ───────────────────────────────────────────────────────────────────────────────
 
 def attach_fake_capture(router, hwnd, title, url, lines, img=None):

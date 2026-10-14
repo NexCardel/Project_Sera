@@ -28,10 +28,12 @@ Never logs page text, values or links outside the portals (the heartbeat gets co
 import ctypes
 import itertools
 import time
-from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Protocol
+from collections import deque
+from dataclasses import dataclass, field
+from typing import Any, Callable, Deque, Dict, List, Optional, Protocol, Tuple
 
 from . import vsdc_gate, vsdc_scope, vsdc_windows
+from .vsdc_ocr_lane import OcrLane
 from .vsdc_reader import (REASON_SCOPE, RESULT_MAX_AGE_SEC, URL_FRESH_SEC, WEDGE_SEC, PageReader, ReadContext,
                           ReadResult)
 from .vsdc_windows import WindowInfo
@@ -49,6 +51,9 @@ SCOPE_POLL_SEC = 1.0          # a URL-only read is asked once the window's URL i
 SCOPE_GRACE_SEC = 8.0         # the router's _SCOPE_GRACE_SEC: no readable URL, portal title, verified this recently
 STATE_KEEP_SEC = 600.0        # a window not watched for this long is forgotten (its SGT sessions are not ended)
 PRUNE_EVERY_SEC = 5.0
+OCR_DUE_KEEP_SEC = 3.0        # an OCR scan the lane refused (rate limit) is asked again on later ticks this long
+OCR_ARM_SEC = 1.0             # a big picture change can still become a flash this long, once a read is running
+OCR_VERIFY_MAX_SEC = 4.0     # an OCR result whose tab no later read confirmed within this long is dropped
 
 _seq = itertools.count(1)     # ReadContext.seq: unique per process run, shared by every loop
 
@@ -95,6 +100,14 @@ class WindowState:
     scope_verified_at: float = 0.0
     scope_asked_at: float = 0.0         # a URL-only read asked and not answered yet (0 = none)
     last_sig: Optional[bytes] = None    # the frame when the last page read was asked
+    prev_sig: Optional[bytes] = None    # the frame of the previous tick (the flash trigger compares with it)
+    green: tuple = ()                   # the success-coloured boxes of the previous tick's frame
+    ocr_due: str = ""                   # an OCR scan was due and the lane refused it: its reason
+    ocr_due_at: float = 0.0
+    flash_armed_at: float = 0.0         # the last tick the picture changed by FLASH_MIN_CELLS or more (0 = none)
+    proofs: Deque[Tuple[float, Optional[str]]] = field(default_factory=lambda: deque(maxlen=8))
+    # (started_at, tab) of the last clean reads: an OCR picture is attributed only once a read that began after it
+    # shows the same tab in front (the loop's own idea of the tab can be a second old when the picture is taken)
     last_read_finished: float = 0.0
     last_read_ms: float = 0.0
     last_request_at: float = 0.0
@@ -125,22 +138,27 @@ class CaptureLoop:
 
     def __init__(self, platform: Platform, reader: PageReader, sgt: Any, ocr: Any, health: Any,
                  scope: Any = vsdc_scope, clock: Optional[Callable[[], float]] = None,
-                 on_out_of_scope: Optional[Callable[[int, str], None]] = None):
+                 on_out_of_scope: Optional[Callable[[int, str], None]] = None,
+                 ocr_lane: Optional[OcrLane] = None):
         """clock must be the reader's clock (a ReadContext's asked_at is checked against it).
-        on_out_of_scope(hwnd, url): a window's own URL is off the portals (the router's tripwire)."""
+        on_out_of_scope(hwnd, url): a window's own URL is off the portals (the router's tripwire).
+        ocr_lane: where flash / green / paused scans go (default: a lane over `ocr`)."""
         self._platform = platform
         self._reader = reader
         self._sgt = sgt
         self._ocr = ocr
+        self._clock = clock or platform.now
+        self._ocr_lane = ocr_lane if ocr_lane is not None else (OcrLane(ocr, self._clock) if ocr is not None else None)
         self._health = health
         self._scope = scope
-        self._clock = clock or platform.now
         self._on_out_of_scope = on_out_of_scope
         self._states: Dict[int, WindowState] = {}
+        self._held_ocr: List[ReadResult] = []   # finished OCR scans waiting for a read that confirms their tab
         self._ended_seq = 0                 # results asked at or before this were ended by end_all
         self._pruned_at = 0.0
         self._diag: Dict[str, Any] = {}
-        self._counts = {"asked": 0, "absorbed": 0, "torn": 0, "errors": 0}
+        self._counts = {"asked": 0, "absorbed": 0, "torn": 0, "errors": 0, "ocr_asked": 0, "ocr_absorbed": 0,
+                       "ocr_dropped": 0}
 
     # ---- the tick ----------------------------------------------------------------------------
 
@@ -150,6 +168,13 @@ class CaptureLoop:
         for r in self._reader.results():
             try:
                 self._take(r)
+            except Exception as e:
+                self._counts["errors"] += 1
+                self._diag["error"] = type(e).__name__
+        if self._ocr_lane is not None:
+            try:
+                self._held_ocr.extend(self._ocr_lane.results())
+                self._release_ocr(now)
             except Exception as e:
                 self._counts["errors"] += 1
                 self._diag["error"] = type(e).__name__
@@ -191,6 +216,8 @@ class CaptureLoop:
             self._reader.close()
         except Exception:
             pass
+        if self._ocr_lane is not None:
+            self._ocr_lane.close()
 
     def paused(self) -> bool:
         """UIA reads paused after repeated hangs (health state uia-paused)."""
@@ -241,6 +268,8 @@ class CaptureLoop:
             if not r.url_only:
                 ws.wanted = ws.wanted or "frame"
             return
+        if not r.torn:
+            ws.proofs.append((r.started_at, r.tab_after))
         newest = r.finished_at >= ws.url_at
         if newest:
             self._learn_url(ws, r)
@@ -256,6 +285,29 @@ class CaptureLoop:
         if not r.scope_rule:                # nothing on the page was in scope: nothing was read
             return
         self._absorb(r, ws, frame, newest)
+
+    def _release_ocr(self, now: float) -> None:
+        """A finished OCR scan goes to SGT as it is: the session that was in view when the picture was
+        taken owns it, and the policy for source "ocr" (add-only, R6) decides what it may change. It
+        says nothing of the window's URL or tab, so the loop learns nothing from it - and, unlike a page
+        read, nothing brackets the picture in tab time. The loop's idea of the tab may be a second old
+        (a switch just happened: the picture is another client's page), so the scan waits for the first
+        clean read that began after the picture; it is absorbed when that read shows the same tab in
+        front, dropped when it shows another (or none comes within OCR_VERIFY_MAX_SEC)."""
+        keep: List[ReadResult] = []
+        for r in self._held_ocr:
+            ws = self._states.get(r.ctx.hwnd)
+            if r.ctx.seq <= self._ended_seq or ws is None or self._sgt is None:
+                continue
+            verdict = next((tab == r.ctx.tab for started, tab in ws.proofs if started >= r.ctx.asked_at), None)
+            if verdict is None and now - r.ctx.asked_at <= OCR_VERIFY_MAX_SEC:
+                keep.append(r)
+            elif verdict:
+                self._counts["ocr_absorbed"] += 1
+                self._sgt.absorb(r, now=now)
+            else:
+                self._counts["ocr_dropped"] += 1
+        self._held_ocr = keep
 
     def _answered(self) -> None:
         try:
@@ -323,7 +375,8 @@ class CaptureLoop:
         self._diag.update(front=w.proc_name or "?", url=(ws.url_source or "read") if fresh else "none",
                           in_scope="yes" if in_scope else "no", tab="known" if ws.tab else "unknown")
         if not in_scope:
-            ws.last_sig = None              # nothing of a page outside the portals is kept
+            ws.last_sig = ws.prev_sig = None    # nothing of a page outside the portals is kept
+            ws.green, ws.ocr_due, ws.flash_armed_at = (), "", 0.0
             return
         self._diag.update(portal=portal, page=self._scope.sanitize_page_url(ws.url) if fresh else None)
         owner = None
@@ -340,6 +393,7 @@ class CaptureLoop:
         except Exception:
             img = None
         sig = vsdc_gate.frame_signature(img)
+        self._ocr_trigger(w, ws, img, sig, now, portal, owner)
 
         if ws.pending_seq and now - ws.pending_at > RESULT_MAX_AGE_SEC:
             ws.pending_seq, ws.pending_at = 0, 0.0      # the reader dropped it as too old
@@ -360,7 +414,57 @@ class CaptureLoop:
             elif reason in ("torn-retry", REASON_BLIND_RETRY):
                 ws.retry = ""
         else:
-            ws.wanted = reason              # paused / no lane: health shows it; OCR is WP7's
+            ws.wanted = reason              # paused / no lane: health shows it; the OCR trigger still runs
+
+    def _ocr_wanted(self, ws: WindowState, cells: int, inflight: bool, last_ms: float) -> str:
+        """Blueprint 5.1: "paused" (every frame change over FLASH_MIN_CELLS while UIA is paused) or
+        "flash" (the same change while a read of this window runs or the page's last read was slow)."""
+        paused = self.paused()
+        if not vsdc_gate.flash_wanted(cells, inflight, last_ms, paused):
+            return ""
+        return "paused" if paused else "flash"
+
+    def _ocr_trigger(self, w: WindowInfo, ws: WindowState, img: Any, sig: Optional[bytes], now: float,
+                     portal: str, owner: Any) -> None:
+        """The Submission Net's pixel triggers: a flash on a busy page, a new green banner, or any big
+        change while UIA is paused. The picture goes to the OCR lane, apart from every page read; a scan
+        the lane refuses (once per OCR_MIN_GAP_SEC per window) is asked again on the next ticks."""
+        prev, ws.prev_sig = ws.prev_sig, sig
+        lane = self._ocr_lane
+        if lane is None or img is None:
+            return
+        boxes = tuple(vsdc_gate.green_boxes(img))
+        green_new = vsdc_gate.new_green_box(ws.green, boxes)
+        ws.green = boxes
+        cells = vsdc_gate.cells_changed(prev, sig) if prev is not None and sig is not None else 0
+        url = self._scope.sanitize_page_url(ws.url) if ws.url else ""
+        inflight = bool(ws.pending_seq) or self._reader.inflight(w.hwnd) is not None
+        if cells >= vsdc_gate.FLASH_MIN_CELLS:
+            ws.flash_armed_at = now
+        if ws.flash_armed_at and now - ws.flash_armed_at <= OCR_ARM_SEC:
+            # A toast comes with the page that carries it: that tick's read was only just asked, so the
+            # busy test fails there and passes a tick later, while the toast is still up.
+            cells = max(cells, vsdc_gate.FLASH_MIN_CELLS)
+        reason = self._ocr_wanted(ws, cells, inflight, self._reader.page_ms(w.hwnd, url)) or ("green" if green_new else "")
+        if reason in ("flash", "paused"):
+            ws.flash_armed_at = 0.0
+        if reason and not ws.ocr_due:
+            ws.ocr_due, ws.ocr_due_at = reason, now
+        if ws.ocr_due and now - ws.ocr_due_at > OCR_DUE_KEEP_SEC:
+            ws.ocr_due = ""
+        if not ws.ocr_due or not lane.ready(w.hwnd):
+            return
+        ctx = ReadContext(seq=next(_seq), hwnd=w.hwnd, title=w.title, portal=portal or ws.portal, url=url,
+                          url_source=ws.url_source or ("title" if not url else ""), tab=ws.tab, frame_sig=sig,
+                          asked_at=self._clock(), reason=ws.ocr_due, background=w.background)
+        if not lane.request(img, ctx):
+            return
+        ws.ocr_due = ""
+        self._counts["ocr_asked"] += 1
+        if self._sgt is not None and owner is not None:
+            self._sgt.request_made(ctx, owner)
+        if not ws.scope_asked_at:           # the read that confirms the tab, without waiting for the next poll
+            self._request(w, ws, now, REASON_SCOPE, None)
 
     def _read_reason(self, w: WindowInfo, ws: WindowState, sig: Optional[bytes], now: float) -> str:
         if ws.retry:                        # before the burst: a torn read is not one of its reads
@@ -423,5 +527,7 @@ class CaptureLoop:
     def _window_gone(self, hwnd: int) -> None:
         self._states.pop(hwnd, None)
         self._reader.close_lane(hwnd)
+        if self._ocr_lane is not None:
+            self._ocr_lane.close_window(hwnd)
         if self._sgt is not None:
             self._sgt.end_session(hwnd, "window closed")
