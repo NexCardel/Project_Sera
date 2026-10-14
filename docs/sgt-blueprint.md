@@ -613,6 +613,13 @@ page's re-reads (`strict_block`: a stray row is the same evidence each time). Th
 without a tab id, because GST gives every client's welcome page the same link. Tests:
 `tests/test_sgt_tabs.py`.
 
+**Superseded in part (2026-10-14).** `docs/sgt-never-miss-blueprint.md` replaces the capture loop
+in this section and in 4.5 to 4.8 above: the page URL comes from the Document element first (the
+address bar is the fallback), each browser lane has a content worker and a scope worker, OCR runs
+on every portal add-only with the status rule of its R6, recovery takes only the latest filing on a
+list page (R5), and parked sessions stay on disk for up to 12 h (D13). Its section 11 has the status
+of every scenario.
+
 ## 11. Risks to hold onto
 
 | Risk | Mitigation |

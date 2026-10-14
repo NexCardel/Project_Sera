@@ -1417,7 +1417,7 @@ with what remains), **Out** (by constraint, with the constraint), **Unobservable
 | A5 | Partial until measured | WP0 `read-timing --minutes 240`, WP13 soak drift check; MTA (D2) |
 | A6 | Closed | tab cache per lane; `test_a6_forty_tabs_tab_id_cache` |
 | A7 | Closed | tickets: a late read is absorbed; OCR flash; `test_a7_slow_browser_late_read_absorbed` |
-| A8 | Closed (R4) | SDIS recording is switched off by the owner; SGT-I gets the Core's nodes after WP3; `test_a8_sgt_i_never_uses_a_lane` |
+| A8 | Partial: named test missing (WP14) | SDIS recording is switched off by the owner (R4); SGT-I gets the Core's nodes after WP3. `test_a8_sgt_i_never_uses_a_lane` does not exist. Closest: `test_sgt_i_gets_the_node_tree_the_recorder_already_read_and_no_extra_read` (`tests/test_sgt_i_host.py`), which shows no extra read but not that no lane is used |
 | A9 | Partial | spacing and lanes bound CPU; WP13 soak on the slowest office PC decides |
 | A10 | Closed | cell gate; `test_a10_spinner_never_passes_the_gate` |
 | B1 | Closed | `test_tab_change_during_read_is_torn_tab`, `test_b1_tab_switch_mid_read` |
@@ -1433,17 +1433,17 @@ with what remains), **Out** (by constraint, with the constraint), **Unobservable
 | C7 | Closed without events | the frame watch replaces reliance on UIA events; `FlashWatcher` stays SGT-I's |
 | C8 | Closed (D6) | WP10; `test_c8_success_on_second_monitor_is_captured` |
 | C9 | OK | unchanged |
-| D1 | Closed | per-tab sessions + Document URL; `test_d1_same_url_two_clients_two_tabs` |
+| D1 | Partial | per-tab sessions + Document URL; `test_d1_same_url_two_clients_two_tabs`. Open: the harsh case (both tabs unread before the first switch) is an xfail, `test_d1_harsh_both_tabs_unread_before_the_first_switch` (found in WP6, not fixed) |
 | D2 | Partial | ARN key prevents duplicates; a GST ARN carries no date so the time is the read time |
-| D3 | Closed | Document URL for popups; `test_d3_popup_without_address_bar` |
-| D4 | Closed | resume by client (WP9); `test_d4_tab_dragged_to_new_window_resumes_draft` |
+| D3 | Partial: named test missing (WP14) | Document URL for popups; `test_d3_popup_without_address_bar` does not exist (no sim scenario, WP6 note). Real popup check: WP0 `doc-url` (section 12) |
+| D4 | Closed | resume by client (WP9); `test_a_new_window_naming_the_same_client_resumes_its_draft` (`tests/test_sgt_shadow.py`). `test_d4_tab_dragged_to_new_window_resumes_draft` does not exist (WP14) |
 | D5 | Partial | GST header GSTIN names the session; ITR deep link without the profile page stays unattributed + alert + digest |
 | D6 | Closed | per-tab sessions; `test_d6_fifteen_restored_tabs` |
 | D7, D8 | Partial as today | out-of-scope pages are never read; the session waits (4 h idle, D13) |
 | D9 | Closed | short page read like any other; OCR net |
 | D10 | Closed (D6) | `test_d10_signing_dialog_in_front_still_reads_the_browser` |
 | D11 | Partial as today | focus leaves; session waits |
-| D12 | Closed (D1) | `test_d12_full_screen_window_is_scoped_by_document_url` |
+| D12 | Partial: named test missing (WP14) | scope by Document URL: `test_only_in_scope_documents_are_read` (`tests/test_vsdc_reader.py`). `test_d12_full_screen_window_is_scoped_by_document_url` does not exist. Full-screen check: WP0 `doc-url` (section 12) |
 | D13 | Closed (D1) | `test_d13_typed_address_bar_does_not_change_scope` |
 | D14 | Closed (D1) | `test_only_in_scope_documents_are_read` |
 | D15 | Partial | no dataset; a redirect to a login URL ends the session, which is right |
@@ -1478,7 +1478,7 @@ with what remains), **Out** (by constraint, with the constraint), **Unobservable
 | H1 | Closed for noticing | health `stalled` + phone; no COM on the capture thread after WP4 |
 | H2 | Closed | OCR keeps running during a pause; health `uia-paused` |
 | H3 | Closed | WP2 dead letter, snapshot re-queue |
-| H4 | Closed | WP2 retry + `busy_timeout` |
+| H4 | Closed | WP2 retry and dead letter (no `busy_timeout`, R11) |
 | H5 | Partial by nature | the fleet view shows last capture per PC |
 | H6 | Closed for noticing | health `disk` |
 | H7 | Partial as today | mode change ends sessions with rows written |
@@ -1612,3 +1612,10 @@ the scope allow-list, the privacy rules of the logs, and the process in constrai
   - Decisions (2): read time = p95 of the beats' `uia_last_ms` (beats with reads), first vs last segment (1 h each, a third of the window under 3 h), pass if last <= max(2 x first, 100 ms floor); a missed submission = an `--expected` ARN with no dataset event / session_end payload in the window at Submitted or higher (Draft = under-stated, also FAIL). The report prints counts and the expected file's line numbers, never an ARN; the text also goes through `redact_identifiers`.
   - Not measurable from the logs, so not rows: the "within 10 s" delay and wrong-client rows (the fixtures and sim profiles cover them); `uia_abandoned` is per run, so a restart resets it (the "replaced its worker" lines are counted too).
   - Owner checks 24 (dev PC, mock pages) and 25 (office PC, real work): numbers only into `docs/sgt-never-miss-soak.md` (not created; it is the owner's record). For WP14: nothing in section 11 names a soak test id; the layer 1 live soak row points at this tool.
+- **WP14** (2026-10-14, claude-haiku-5-5): scenario sweep of section 11 and 10a. No code or tests changed. Files: this blueprint (section 11 rows A8, D1, D3, D4, D12, H4), `docs/sgt-blueprint.md` (dated "Superseded in part" paragraph at the end of 10a), `docs/sgt-idle-resume-plan.md` (superseded note at the top). `docs/sgt-gst-fixes-plan.md` already had its note from WP8.
+  - Tests: `test_sgt_replay.py` + all `test_sgt_*` + `test_vsdc_*` = 1318 passed, 3 skipped, 1 xfailed (the D1 finding, below). `test_fleet_health.py` 22 passed. The two WB failures are not in these files and were not run.
+  - Named tests that do not exist (marked, not written): `test_a8_sgt_i_never_uses_a_lane` (A8 is Partial), `test_d3_popup_without_address_bar` (D3 Partial), `test_d12_full_screen_window_is_scoped_by_document_url` (D12 Partial). `test_d4_tab_dragged_to_new_window_resumes_draft` is replaced by `test_a_new_window_naming_the_same_client_resumes_its_draft` (D4 stays Closed).
+  - Open finding: D1 is Partial because `test_d1_harsh_both_tabs_unread_before_the_first_switch` is still an xfail.
+  - H4 no longer cites `busy_timeout` (R11). Decisions recorded: mark the missing tests rather than write them; keep the D1 xfail.
+  - Owner checks: none added. D3 and D12 are covered by the WP0 `doc-url` probe (popup, full screen; section 12).
+  - Next WP: the four missing tests and the D1 xfail are the open items; nothing else in section 11 is unconfirmed.
