@@ -1,16 +1,16 @@
-# SGT never-miss — report (2026-10-14 14:58)
+# SGT never-miss — report (2026-10-14 15:39)
 
 Deadline: 2026-10-17T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 13 |
+| Not started | 11 |
 | In progress | 0 |
-| Retry | 0 |
-| Done | 4 |
+| Retry | 1 |
+| Done | 5 |
 | Blocked | 0 |
 
-Runs: 4   output tokens: 152690   API-equivalent cost: $10.42
+Runs: 7   output tokens: 282283   API-equivalent cost: $19.03
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -18,8 +18,8 @@ Runs: 4   output tokens: 152690   API-equivalent cost: $10.42
 | WP0 | Done | sonnet | db317c5 | Probe pack: the Windows measurements tool | tools/sgt_probe_pack.py + 7 tests (1089 sgt/vsdc tests pass); 6 owner checks added; no probe run |
 | WP1 | Done | sonnet | 0cc5e4a | Capture health: states, HUD event, phone alert, log | HealthMonitor (13 states), HUD event, phone alert, health log lines; 33 new tests, narrow run 1200 passed 1 skipped; owner check 7 added |
 | WP2 | Done | sonnet | 366c04e | Rows never lost: database retry and dead letter | Retry + dead letter (core/capture_outbox.py), wired in main.py; 17 tests incl. a 6.5 s raw-DB lock; narrow run 1139 passed |
-| WP3 | Not started | opus |  | Reader v2: MTA lanes, cached read, tickets, torn detection, Document URL |  |
-| WP4 | Not started | opus |  | CaptureLoop: the SGT path out of the router |  |
+| WP3 | Done | opus | 65611c4 | Reader v2: MTA lanes, cached read, tickets, torn detection, Document URL | Reader v2 built (not wired): MTA lanes with content+scope workers, R3 queue, R9 hold, torn, Document URL; 31 tests; owner checks 9-10 |
+| WP4 | Retry | opus |  | CaptureLoop: the SGT path out of the router | stopped by network/API error, resumes after 15:44 |
 | WP5 | Not started | opus |  | SGT absorbs by provenance: late results, torn and blind rules, source policy |  |
 | WP6 | Not started | sonnet |  | Simulation harness and the six day profiles |  |
 | WP7 | Not started | sonnet |  | Change gate v2 tuning and the flash OCR trigger |  |
@@ -32,6 +32,12 @@ Runs: 4   output tokens: 152690   API-equivalent cost: $10.42
 | WP14 | Not started | haiku |  | Scenario sweep and documentation |  |
 | WPR | Not started | opus |  | Final review |  |
 
+## Decisions taken for you
+
+- **WP3** Address-bar fallback (no Document has a portal URL): which Documents are read? → Only on-screen Documents that give no URL of their own; a Document whose own URL is off the portals is never read (WP3 text said every on-screen Document; that would read an Edge sidebar or extension pane whenever the main page exposes no URL. Same coverage for browsers without a Document URL, no privacy leak.)
+- **WP3** R9: how is a page known to be heavy, and how are worker threads made? → Last read ms per lane per ctx.url (50 kept); unknown pages are not held. Each worker is a one-thread daemon executor, not ThreadPoolExecutor (R9 says the last read of that page; a URL key needs no new field. ThreadPoolExecutor threads are joined at exit, so a wedged UIA call would hold the app open; daemon threads satisfy 'close() leaves wedged threads daemon'.)
+- **WP3** R7 vs the WP3 move of extract_browser_url into vsdc_uia_text → address_bar_here holds the code; VSDCRouter.extract_browser_url stays and delegates to it with its own _uia and _cached_address_elements (One copy so the two readers cannot drift; the crosshair path keeps its method, object and cache exactly as R7 requires (its tests unchanged and green).)
+
 ## Checks waiting for you
 
 - #1 (WP0) doc-url: on the office PC open a GST/portal page in Edge, Chrome and Firefox (also one in F11 full screen, one in a popup window, and one PDF viewer tab), then run: venv/Scripts/python.exe tools/sgt_probe_pack.py doc-url   Report is ~/AmanAssociates_Sera/logs/probe_pack_<date>.txt (never commit it). Fill blueprint section 12 rows 'Document Value/URL in Edge/Chrome/Firefox, full screen, popup' (per browser: 'Value is a URL' vs 'documents', 'equal to the address bar') -> decides D1; and the row 'PDF viewer exposes text through UIA' (PDF viewer line YES/NO) -> C4. — Not run
@@ -42,3 +48,5 @@ Runs: 4   output tokens: 152690   API-equivalent cost: $10.42
 - #6 (WP0) switches: during a normal hour of B2B work run: venv/Scripts/python.exe tools/sgt_probe_pack.py switches --minutes 60   It keeps counts only (no titles, links or text). Fill section 12 row 'foreground/tab switches per minute' with the TOTAL foreground changes and tab changes per minute median/max -> D1 (how often the page identity must be re-resolved) and D4 (harness profile 1: how bursty switching is). — Not run
 - #7 (WP1) OWNER: read the HUD wording and D8. Title 'Capture paused on this PC' with one fixed sentence per state (stalled, uia-paused, blind, scope-lost, busy-long, specs-silent, disk; unlisted-portal keeps the router's own prompt and only phones), recovery 'Capture back to normal'. D8: blind after 20 s with a failed read, HUD at most once per 60 s per state and repeating every 5 min, phone at most once per 30 min per state and inside the shared hourly limit. Pass = wording is clear to staff and the timings feel right; fail = say what to change. — Not run
 - #8 (WP2) After a normal working day on the dev PC, look at ~/AmanAssociates_Sera/sgt_shadow/: undelivered_rows.jsonl should be absent or empty (rows that were retried and then replayed leave no file). If it exists, count its lines and send the count; also count undelivered_rows_held.jsonl (rows a retry cannot fix). Pass: both are zero or the retryable file empties within 10 minutes of the database being free. Never copy these files into the repo (they hold client data). — Not run
+- #9 (WP3) Equivalence on the real corpus (14.2 gate on the Core): run venv/Scripts/python.exe tools/sgt_lines_equivalence.py (synthetic + corpus). Pass: the last line says PASS; the corpus section says 'all identical', or 0 comparable records if the corpus still has no node dumps (then say so in the reply). — Not run
+- #10 (WP3) Equivalence on three live pages, reader v2 included (D1, D2 as built): with no browser sidebar or extension pane open, put a portal page in front and run venv/Scripts/python.exe tools/sgt_lines_equivalence.py --skip-corpus --title "<words from its window title>" for (1) a GST return page, (2) an Income Tax page, (3) a large GSTR-1 B2B list; once in Edge or Chrome, once in Firefox. Pass: each run ends PASS and its 'reader v2:' line shows error=none (MTA init works, D2) and rule=document in Edge/Chrome (Document URL works, D1); Firefox may show document or address_bar. — Not run
