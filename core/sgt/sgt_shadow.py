@@ -314,12 +314,15 @@ class SgtShadow:
         resolve_client: Optional[Callable[[str, str], Optional[Dict[str, Any]]]] = None,
         on_read: Optional[Callable[[bool, float, str], None]] = None,
         on_hits: Optional[Callable[[str, bool, bool], None]] = None,
+        on_ocr_row: Optional[Callable[[], None]] = None,
     ) -> None:
         self.mode = MODE_SHADOW
         # Capture health (core/vsdc/vsdc_health): on_read(usable, ms, source) after each page read
-        # (source "uia", "ocr" or "busy"); on_hits(session id, any datapoint yet, logged-in page).
+        # (source "uia", "ocr" or "busy"); on_hits(session id, any datapoint yet, logged-in page);
+        # on_ocr_row() when a dataset row is first created from an OCR read.
         self._on_read = on_read
         self._on_hits = on_hits
+        self._on_ocr_row = on_ocr_row
         # (portal, portal user ID) -> {"gstin", "pan"} of the saved client who owns it, or None
         # (core/sgt/sgt_client_link.ClientLink). Names the client where the page itself does not.
         self._resolve_client = resolve_client
@@ -1905,6 +1908,10 @@ class SgtShadow:
             slot.owner = {} if add_only else {k: stamp for k in values}
             slot.evidence_source = slot.first_seen_as = "ocr" if add_only else "uia"
             s.slots.append(slot)
+            if add_only:
+                if self._stats is not None:
+                    self._stats.record_ocr_only_row(self._diag.get("portal") or "?", self._today())
+                self._report(self._on_ocr_row)
             self._queue(s, slot)
             self._event(s, "dataset", change="new", record=record, values=values,
                         confidence=confidence, page=url, source=source)

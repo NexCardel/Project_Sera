@@ -1,5 +1,11 @@
 # SGT GST fixes: plan for the implementer
 
+> **2026-10-14 note:** WP4 of this plan ("Disable OCR on the GST portal", `NO_OCR_PORTALS`) is
+> **superseded** by `docs/sgt-never-miss-blueprint.md` section 5.2 (with R6) and constraint 7 of
+> `docs/sgt-stress-problem-report.md`. OCR now runs on every portal, add-only: it never sets the
+> client, never changes or clears what UI Automation set, and raises a status only together with an
+> identifier. `NO_OCR_PORTALS` no longer exists. The rest of this plan stands.
+
 Files: `core/sgt/sgt_shadow.py`, `core/sgt/sgt_specs.py` / builtin `sgt_fields.json`, `core/sgt/sgt_resolver.py`,
 tests in `tests/test_sgt_shadow.py` (+ new `tests/test_sgt_gst_fixes.py`), repair tool in `tools/`.
 Do NOT commit, bump version.json, or touch `package_dist/`. Use Edit/Write for code (no backslash heredocs).

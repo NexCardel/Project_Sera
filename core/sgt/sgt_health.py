@@ -3,8 +3,9 @@ core/sgt/sgt_health.py - noticing that a portal changed
 =======================================================
 Portals change their wording and their pages without notice. SGT then does not fail loudly: a
 spec simply stops matching and SGT goes quiet. This keeps, per portal and per day, how many pages
-were read (and how many had to be OCR'd because UI Automation was blind) and how many times each
-spec matched, and raises an alert when:
+were read (and how many had to be OCR'd because UI Automation was blind), how many dataset rows
+only OCR has seen (`ocr_only_rows`, for the daily digest) and how many times each spec matched,
+and raises an alert when:
 
   a spec went quiet   it matched on at least USUAL_DAYS of the last LOOKBACK_DAYS days, and has
                       not matched once on the last QUIET_ACTIVE_DAYS days the portal was really
@@ -39,7 +40,8 @@ class SpecStats:
         self._last_save = 0.0
         self._dirty = False
         # {"reads": {portal: {day: [reads, ocr]}}, "hits": {portal: {spec: {day: n}}}, "alerted": {key: day}}
-        self.data: Dict[str, Any] = {"reads": {}, "hits": {}, "alerted": {}}
+        # "ocr_rows": {portal: {day: n}} - rows first created from an OCR read (for the daily digest)
+        self.data: Dict[str, Any] = {"reads": {}, "hits": {}, "alerted": {}, "ocr_rows": {}}
         self._load()
 
     # ── recording ──────────────────────────────────────────────────────────────
@@ -50,6 +52,18 @@ class SpecStats:
         if source == "ocr":
             cell[1] += 1
         self._touch()
+
+    def record_ocr_only_row(self, portal: str, today: date) -> None:
+        """A dataset row that only OCR has seen so far (no UI Automation read has shown its ARN)."""
+        days = self.data["ocr_rows"].setdefault(portal or "?", {})
+        day = today.isoformat()
+        days[day] = days.get(day, 0) + 1
+        self._touch()
+
+    def ocr_only_rows(self, day: date, portal: Optional[str] = None) -> int:
+        """Rows created from OCR on `day`, for one portal or for all of them."""
+        key = day.isoformat()
+        return sum(days.get(key, 0) for p, days in self.data["ocr_rows"].items() if portal in (None, p))
 
     def record_hits(self, portal: str, spec_names: Iterable[str], today: date) -> None:
         day = today.isoformat()
@@ -101,12 +115,15 @@ class SpecStats:
         """Per portal over the last `days`: pages read, OCR share, and each spec's hit count."""
         cutoff = (today - timedelta(days=days)).isoformat()
         out: Dict[str, Any] = {}
-        for portal, per_day in self.data["reads"].items():
+        for portal in {**self.data["reads"], **self.data["ocr_rows"]}:
+            per_day = self.data["reads"].get(portal, {})
             reads = sum(r for d, (r, _) in per_day.items() if d >= cutoff)
             ocr = sum(o for d, (_, o) in per_day.items() if d >= cutoff)
             hits = {spec: sum(n for d, n in days_.items() if d >= cutoff)
                     for spec, days_ in self.data["hits"].get(portal, {}).items()}
             out[portal] = {"pages": reads, "ocr_share": round(ocr / reads, 3) if reads else 0.0,
+                           "ocr_only_rows": sum(n for d, n in self.data["ocr_rows"].get(portal, {}).items()
+                                                if d >= cutoff),
                            "spec_hits": dict(sorted(hits.items(), key=lambda kv: -kv[1]))}
         return out
 
@@ -137,7 +154,7 @@ class SpecStats:
         try:
             loaded = json.loads(self._path.read_text(encoding="utf-8"))
             if isinstance(loaded, dict):
-                for k in ("reads", "hits", "alerted"):
+                for k in ("reads", "hits", "alerted", "ocr_rows"):
                     if isinstance(loaded.get(k), dict):
                         self.data[k] = loaded[k]
         except (OSError, ValueError):
@@ -152,3 +169,6 @@ class SpecStats:
             for days in per.values():
                 for d in [d for d in days if d < cutoff]:
                     del days[d]
+        for days in self.data["ocr_rows"].values():
+            for d in [d for d in days if d < cutoff]:
+                del days[d]

@@ -271,6 +271,21 @@ def test_an_ocr_only_arn_makes_a_row_marked_ocr(tmp_path):
     assert (src["evidence_source"], src["first_seen_as"]) == ("ocr", "ocr")
 
 
+def test_an_ocr_only_row_is_counted_for_the_digest_and_a_uia_row_is_not(tmp_path):
+    from datetime import date
+    from core.sgt.sgt_health import SpecStats
+    r = AbsorbRig(tmp_path)
+    stats, told = SpecStats(tmp_path / "stats"), []
+    r.sgt._stats, r.sgt._on_ocr_row = stats, lambda: told.append(1)
+    today = date(2026, 7, 15)
+    r.read(PROFILE_URL, PROFILE_PAGE)
+    r.read(FILED_URL, filed_page(ack=ACK_A))                       # a UIA row: not counted
+    assert stats.ocr_only_rows(today) == 0 and told == []
+    r.read(FILED_URL, filed_page(ack=ACK_B), source="ocr")         # a row only OCR saw
+    r.read(FILED_URL, filed_page(ack=ACK_B), source="ocr")         # the same row again: still one
+    assert stats.ocr_only_rows(today, ITR) == 1 and told == [1]
+
+
 def test_uia_confirmation_upgrades_the_ocr_mark(tmp_path):
     r = AbsorbRig(tmp_path)
     r.read(PROFILE_URL, PROFILE_PAGE)

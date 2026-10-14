@@ -522,7 +522,8 @@ class VSDCRouter:
                                   alert_unattributed=lambda form, page: self.alerts.notify_unattributed_submission(form, page),
                                   ask_demotion=self.notify_demotion,
                                   resolve_client=getattr(self, "_client_lookup", None),
-                                  on_read=self.health.read_result, on_hits=self.health.hits)
+                                  on_read=self.health.read_result, on_hits=self.health.hits,
+                                  on_ocr_row=lambda: self.health.row("ocr_only"))
             self._apply_sgt_i()
             self._apply_scc()
 
