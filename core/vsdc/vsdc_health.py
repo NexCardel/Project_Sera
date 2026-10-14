@@ -189,6 +189,15 @@ class HealthMonitor:
         except Exception:
             pass
 
+    def answered(self) -> None:
+        """A requested read came back, absorbed or not (torn, an error, nothing in scope): it is no
+        longer in flight. Whether it was usable is told by read_result."""
+        try:
+            with self._lock:
+                self._inflight_since = 0.0
+        except Exception:
+            pass
+
     def read_result(self, usable: bool, ms: float = 0.0, source: str = "uia") -> None:
         """A read finished. source "busy": skipped because the previous read is still running."""
         try:

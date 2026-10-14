@@ -397,14 +397,30 @@ class SgtShadow:
 
     # ── Entry points ─────────────────────────────────────────────────────────────
     def observe(self, hwnd: int, portal: Optional[str], url: str, frame: Any = None,
-                ocr: Any = None, title: str = "", tab: Optional[str] = None) -> Optional[PageResult]:
+                ocr: Any = None, title: str = "", tab: Optional[str] = None,
+                read: Optional[Dict[str, Any]] = None) -> Optional[PageResult]:
         """tab: the id of the browser tab in front (None = not known: the window is one session,
-        as before tabs were told apart)."""
+        as before tabs were told apart). read: the page read the capture loop already made
+        ({"lines", "docs", "ms"}; core/vsdc/vsdc_capture) - absorbed as it is, with no read and no
+        change gate here. Until WP5's absorb() replaces it."""
         try:
-            return self._observe(hwnd, portal or "", url or "", frame, ocr, title or "", tab or None)
+            return self._observe(hwnd, portal or "", url or "", frame, ocr, title or "", tab or None, read)
         except Exception as e:                  # shadow mode must never disturb capture
             self._echo(f"[SGT] {self._tag} error, page skipped: {e}")
             return None
+
+    def wants_read(self, hwnd: int) -> bool:
+        """SGT-I / SCC-U ask for another read of the session in view in this window (advisory, as
+        inside _observe; the capture loop's change gate asks this)."""
+        try:
+            s = self._sessions.get(hwnd)
+            if s is None:
+                return False
+            sgt_i, scc = self._sgt_i, self._scc
+            return bool((sgt_i is not None and sgt_i.wants_read(s.session_id))
+                        or (scc is not None and scc.wants_read(s.session_id)))
+        except Exception:
+            return False
 
     def end_session(self, hwnd: int, reason: str) -> None:
         """Ends EVERY session of this window - the one in view and the ones set aside. For a
@@ -489,7 +505,7 @@ class SgtShadow:
 
     # ── One tick ─────────────────────────────────────────────────────────────────
     def _observe(self, hwnd: int, portal: str, url: str, frame: Any, ocr: Any, title: str = "",
-                 tab: Optional[str] = None) -> Optional[PageResult]:
+                 tab: Optional[str] = None, read: Optional[Dict[str, Any]] = None) -> Optional[PageResult]:
         now = self._clock()
         if self._state_dirty:
             self._save_state()              # the last change before a still page must not wait for the next one
@@ -612,7 +628,8 @@ class SgtShadow:
         # here belongs to the new one.
 
         h = _frame_hash(frame)
-        changed = url_changed or h is None or h != s.last_hash or (now - s.last_read) >= REREAD_AFTER_SEC
+        changed = (read is not None or url_changed or h is None or h != s.last_hash
+                   or (now - s.last_read) >= REREAD_AFTER_SEC)
         sgt_i = self._sgt_i    # one read: Settings may detach it from another thread mid-tick
         if not changed and sgt_i is not None:
             changed = sgt_i.wants_read(s.session_id)   # SGT-I may only ask for MORE reads
@@ -626,7 +643,7 @@ class SgtShadow:
         s.last_read = now
 
         t0 = time.perf_counter()
-        res = self._read_uia(hwnd) or {}
+        res = read if read is not None else (self._read_uia(hwnd) or {})
         if res.get("busy"):
             # The previous UIA read is still running (a slow page, not a hung one): this page was
             # not read at all, so it must not count as read - the next tick asks again.
@@ -652,7 +669,7 @@ class SgtShadow:
                 source = "ocr"
                 s.ocr_reads += 1
                 self._diag["ocr"] += 1
-        read_ms = (time.perf_counter() - t0) * 1000
+        read_ms = (time.perf_counter() - t0) * 1000 + (float(res.get("ms") or 0.0) if read is not None else 0.0)
         s.read_ms += read_ms
         s.reads += 1
         self._diag["last_lines"] = len(lines)
@@ -661,12 +678,15 @@ class SgtShadow:
         if not lines:
             return None
         today = self._today()
-        nodes = None
+        # The capture loop's read carries the nodes of the same read: no second read for them.
+        nodes = (list(read.get("docs") or []) or None) if read is not None and source == "uia" else None
         if self._recorder is not None:
             record_nodes = self._recorder.enabled and sgt_i is not None and sgt_i.active
-            nodes = self._nodes_for_recording(hwnd) if record_nodes else None
+            if read is None:
+                nodes = self._nodes_for_recording(hwnd) if record_nodes else None
             self._recorder.record(session=s.session_id, portal=portal, url=url, title=title,
-                                  source=source, lines=lines, ts=now, today=today, nodes=nodes)
+                                  source=source, lines=lines, ts=now, today=today,
+                                  nodes=nodes if record_nodes else None)
         sdis = self._sdis
         try:
             if sdis is not None and sdis.enabled:

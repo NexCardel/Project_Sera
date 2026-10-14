@@ -371,6 +371,14 @@ class VSDCRouter:
         self._sgt_mode: str = self._env_sgt_mode() or SGT_OFF
         self._sgt_alone: bool = False              # SGT on, the other three off: no crosshair routing
         self._sgt = None                           # core.sgt.sgt_shadow.SgtShadow, built on first use
+        # SGT's capture loop (core/vsdc/vsdc_capture): its own windows, scope gate and reader lanes,
+        # built on first use while SGT is on. The crosshair engines keep this router's own URL read
+        # (R7). The three below are for tests and tools: None = the real Windows platform, the real
+        # UI Automation backend and time.monotonic.
+        self.capture = None
+        self.capture_platform = None
+        self.capture_backend = None
+        self.capture_clock = None
         self.diag_tick: Dict[str, Any] = {}        # this tick, for the heartbeat (vsdc_diag)
         if self._sgt_mode != SGT_OFF:
             print(f"[SGT] mode = {self._sgt_mode.upper()} (from SGT_MODE)")
@@ -419,10 +427,16 @@ class VSDCRouter:
         self._apply_scc()
         if sgt_mode != self._sgt_mode and self._sgt is not None:
             # Open sessions end under the mode they were read in, so no dataset is keyed half
-            # one way and half the other.
-            self._sgt.end_all("SGT switched off" if sgt_mode == SGT_OFF else f"SGT switched to {sgt_mode}")
+            # one way and half the other. A read asked before the switch is never absorbed after it.
+            reason = "SGT switched off" if sgt_mode == SGT_OFF else f"SGT switched to {sgt_mode}"
+            if self.capture is not None:
+                self.capture.end_all(reason)
+            else:
+                self._sgt.end_all(reason)
             if sgt_mode != SGT_OFF:
                 self._sgt.set_mode(sgt_mode)
+            else:
+                self._drop_capture()
         self._sgt_mode = sgt_mode
         sgt_on = sgt_mode != SGT_OFF
         self._sgt_alone = sgt_on and not (vsdc or vsdc_x or vsdc247) and not self._env_247_only
@@ -488,9 +502,9 @@ class VSDCRouter:
             host.set_enabled(on)
             self._sgt.set_scc(host if on else None)
 
-    def _run_sgt(self, hwnd: int, title: str = "") -> None:
-        """SGT observes this page. Its tracker rows leave through its own outbox (evaluate_tick
-        hands them out one per tick), never through this tick's result."""
+    def _ensure_sgt(self) -> None:
+        """Builds SGT on first use. Its tracker rows leave through its own outbox (evaluate_tick
+        hands them out one per tick), never through a tick's result."""
         if self._sgt is None:
             from core.sdis.recorder import SdisRecorder
             from core.sgt.sgt_corpus import PageRecorder
@@ -511,16 +525,33 @@ class VSDCRouter:
                                   on_read=self.health.read_result, on_hits=self.health.hits)
             self._apply_sgt_i()
             self._apply_scc()
-        # Which tab of the window is in front: SGT keeps one session per tab, so a page that
-        # names no client never feeds the client of the tab the user came from. When UIA is
-        # still busy with a slow page read, the tab cannot be told and the page could not be
-        # read either - SGT simply looks again next tick.
-        tab = vsdc_uia_text.selected_tab_id(hwnd)
-        if tab is None and vsdc_uia_text.was_busy():
-            return
-        self.diag_tick["tab"] = "known" if tab else "unknown"
-        self._sgt.observe(hwnd, self._tick_portal, self._tick_page_url,
-                          frame=self._capture_window(hwnd), ocr=self.ocr, title=title, tab=tab)
+
+    def _run_capture(self) -> None:
+        """SGT's tick: the capture loop watches the browser windows, asks the reader for page reads
+        and hands SGT what comes back (core/vsdc/vsdc_capture). Its errors are logged like a tick's
+        and never stop the crosshair engines' tick."""
+        try:
+            if self.capture is None:
+                self._ensure_sgt()
+                from .vsdc_capture import CaptureLoop, WinPlatform
+                from .vsdc_reader import PageReader
+                clock = self.capture_clock or time.monotonic
+                reader = PageReader(backend=self.capture_backend, clock=clock)
+                self.capture = CaptureLoop(self.capture_platform or WinPlatform(self.ocr), reader, self._sgt,
+                                           self.ocr, self.health, clock=clock,
+                                           on_out_of_scope=self._check_unlisted_portal)
+                vsdc_diag.register_reader(reader)
+            self.capture.tick()
+            self.diag_tick.update(self.capture.diag())
+        except Exception as e:
+            vsdc_diag.tick_error(e)
+
+    def _drop_capture(self) -> None:
+        """SGT is off: the loop's reader lanes close and the heartbeat reads the old reader again."""
+        loop, self.capture = self.capture, None
+        if loop is not None:
+            vsdc_diag.register_reader(None)
+            loop.close()
 
     _TRIPWIRE_MAX_PROBES = 3
     _TRIPWIRE_RETRY_SEC = 5.0
@@ -894,7 +925,9 @@ class VSDCRouter:
                 except Exception:
                     pass
                 asm._session_started = False
-        if self._sgt is not None:
+        if self.capture is not None:
+            self.capture.end_all(reason)        # ends SGT's sessions too
+        elif self._sgt is not None:
             self._sgt.end_all(reason)
 
     def drain_sgt_dispatches(self) -> List[Dict[str, Any]]:
@@ -998,10 +1031,11 @@ class VSDCRouter:
     def _health_end_of_tick(self) -> None:
         try:
             h = self.health
-            h.uia_paused(bool(vsdc_uia_text.worker_health().get("disabled")))
+            loop = self.capture
+            h.uia_paused(bool(vsdc_uia_text.worker_health().get("disabled")) or (loop is not None and loop.paused()))
             h.tick()
             if h.due():
-                h.write()
+                h.write(loop.health_extra() if loop is not None else None)
         except Exception:
             pass
 
@@ -1018,6 +1052,20 @@ class VSDCRouter:
         if self._engines_off:
             self.diag_tick = {"engines": "all off"}
             return None
+        # SGT runs in its own capture loop, after the crosshair engines (when they are on at all);
+        # it cannot change their result: its rows go out through its outbox, at the top of a tick.
+        try:
+            if self._sgt_alone:
+                self.diag_tick = {}
+                return None
+            return self._crosshair_tick()
+        finally:
+            if self._sgt_mode != SGT_OFF:
+                self._run_capture()
+
+    def _crosshair_tick(self) -> Optional[Dict[str, Any]]:
+        """The crosshair engines and VSDC247: the window in front, with this router's own
+        address-bar read (R7)."""
         hwnd, title, proc_name = self.get_foreground_info()
         # What the heartbeat says was in front (logs/vsdc.log): the exe only, until the scope
         # gate has passed - a page outside the portals is never named there.
@@ -1054,10 +1102,6 @@ class VSDCRouter:
                     result = self._run_vsdc247(hwnd)
                 else:
                     self._observe_247(hwnd)      # the crosshair pipeline handled this frame
-            # SGT: after everything else, on the same scope-gated pages; it cannot change
-            # `result` (its rows go out through its outbox, at the top of the next tick).
-            if self._scope_ok_this_tick and self._sgt_mode != SGT_OFF:
-                self._run_sgt(hwnd, title)
             if result:
                 self._remember_dispatch(result)
                 stamp_device_name(result)        # which PC captured it, inside the payload
@@ -1145,8 +1189,9 @@ class VSDCRouter:
                               in_scope="yes" if in_scope else "no")
         if in_scope:
             self.diag_tick.update(portal=self._tick_portal, page=self._tick_page_url or None)
-        self.health.window(hwnd, in_scope, self._tick_portal or "", titled_portal=is_portal_title,
-                           url_readable=address_bar_readable)
+        if self._sgt_mode == SGT_OFF:           # with SGT on, its capture loop tells health
+            self.health.window(hwnd, in_scope, self._tick_portal or "", titled_portal=is_portal_title,
+                               url_readable=address_bar_readable)
 
         matched_crosshair = None
         if in_scope and (address_bar_readable or is_portal_title):

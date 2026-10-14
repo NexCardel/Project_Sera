@@ -664,29 +664,53 @@ class TestSwitch:
             harness.router.apply_engine_settings(True, True, False, sgt="off")
             assert harness.router._sgt_mode == SGT_SHADOW
 
+    # The two below go through the capture loop's Platform seam (core/vsdc/vsdc_capture, WP4): the
+    # crosshair engines still tick beside it, with the router's own URL read.
     def test_shadow_observes_in_scope_ticks_and_never_changes_the_result(self, harness, tmp_path):
+        from tests.test_vsdc247_integration import PORTAL_ITR, TITLE_ITR
+        from tests.test_vsdc_capture import attach_fake_capture
         r = harness.router
         r.apply_engine_settings(True, True, False, sgt="shadow")
         seen = []
         fake = MagicMock()
         fake.observe.side_effect = lambda *a, **k: seen.append((a, k))
         fake.pending.return_value = 0                   # no tracker rows waiting
+        fake.wants_read.return_value = False
         r._sgt = fake
         harness.screen(["Dashboard"])
-        out = harness.tick()
-        assert out is None and len(seen) == 1
-        (hwnd, portal, url), kw = seen[0]
-        assert (hwnd, portal) == (4242, "Income Tax") and "eportal.incometax.gov.in" in url
-        assert kw["frame"] is not None
+        clock, _win, settle = attach_fake_capture(r, 4242, TITLE_ITR, PORTAL_ITR, ["Dashboard"],
+                                                  img=harness.ocr.capture_window_image.return_value)
+        try:
+            outs = []
+            for _ in range(3):                          # URL-only read, page read, absorbed
+                clock.advance(0.35)
+                outs.append(harness.tick())
+                settle()
+            assert outs == [None, None, None] and len(seen) == 1
+            (hwnd, portal, url), kw = seen[0]
+            assert (hwnd, portal) == (4242, "Income Tax") and "eportal.incometax.gov.in" in url
+            assert kw["frame"] is not None and kw["read"]["lines"] == ["Dashboard"]
+        finally:
+            r._drop_capture()
 
     def test_out_of_scope_pages_are_never_observed(self, harness):
+        from tests.test_vsdc_capture import attach_fake_capture
         r = harness.router
         r.apply_engine_settings(True, True, False, sgt="shadow")
         r._sgt = MagicMock()
         r._sgt.pending.return_value = 0                 # else the tick returns early and proves nothing
         r.extract_browser_url.return_value = "https://www.youtube.com/watch?v=x"
-        harness.tick()
-        r._sgt.observe.assert_not_called()
+        clock, _win, settle = attach_fake_capture(r, 4242, "Income Tax guide - Google Chrome",
+                                                  "https://www.youtube.com/watch?v=x", ["Not a portal"])
+        try:
+            for _ in range(5):
+                clock.advance(0.35)
+                harness.tick()
+                settle()
+            r._sgt.observe.assert_not_called()
+            assert r.capture_backend.reads == []        # not a line of it was read
+        finally:
+            r._drop_capture()
 
     def test_switching_off_ends_open_sessions(self, harness):
         r = harness.router

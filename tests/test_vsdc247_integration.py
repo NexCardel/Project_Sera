@@ -55,6 +55,12 @@ class Harness:
         )
         self.router.get_foreground_info = MagicMock(return_value=(4242, title, "chrome.exe"))
         self.router.extract_browser_url = MagicMock(return_value=url)
+        # SGT's capture loop (core/vsdc/vsdc_capture) never looks at the real screen in a test: no
+        # window is in front unless a test attaches its own fake (tests/test_vsdc_capture).
+        self.router.capture_platform = MagicMock()
+        self.router.capture_platform.foreground.return_value = 0
+        self.router.capture_platform.windows.return_value = []
+        self.router.capture_backend = MagicMock()
         # Starts at the real time: patching time.time also moves date.today(), and an ack is
         # judged against today's date, so a clock stuck in 1970 would call every ack "old".
         self.clock = [datetime.now().timestamp()]

@@ -178,31 +178,27 @@ def test_the_selected_tab_is_named_by_its_runtime_id():
     assert u._selected_among(client, tabs[:2]) is None
 
 
-def _router(monkeypatch, tab, busy):
-    from core.vsdc import vsdc_router, vsdc_uia_text
-    seen = []
-    r = object.__new__(vsdc_router.VSDCRouter)
-    r._sgt = SimpleNamespace(observe=lambda *a, **k: seen.append(k.get("tab")))
-    r._tick_portal, r._tick_page_url, r.ocr, r.diag_tick = GST, GST_WELCOME, None, {}
-    r._capture_window = lambda h: None
-    monkeypatch.setattr(vsdc_uia_text, "selected_tab_id", lambda h: tab)
-    monkeypatch.setattr(vsdc_uia_text, "was_busy", lambda: busy)
-    return r, seen
+# SGT is handed the tab of the read itself (the capture loop, core/vsdc/vsdc_capture - WP4). A busy
+# reader no longer skips a tick: the read is queued and answered later (core/vsdc/vsdc_reader).
+def _loop(tab):
+    from tests.test_vsdc_capture import Rig
+    from tests.test_vsdc_reader import Doc
+    return Rig(docs=[Doc(GST_WELCOME, ["Fictional GST page"])], tab=tab)
 
 
-def test_the_router_hands_sgt_the_tab(monkeypatch):
-    r, seen = _router(monkeypatch, T1, False)
-    r._run_sgt(5)
-    assert seen == [T1] and r.diag_tick["tab"] == "known"
+def test_the_capture_loop_hands_sgt_the_tab_of_the_read():
+    r = _loop(T1)
+    try:
+        r.step(3)
+        assert [o.tab for o in r.sgt.observed] == [T1] and r.loop.diag()["tab"] == "known"
+    finally:
+        r.close()
 
 
-def test_the_router_waits_a_tick_while_uia_is_busy(monkeypatch):
-    r, seen = _router(monkeypatch, None, True)
-    r._run_sgt(5)
-    assert seen == []
-
-
-def test_a_browser_with_no_tab_strip_is_still_read(monkeypatch):
-    r, seen = _router(monkeypatch, None, False)
-    r._run_sgt(5)
-    assert seen == [None] and r.diag_tick["tab"] == "unknown"
+def test_a_browser_with_no_tab_strip_is_still_read():
+    r = _loop(None)
+    try:
+        r.step(3)
+        assert [o.tab for o in r.sgt.observed] == [None] and r.loop.diag()["tab"] == "unknown"
+    finally:
+        r.close()

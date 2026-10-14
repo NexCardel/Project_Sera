@@ -247,14 +247,25 @@ class TestRouter:
         fake.set_mode.assert_called_once_with("live")
 
     def test_live_observes_in_scope_ticks(self, harness):
+        """Through the capture loop's Platform seam (WP4): a URL-only read, a page read, absorbed."""
+        from tests.test_vsdc247_integration import PORTAL_ITR, TITLE_ITR
+        from tests.test_vsdc_capture import attach_fake_capture
         r = harness.router
         r.apply_engine_settings(False, False, False, sgt="live")
         fake = MagicMock()
         fake.pending.return_value = 0
+        fake.wants_read.return_value = False
         r._sgt = fake
         harness.screen(["Dashboard"])
-        assert harness.tick() is None
-        fake.observe.assert_called_once()
+        clock, _win, settle = attach_fake_capture(r, 4242, TITLE_ITR, PORTAL_ITR, ["Dashboard"])
+        try:
+            for _ in range(3):
+                clock.advance(0.35)
+                assert harness.tick() is None
+                settle()
+            fake.observe.assert_called_once()
+        finally:
+            r._drop_capture()
 
     def test_env_live(self, harness):
         from core.vsdc.vsdc_router import SGT_LIVE

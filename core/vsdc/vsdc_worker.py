@@ -9,7 +9,8 @@ import time
 from typing import Optional, Dict, Any
 from PySide6.QtCore import QThread, Signal
 
-from .vsdc_router import VSDCRouter
+from .vsdc_router import VSDCRouter, SGT_OFF
+from .vsdc_capture import FRAME_TICK_SEC
 from .vsdc_ocr import VSDCOcrEngine
 from .vsdc_assembler import VisualSessionAssembler
 from . import vsdc_diag
@@ -28,7 +29,7 @@ class VSDCWorker(QThread):
     activity_event = Signal(str, str, str, object)
     status_changed = Signal(str)     # Emitted for status messages (e.g. 'Active', 'Idle')
 
-    def __init__(self, check_interval_sec: float = 0.35, parent=None):
+    def __init__(self, check_interval_sec: float = FRAME_TICK_SEC, parent=None):
         super().__init__(parent)
         self.check_interval_sec = check_interval_sec
         self._running = False
@@ -76,8 +77,11 @@ class VSDCWorker(QThread):
                             print(f"🎯 {who} Form={payload.get('filing_type')} ARN={payload.get('arn')}")
                             self.filing_captured.emit(payload)
 
-                        # Dynamic Burst Snapping: If route changed, poll rapidly (15ms) before user can scroll
-                        if getattr(self.router, "burst_ticks_remaining", 0) > 0:
+                        # Dynamic Burst Snapping: If route changed, poll rapidly (15ms) before user can scroll.
+                        # Crosshair engines only: while SGT is on, its capture loop bursts its own reads
+                        # (vsdc_capture.BURST_READS) and a 15 ms tick would only add screenshots.
+                        if (getattr(self.router, "burst_ticks_remaining", 0) > 0
+                                and getattr(self.router, "_sgt_mode", SGT_OFF) == SGT_OFF):
                             self.router.burst_ticks_remaining -= 1
                             sleep_time = 0.015  # Ultra-fast 15ms burst loop
                         else:
