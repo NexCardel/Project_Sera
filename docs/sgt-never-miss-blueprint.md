@@ -389,7 +389,7 @@ The loop treats every returned window exactly like the foreground one today (its
 `_WindowSession`, its own scope gate, its own lane), except that a background window is only
 considered every `BG_TICK_SEC`, gets `ctx.background=True`, and is screenshotted with the
 PrintWindow fallback in `VSDCOcrEngine.capture_window_image` (already there). `BROWSER_EXE_NAMES`
-gains `"vivaldi.exe"` and can be extended from `vsdc_scope.json` (`"browsers": [...]`, D11).
+is not changed (owner rejected D11, 2026-10-14).
 
 ### 4.8 The loop, step by step (after)
 
@@ -724,8 +724,10 @@ WP2 (independent)
 WP5 --> WP9, WP11
 WP6 --> WP13 (after WP7..WP12)
 WP13 --> WP14
-WP15 only if D9 approved (after WP5)
+WP15: NOT BUILT (owner rejected D9 on 2026-10-14)
 ```
+
+Owner answers to the decisions are in section 10, "Owner answers". Read them before starting any WP.
 
 ### WP0. Probe pack: the measurements only a Windows PC can take
 
@@ -1179,7 +1181,12 @@ per PC).
 `test_a_new_window_naming_another_client_never_resumes`, `test_idle_maths_survive_a_wall_clock_jump`.
 `test_closing_the_window_ends_every_session_of_it` keeps its meaning (window gone).
 
-**Done when** the tests pass. **STOP (owner):** confirm that parked identity on disk for up to 4 h
+**Owner answer D13 (section 10):** this WP also sets `IDLE_END_SEC = 4 * 3600` and
+`RESUME_WINDOW_SEC = 12 * 3600` in `sgt_shadow.py`, and `_SESSION_IDLE_TIMEOUT_SEC = 4 * 3600` in
+`vsdc_router.py`. Add `test_router_prune_never_precedes_sgt_idle_end` (the router timeout is at
+least `IDLE_END_SEC`).
+
+**Done when** the tests pass. **STOP (owner):** confirm that parked identity on disk for up to 12 h
 is acceptable (it already is for open sessions).
 
 ### WP10. Visible windows that are not in front
@@ -1293,7 +1300,7 @@ hand-off notes; update `docs/sgt-gst-fixes-plan.md` and `docs/sgt-idle-resume-pl
 
 **STOP (owner):** none.
 
-### WP15. Downloads watching (only if D9 is approved)
+### WP15. Downloads watching: NOT BUILT (owner rejected D9, 2026-10-14). Kept for the record only.
 
 **Tier:** Sonnet. **Depends on:** WP5, D9.
 
@@ -1333,6 +1340,33 @@ file appeared (or unattributed). Privacy: file names and paths never logged; tex
 | D13 | Keep `IDLE_END_SEC = 2 h`, `RESUME_WINDOW_SEC = 4 h` | Keep | nothing in the evidence argues for a change; parking now survives restarts |
 | D14 | Hindi portal language (F9) | Out of scope; health reports `specs-silent` if it happens | staff work in English; a spec set for Hindi is config work for later |
 | D15 | Tier upgrade to Opus for WP3, WP4, WP5, WP10 | If available | reader concurrency, provenance and the scope seam are where a subtle mistake costs the most |
+
+### Owner answers (2026-10-14): these override the defaults above
+
+Every WP agent follows this table. Where it differs from the text elsewhere in this blueprint,
+**this table wins**.
+
+| Id | Answer | What it changes |
+| :--- | :--- | :--- |
+| D1 | Yes | As recommended. |
+| D2 | Yes | As recommended. |
+| D3 | Accepted | As recommended. |
+| D4 | Accepted | As recommended. |
+| D5 | Accepted | As recommended. |
+| D6 | Accepted | As recommended (WP10 is built). |
+| D7 | Yes | As recommended. |
+| D8 | Yes | As recommended. |
+| D9 | **Rejected** | **WP15 is not built.** Scenario C5 (evidence only in a downloaded file) stays a layer-4 item: listed in the daily digest, never watched. No agent reads the Downloads folder or any file the browser saves. |
+| D10 | Yes | As recommended. |
+| D11 | **Rejected** | `BROWSER_EXE_NAMES` is **not** changed and `vsdc_scope.json` gets **no** `browsers` key. Ignore the D11 parts of section 4.7 and WP10. |
+| D12 | Yes | As recommended. |
+| D13 | **Changed: longer** | `IDLE_END_SEC = 4 * 3600` (was 2 h) and `RESUME_WINDOW_SEC = 12 * 3600` (was 4 h) in `core/sgt/sgt_shadow.py`, so one client survives a whole workday of pauses. The router's `_SESSION_IDLE_TIMEOUT_SEC` in `core/vsdc/vsdc_router.py` must be at least `IDLE_END_SEC` (set it to 4 h too), so the router never ends a session before SGT would. WP9 makes this change, and its tests use these values. WP9's STOP question becomes "parked identity on disk for up to 12 h". |
+| D14 | Ignored | Out of scope, as recommended (the health check reports `specs-silent`). |
+| D15 | Yes | Use Opus for WP3, WP4, WP5 and WP10. |
+
+**Watch out for clashing ids:** the decision ids D1-D15 in these tables are not the navigation
+scenario ids D1-D15 in section 11 and the report's section 5D. For example, "D13 (address bar
+typed)" in WP6 is the scenario, not this decision.
 
 ---
 
