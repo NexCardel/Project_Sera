@@ -1,5 +1,5 @@
 WP,Phase,What,Status,Model,Attempts,Commit,Notes,Updated
-WB,0,Baseline: the test suite before any change,Not started,claude-haiku-5-5,0,,,
+WB,0,Baseline: the test suite before any change,Done,claude-haiku-5-5,1,bd0570a,"Baseline: T=3078 F=2 S=1; failing: test_class_diff_render::test_output_paths_never_recorder_or_tracked_folders, test_sdis_tables::test_command_line_prints_no_values",2026-10-14 14:24
 WP0,0,Probe pack: the Windows measurements tool,Not started,claude-sonnet-5-5,0,,,
 WP1,1,"Capture health: states, HUD event, phone alert, log",Not started,claude-sonnet-5-5,0,,,
 WP2,1,Rows never lost: database retry and dead letter,Not started,claude-sonnet-5-5,0,,,
