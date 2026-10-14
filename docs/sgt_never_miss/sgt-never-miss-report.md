@@ -1,16 +1,16 @@
-# SGT never-miss — report (2026-10-14 17:51)
+# SGT never-miss — report (2026-10-14 18:08)
 
 Deadline: 2026-10-17T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 5 |
+| Not started | 4 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 12 |
+| Done | 13 |
 | Blocked | 0 |
 
-Runs: 16   output tokens: 737943   API-equivalent cost: $53.50
+Runs: 17   output tokens: 789188   API-equivalent cost: $58.21
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -26,7 +26,7 @@ Runs: 16   output tokens: 737943   API-equivalent cost: $53.50
 | WP8 | Done | sonnet | 6a5885f | Blind pages on every portal | Per-day ocr_only_rows in SpecStats + health row hook; GST plan note; blind-page switch already done by WP5/WP7. 1259 passed. |
 | WP9 | Done | sonnet | d79a413 | Identity persistence | 4 h idle, 12 h parked identity on disk, resume by client, window_idle/window_gone, monotonic idle clock; narrow run green; owner check 17 |
 | WP10 | Done | opus | 8d62ece | Visible windows that are not in front | Visible windows not in front watched every 1 s (cap 3, front first, covered by union left out); C8/profile 3 background success green; 1296 passed; owner checks |
-| WP11 | Not started | sonnet |  | Recovery: the latest filing on list and status pages |  |
+| WP11 | Done | sonnet | f9135b1 | Recovery: the latest filing on list and status pages | Rows born on a list page are marked recovered; GST Track Return Status and ITR history specs ship disabled; owner check 20 asks for the labels. |
 | WP12 | Not started | sonnet |  | Fleet health view and the mandatory update path |  |
 | WP13 | Not started | sonnet |  | Live soak tool and pass/fail |  |
 | WP14 | Not started | haiku |  | Scenario sweep and documentation |  |
@@ -48,6 +48,8 @@ Runs: 16   output tokens: 737943   API-equivalent cost: $53.50
 - **WP10** What counts as a covered background window? → Its rectangle (DWM frame bounds) is fully hidden by the union of shown windows above it in z-order (rect subtraction, 2 px slack); click-through and tool windows hide nothing; minimised, cloaked (other virtual desktop), hung and off-monitor windows are never watched behind (4.7 only named the foreground's rectangle; a browser behind two side-by-side programs, or behind a maximised program that is not in front, is just as covered (Chromium builds no tree) and would read blind and raise false health alerts; IsHungAppWindow keeps PrintWindow off a hung browser)
 - **WP10** Which background windows get the MAX_WATCHED_WINDOWS slots? → Window in front first, then background windows titled like a portal (router PORTAL_KEYWORDS), then the rest by z-order (with more than 2 visible browser windows a news or PiP window must not take a lane slot from a portal window; uses the router's existing quick gate, no new portal rule)
 - **WP10** How do background windows feed health and the unlisted-portal tripwire? → Health counts a background window in scope only on a fresh Document URL, never raises scope-lost for it, and each absorbed read names its window (HealthMonitor.reading); the tripwire looks only at the window in front; heartbeat front/page fields stay the front window's, plus bg=<count> (WP10 rule: blind only if its Document URL is in scope and not covered; read_result had no window and would land on whichever window was looked at last; the tripwire probes UI names of an unlisted page, so its reach is not widened)
+- **WP11** Where is a list-page row marked recovered? → In _merge: any slot born from a start-card record (Fix the kind: the same rule serves ITR cards, e-Verify picker and GST lists; a later whole-page UIA read keeps first_seen_as)
+- **WP11** Ship the GST Track Return Status spec enabled with guessed labels? → No: shipped disabled, goldens enable it by overlay (Labels are guesses until the owner pastes corpus lines; a wrong label would only miss, but unverified specs stay off)
 
 ## Checks waiting for you
 
@@ -70,3 +72,4 @@ Runs: 16   output tokens: 737943   API-equivalent cost: $53.50
 - #17 (WP9) Parked client identity (a PAN or GSTIN plus the draft in progress) is now kept on disk in sessions_state.json for up to 12 h so a restart or a new window can resume it. Default taken: yes, acceptable. Please confirm. — Not run
 - #18 (WP10) D6 STOP: run Sera with SGT on for a full office day with two browser windows visible (second monitor or side by side). Task Manager: Sera's CPU stays under ~5% average with both visible (compare with one window); vsdc.log heartbeat shows bg=1 or 2 and uia lanes <= 3, uia_late stays 0 and no health state=blind for a window you were not looking at. Pass = all of that; if CPU is too high, the fix is BG_TICK_SEC (core/vsdc/vsdc_windows.py), not turning D6 off. — Not run
 - #19 (WP10) Second-monitor filing: file one real return (GST or ITR) in a browser window on the second monitor while working in another program (Excel/Tally) in front on the first monitor, and leave the success page there. Pass = the tracker row (with ARN/ack) appears within ~10 s without ever clicking the browser. Then repeat with the browser maximised BEHIND a maximised Excel on the same monitor: no row is expected there (covered windows are not watched) and health must not say blind. — Not run
+- #20 (WP11) OWNER, when you have a minute: run 'venv/Scripts/python.exe tools/sgt_replay.py show', open a corpus day that has a GST Track Return Status page (and, only if itr_dataset_cards cannot read it, an Income Tax View Filed Returns page), and paste ONE card's label lines (write <value> for values, no names/PAN/GSTIN/ARN) into docs/sgt-recovery-spec-notes.md under the matching heading. Then replace the guessed labels in gst_track_return_status (core/sgt/sgt_fields.json), delete its disabled line, and run 'venv/Scripts/python.exe tools/sgt_replay.py diff'. Pass = the diff adds only recovered rows under the right client with an ARN that was on the page, changes no existing row, and tests/test_sgt_replay.py stays green. — Not run
