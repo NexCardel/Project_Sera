@@ -40,7 +40,9 @@ SCOPE_LOST_SEC = 30.0           # a portal-titled window with no readable addres
 NO_PORTAL_SEC = 600.0           # no in-scope window for this long: informational "no-portal"
 DISK_HOLD_SEC = 600.0
 UNLISTED_HOLD_SEC = 600.0       # the tripwire fires once per host; the state is shown this long
-HEALTH_WRITE_SEC = 60.0
+HEALTH_WRITE_SEC = 60.0         # the local vsdc.log health line
+SYNC_MIN_DEFAULT = 15           # minutes between shared records (app setting capture_health_sync_min)
+SYNC_MIN_RANGE = (1, 60)
 HUD_REPEAT_SEC = 300.0          # a persisting failure is shown again at most this often (constraint 7)
 HUD_MIN_GAP_SEC = 60.0          # the same state re-entered (flapping) is shown at most this often
 PHONE_REPEAT_SEC = 1800.0
@@ -90,6 +92,9 @@ class CaptureHealth:
     alerts_configured: bool = False
     scope_extras: int = 0
     spec_override: str = ""     # sha1[:8] of the override file or ""
+    blind_sec_yesterday: int = 0
+    stalled_sec_yesterday: int = 0
+    sync_min: int = SYNC_MIN_DEFAULT    # how often this PC shares its record, so a reader knows when it is stale
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), separators=(",", ":"))
@@ -118,7 +123,8 @@ class HealthMonitor:
                  device: Optional[str] = None,
                  version: Optional[str] = None) -> None:
         """hud(title, subtitle) and phone(device, state, detail) are optional callables; write(record)
-        is set by main.py (WP12), None until then."""
+        is set by main.py (set_writer); it gets a record on every state change and every sync_min
+        minutes (set_sync_minutes), while the local log line stays once a minute."""
         self._clock, self._hud, self._phone, self._alerts_enabled = clock, hud, phone, alerts_enabled
         self._write, self._log, self._wall = write, log, wall
         self._device = device
@@ -151,8 +157,13 @@ class HealthMonitor:
                         "unattributed_rows": 0, "rows_sent": 0, "rows_dead_letter": 0}
         self.blind_sec_today = 0.0
         self.stalled_sec_today = 0.0
+        self.blind_sec_yesterday = 0.0       # the totals of the day before the last midnight this run saw
+        self.stalled_sec_yesterday = 0.0
         self._last_write = t
         self._changed = False
+        self._sync_min = SYNC_MIN_DEFAULT
+        self._last_sync: Optional[float] = None    # None: nothing shared yet, so the first write is shared
+        self._sync_changed = False
 
     # ── facts in ───────────────────────────────────────────────────────────────
     def window(self, hwnd: int, scope_ok: bool, portal: str = "", titled_portal: bool = False,
@@ -280,6 +291,23 @@ class HealthMonitor:
     def set_pending_update(self, version: str) -> None:
         self._pending_update = str(version or "")
 
+    def set_writer(self, write: Optional[Callable[[CaptureHealth], None]]) -> None:
+        self._write = write
+
+    def set_sync_minutes(self, minutes: Any) -> None:
+        """The sharing interval; anything unreadable falls back to the default, then is clamped."""
+        try:
+            n = int(minutes)
+        except (TypeError, ValueError):
+            n = SYNC_MIN_DEFAULT
+        self._sync_min = max(SYNC_MIN_RANGE[0], min(SYNC_MIN_RANGE[1], n))
+
+    def sync_due(self) -> bool:
+        """True when the next write should also be shared: the first one, a state change since the
+        last shared record, or sync_min minutes since it."""
+        return (self._last_sync is None or self._sync_changed
+                or self._clock() - self._last_sync >= self._sync_min * 60.0)
+
     # ── the state machine ──────────────────────────────────────────────────────
     def _holds(self, name: str, now: float) -> bool:
         if name == "stalled":
@@ -328,6 +356,7 @@ class HealthMonitor:
         day = self._wall().date()
         if day != self._day:
             self._day = day
+            self.blind_sec_yesterday, self.stalled_sec_yesterday = self.blind_sec_today, self.stalled_sec_today
             self.blind_sec_today = self.stalled_sec_today = 0.0
         if self.state == "blind":
             self.blind_sec_today += dt
@@ -337,7 +366,7 @@ class HealthMonitor:
         new = next(s for s in _PRIORITY if self._holds(s, now))
         if new != self.state:
             old, self.state, self.since = self.state, new, self._iso()
-            self._changed = True
+            self._changed = self._sync_changed = True
             self._log(f"health state={new} (was {old}) {self._detail(new)}".rstrip())
             if new in FAILURE_STATES:
                 self._raise(new, now, entering=True)
@@ -411,22 +440,29 @@ class HealthMonitor:
                 unattributed_rows=c["unattributed_rows"], rows_sent=c["rows_sent"],
                 rows_dead_letter=c["rows_dead_letter"],
                 blind_sec_today=int(self.blind_sec_today), stalled_sec_today=int(self.stalled_sec_today),
+                blind_sec_yesterday=int(self.blind_sec_yesterday),
+                stalled_sec_yesterday=int(self.stalled_sec_yesterday),
                 pending_update=self._pending_update,
-                alerts_configured=bool(self._alerts_enabled and self._alerts_enabled()))
+                alerts_configured=bool(self._alerts_enabled and self._alerts_enabled()),
+                sync_min=self._sync_min)
             for k, v in (extra or {}).items():
                 if hasattr(rec, k):
                     setattr(rec, k, v)
             return rec
 
     def write(self, extra: Optional[Dict[str, Any]] = None) -> CaptureHealth:
-        """Builds the record, hands it to the `write` callable (WP12: the settings key) and logs one
-        `health ...` line. Returns the record."""
+        """Builds the record, hands it to the `write` callable when a share is due (sync_due) and
+        logs one `health ...` line. Returns the record."""
         rec = self.record(extra)
         try:
             with self._lock:
-                self._last_write = self._clock()
+                now = self._clock()
+                share = self._write is not None and self.sync_due()
+                self._last_write = now
                 self._changed = False
-            if self._write is not None:
+                if share:
+                    self._last_sync, self._sync_changed = now, False
+            if share:
                 self._write(rec)
             self._log("health " + vsdc_diag._fmt({
                 "state": rec.state, "since": rec.since[11:], "reads": rec.reads, "blind": rec.blind,

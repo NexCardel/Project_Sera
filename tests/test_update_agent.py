@@ -33,9 +33,12 @@ class TestUpdateAgent(unittest.TestCase):
         self.addCleanup(p.stop)
         self.addCleanup(self._tmp.cleanup)
 
-    def _stage(self, ver, hours_ago=0.0, bom=True):
+    def _stage(self, ver, hours_ago=0.0, bom=True, mandatory=None):
         staged = (datetime.now().astimezone() - timedelta(hours=hours_ago)).isoformat()
-        text = json.dumps({"version": ver, "staged_at": staged})
+        data = {"version": ver, "staged_at": staged}
+        if mandatory is not None:
+            data["mandatory"] = mandatory
+        text = json.dumps(data)
         # PowerShell 5.1's Set-Content -Encoding UTF8 writes a BOM.
         (self.state / "pending.json").write_text(text, encoding="utf-8-sig" if bom else "utf-8")
 
@@ -81,6 +84,43 @@ class TestUpdateAgent(unittest.TestCase):
             update_agent.record_close(self.app_dir, _newer())
         with self._idle(9999):
             self.assertIsNone(update_agent.should_close_now(self.app_dir, captures_busy=False))
+
+    def test_mandatory_update_closes_at_30s_idle(self):
+        self._stage(_newer(), mandatory=True)
+        with self._idle(update_agent.LONG_WAIT_IDLE_SECONDS):
+            self.assertEqual(update_agent.should_close_now(self.app_dir, captures_busy=False), _newer())
+        with self._idle(update_agent.LONG_WAIT_IDLE_SECONDS - 1):
+            self.assertIsNone(update_agent.should_close_now(self.app_dir, captures_busy=False))
+
+    def test_a_normal_update_still_needs_the_long_idle(self):
+        for flag in (None, False, "true"):
+            self._stage(_newer(), mandatory=flag)
+            with self._idle(update_agent.LONG_WAIT_IDLE_SECONDS):
+                self.assertIsNone(update_agent.should_close_now(self.app_dir, captures_busy=False))
+            self.assertFalse(update_agent.is_mandatory(update_agent.pending_update()))
+
+    def test_never_closes_with_a_session_open_or_rows_queued(self):
+        self._stage(_newer(), mandatory=True)
+        with self._idle(9999):
+            self.assertIsNone(update_agent.should_close_now(self.app_dir, captures_busy=True))
+            self.assertIsNone(update_agent.should_close_now(self.app_dir, captures_busy=False, sessions_open=True))
+            self.assertEqual(update_agent.should_close_now(self.app_dir, captures_busy=False, sessions_open=False),
+                             _newer())
+
+    def test_mandatory_update_keeps_the_daily_close_limit(self):
+        self._stage(_newer(), mandatory=True)
+        for _ in range(update_agent.MAX_CLOSES_PER_DAY):
+            update_agent.record_close(self.app_dir, _newer())
+        with self._idle(9999):
+            self.assertIsNone(update_agent.should_close_now(self.app_dir, captures_busy=False))
+
+    def test_hud_update_ready_once_per_version(self):
+        seen = set()
+        self.assertTrue(update_agent.should_announce(seen, "9.9.1"))
+        self.assertFalse(update_agent.should_announce(seen, "9.9.1"))
+        self.assertTrue(update_agent.should_announce(seen, "9.9.2"))
+        self.assertFalse(update_agent.should_announce(seen, ""))
+        self.assertFalse(update_agent.should_announce(seen, None))
 
     def test_install_in_progress(self):
         self.assertFalse(update_agent.install_in_progress())

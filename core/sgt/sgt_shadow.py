@@ -103,7 +103,8 @@ HUD_TAGS = {MODE_SHADOW: "SGT (Shadow)", MODE_LIVE: "SGT (Live)"}
 CAPTURE_METHODS = {MODE_SHADOW: "SGT_shadow", MODE_LIVE: "SGT_live"}
 HUD_TAG = HUD_TAGS[MODE_SHADOW]
 CAPTURE_METHOD = CAPTURE_METHODS[MODE_SHADOW]
-IDLE_END_SEC = 4 * 3600         # owner D13: one client survives a whole workday of pauses
+SESSION_QUIET_SEC = 600.0       # a session with content touched this recently holds back a mandatory update
+IDLE_END_SEC = 4 * 3600        # owner D13: one client survives a whole workday of pauses
 IDLE_REASON = "idle 4 hr"
 CLIENT_LINK_SPEC = "client_db:user_id"       # the "spec" of a PAN / GSTIN taken from the saved client that owns the portal user ID
 IDENTITY_PROBLEM = "form and period are not known yet"      # why an ack-only row waits (see _queue)
@@ -349,6 +350,7 @@ class SgtShadow:
         self._state_dirty = False           # a change the 2 s throttle held back from the snapshot
         self._log_checked: Set[str] = set() # log files already checked for a torn last line
         self._checked_day: Optional[date] = None
+        self._digest: Optional[Callable[[date], Optional[Dict[str, Any]]]] = None
         # HUD pill: (event_type, title, subtitle, context). Only real captures reach it - a
         # client identified, a dataset found or promoted, a session with something in it
         # ending - never page reads or half-built datasets, so the pill stays quiet otherwise.
@@ -554,6 +556,15 @@ class SgtShadow:
 
     def _all_sessions(self) -> List[_Session]:
         return list(self._sessions.values()) + [x for lst in self._shelf.values() for x in lst]
+
+    def sessions_open(self) -> bool:
+        """True while some session with content was touched in the last SESSION_QUIET_SEC: an update
+        restart now could cut a client's work in two."""
+        try:
+            now = self._clock()
+            return any(s.has_content and now - s.last_seen < SESSION_QUIET_SEC for s in self._all_sessions())
+        except Exception:
+            return True
 
     def _shelve(self, hwnd: int, s: _Session) -> None:
         """Sets the window's session in view aside. An empty one has nothing to keep."""
@@ -2300,13 +2311,39 @@ class SgtShadow:
         return n
 
     # ── Portal-change watch ──────────────────────────────────────────────────────
-    def _daily_health_check(self) -> None:
-        if self._stats is None:
+    def set_digest(self, digest: Optional[Callable[[date], Optional[Dict[str, Any]]]]) -> None:
+        """digest(today) -> {"title", "subtitle", "counts"} when a daily capture digest was made, else
+        None (not the admin PC, or already made today). main.py sets it; the text of the digest is
+        kept by the digest itself, only counts reach the log."""
+        self._digest = digest
+
+    def _daily_digest(self, today: date) -> None:
+        if self._digest is None:
             return
+        try:
+            made = self._digest(today)
+        except Exception as ex:
+            self._echo(f"[SGT] {self._tag} the daily digest failed: {type(ex).__name__}")
+            return
+        if not made:
+            return
+        self._log({"event": "digest", **(made.get("counts") or {})})
+        if self._notify is not None:
+            try:
+                self._notify("prompt", made.get("title") or "Capture digest ready", made.get("subtitle") or "", {})
+            except Exception:
+                pass
+
+    def _daily_health_check(self) -> None:
         today = self._today()
         if self._checked_day == today:
             return
+        if self._stats is None and self._digest is None:
+            return
         self._checked_day = today
+        self._daily_digest(today)
+        if self._stats is None:
+            return
         for alert in self._stats.alerts(today):
             self._echo(f"[SGT] portal-change watch: {alert['detail']}")
             self._log({"event": "health", **alert})

@@ -238,6 +238,7 @@ class SeraApp:
         self._pending_update_installer = None
         self._pending_update_info = None
         self._update_applied = False
+        self._update_announced = set()      # staged versions already shown on the HUD (once each)
         self._capture_ui_refresh_pending = False
         self._capture_queue = queue.Queue()
         from core import capture_outbox
@@ -721,6 +722,8 @@ class SeraApp:
             from core.sgt.sgt_client_link import ClientLink
             self.vsdc_worker.router.set_client_lookup(ClientLink(self.db))   # portal user ID -> saved client
             self.vsdc_worker.router.on_demotion = self.sync_bridge.sgt_demotion_signal.emit
+            self.vsdc_worker.router.health.set_writer(self._share_capture_health)
+            self.vsdc_worker.router.set_digest(self._make_capture_digest())
             from core.scc import manual as scc_manual
             scc_manual.set_opener(self._open_scc_manual)
             self._apply_vsdc_engine_settings()
@@ -839,13 +842,15 @@ class SeraApp:
 
     def _capture_worker_loop(self):
         """Serially process incoming captures without blocking the Qt thread."""
-        from core import capture_outbox
+        from core import capture_outbox, fleet_health
         emit = self.sync_bridge.capture_processed_signal.emit
         while True:
             msg = self._capture_queue.get()
             try:
                 if msg is capture_outbox.REPLAY:
                     self._outbox.replay(on_result=emit)
+                elif isinstance(msg, fleet_health.HealthWrite):
+                    self._write_health_record(msg)
                 else:
                     result = self._outbox.handle(msg, on_result=emit)
                     if result:
@@ -854,6 +859,40 @@ class SeraApp:
                 print(f"[Capture Worker Error] {type(e).__name__}")
             finally:
                 self._capture_queue.task_done()
+
+    def _share_capture_health(self, rec):
+        """HealthMonitor's writer, called on the capture thread: the record goes into the capture queue
+        as its own item, so the database is only ever written from the worker thread."""
+        from core import fleet_health
+        from sync_identity import load_device_id_cheap
+        device_id = load_device_id_cheap(APP_DIR) or rec.device
+        self._capture_queue.put(fleet_health.HealthWrite(fleet_health.key_for(device_id), rec.to_json()))
+
+    def _write_health_record(self, item):
+        """Saves a shared health record. It is replaced by the next one, so a locked database (sync
+        applying a snapshot) is retried briefly and then dropped, never dead-lettered."""
+        import time as _time
+        for attempt in range(3):
+            try:
+                self.db.set_setting(item.key, item.value)
+                return
+            except Exception:
+                if attempt < 2:
+                    _time.sleep(1.0)
+
+    def _make_capture_digest(self):
+        """The daily capture digest SGT runs on its first tick of the day (core/sgt/sgt_digest.py)."""
+        from core.sgt import sgt_digest
+
+        def is_admin():
+            import sync_admin
+            return sync_admin.is_admin_pc(APP_DIR)
+
+        def unverified():
+            containers = self.db.get_srpf_containers(limit=1_000_000, slim=True)
+            return sgt_digest.count_old_unverified(containers)
+
+        return sgt_digest.DailyDigest(self.db.get_all_settings, self.db.set_setting, is_admin, unverified)
 
     def _queue_outbox_replay(self):
         from core import capture_outbox
@@ -1791,6 +1830,8 @@ class SeraApp:
             worker = getattr(self, "vsdc_worker", None)
             if worker is None:
                 return
+            from core.fleet_health import read_sync_min
+            worker.router.health.set_sync_minutes(read_sync_min(self.db.get_setting))
             vsdc, vsdc_x, vsdc247 = read_engine_flags(self.db.get_setting)
             sgt = read_sgt_mode(self.db.get_setting)
             worker.router.apply_engine_settings(vsdc, vsdc_x, vsdc247, sgt=sgt,
@@ -2036,7 +2077,15 @@ class SeraApp:
         from core import update_agent
         if self._update_applied:
             return
-        ver = update_agent.should_close_now(APP_DIR, captures_busy=bool(self._capture_queue.unfinished_tasks))
+        router = getattr(getattr(self, "vsdc_worker", None), "router", None)
+        staged = update_agent.pending_version()
+        if router is not None:
+            router.health.set_pending_update(staged or "")
+        if update_agent.should_announce(self._update_announced, staged) and getattr(self, "vsdc_hud", None):
+            self.vsdc_hud.show_event("prompt", f"Update v{staged} ready", "Sera restarts itself when idle",
+                                     duration_ms=4000)
+        ver = update_agent.should_close_now(APP_DIR, captures_busy=bool(self._capture_queue.unfinished_tasks),
+                                            sessions_open=bool(router is not None and router.sessions_open()))
         if not ver:
             return
         print(f"[AutoUpdater] Closing for the staged v{ver} update (PC idle); it reopens after the install.")
@@ -2058,7 +2107,7 @@ class SeraApp:
             return
         # Still busy (a locked database): the row in flight and the rows behind it go to the dead
         # letter, which the next start replays, instead of being lost with the daemon thread.
-        from core import capture_outbox
+        from core import capture_outbox, fleet_health
         queued = []
         while True:
             try:
@@ -2066,7 +2115,7 @@ class SeraApp:
             except queue.Empty:
                 break
             q.task_done()
-            if item is not capture_outbox.REPLAY:
+            if item is not capture_outbox.REPLAY and not isinstance(item, fleet_health.HealthWrite):
                 queued.append(item)
         outbox.stop_and_flush(queued)
 

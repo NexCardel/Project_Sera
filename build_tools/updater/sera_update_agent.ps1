@@ -170,7 +170,8 @@ try {
             if ($prev.version -eq $target -and $prev.staged_at) { $stagedAt = [string]$prev.staged_at }
         } catch { }
     }
-    Write-Json $PendingPath @{ version = $target; staged_at = $stagedAt }
+    # mandatory (version.json): the app closes at the first quiet 30 s, never with a session open
+    Write-Json $PendingPath @{ version = $target; staged_at = $stagedAt; mandatory = ($feed.mandatory -eq $true) }
 
     # The app closes itself when idle once it sees pending.json; wait for that.
     $deadline = (Get-Date).AddMinutes($WaitMinutes)

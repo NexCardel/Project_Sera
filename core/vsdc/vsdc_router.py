@@ -482,6 +482,17 @@ class VSDCRouter:
         if self._sgt is not None:
             self._sgt.set_client_lookup(lookup)
 
+    def set_digest(self, digest) -> None:
+        """digest(today) -> the daily capture digest, run by SGT's first tick of each day (WP12)."""
+        self._digest = digest
+        if self._sgt is not None:
+            self._sgt.set_digest(digest)
+
+    def sessions_open(self) -> bool:
+        """SGT has a session with content touched in the last few minutes (holds back a mandatory
+        update restart). False when SGT never started."""
+        return self._sgt is not None and self._sgt.sessions_open()
+
     def set_scc_handlers(self, factory) -> None:
         """factory() -> the handlers to register on SCC-U's host when it is created (once per run)."""
         self._scc_handlers = factory
@@ -525,6 +536,7 @@ class VSDCRouter:
                                   resolve_client=getattr(self, "_client_lookup", None),
                                   on_read=self.health.read_result, on_hits=self.health.hits,
                                   on_ocr_row=lambda: self.health.row("ocr_only"))
+            self._sgt.set_digest(getattr(self, "_digest", None))
             self._apply_sgt_i()
             self._apply_scc()
 

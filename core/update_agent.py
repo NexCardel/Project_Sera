@@ -9,8 +9,9 @@ Amas_Sera.exe is not running. This module lets the app take part:
   needs a UAC prompt) stays off.
 - pending_version(): the staged version, if newer than this build.
 - should_close_now(): the app closes itself for the update when nobody is using the PC (no input
-  for 3 minutes), or after the update has waited 8 hours, as soon as input pauses for 30 s.
-  At most twice a day per version, so a failing install cannot keep closing the app.
+  for 3 minutes), or after the update has waited 8 hours, as soon as input pauses for 30 s. A
+  mandatory update (version.json "mandatory": true) takes the 30 s path at once, but never while
+  SGT has a session with content open. At most twice a day per version, so a failing install cannot keep closing the app.
 - start_relauncher(): hidden helper in the user's session that starts the agent task, waits for
   the install, then reopens the app (the old version too, if the install failed).
 - install_in_progress(): checked first thing at start-up. The app must not hold its own files
@@ -108,15 +109,34 @@ def record_close(app_dir: Path, ver: str) -> None:
         pass
 
 
-def should_close_now(app_dir: Path, captures_busy: bool) -> Optional[str]:
-    """The pending version if the app should close itself for it now, else None."""
+def should_announce(announced: set, version: Optional[str]) -> bool:
+    """True the first time a staged version is seen (one HUD event per version); `announced` is the
+    caller's memory."""
+    if not version or version in announced:
+        return False
+    announced.add(version)
+    return True
+
+
+def is_mandatory(data: Optional[dict]) -> bool:
+    """pending.json carries `mandatory: true` (copied from version.json by the agent)."""
+    return bool(data) and data.get("mandatory") is True
+
+
+def should_close_now(app_dir: Path, captures_busy: bool, sessions_open: bool = False) -> Optional[str]:
+    """The pending version if the app should close itself for it now, else None. A mandatory update
+    needs only 30 s of idle at once, but never while a session with content is open."""
     data = pending_update()
     if not data or captures_busy:
         return None
     ver = str(data["version"])
     if _closes_today(app_dir, ver) >= MAX_CLOSES_PER_DAY:
         return None
-    idle_needed = LONG_WAIT_IDLE_SECONDS if _staged_hours(data) >= LONG_WAIT_HOURS else IDLE_SECONDS
+    mandatory = is_mandatory(data)
+    if mandatory and sessions_open:
+        return None
+    idle_needed = (LONG_WAIT_IDLE_SECONDS if mandatory or _staged_hours(data) >= LONG_WAIT_HOURS
+                   else IDLE_SECONDS)
     return ver if seconds_since_input() >= idle_needed else None
 
 

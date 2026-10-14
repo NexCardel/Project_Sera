@@ -1192,6 +1192,8 @@ class UnifiedSettingsDialog(QDialog):
             "Accept writes one to this PC's local override file; Reject only remembers your choice.",
             lab_btn))
 
+        self._build_health_panel(lay)
+
         lay.addWidget(_sub_header("ARN fixer"))
         self.arn_autofix_check = QCheckBox()
         lay.addWidget(_setting_row("Run the ARN fixer automatically when Sera starts",
@@ -1213,9 +1215,87 @@ class UnifiedSettingsDialog(QDialog):
         self.sdis_record_check.toggled.connect(self._on_control_changed)
         self.sgt_i_combo.currentIndexChanged.connect(self._on_control_changed)
         self.arn_autofix_check.toggled.connect(self._on_control_changed)
+        self.health_sync_spin.valueChanged.connect(self._on_control_changed)
 
         lay.addStretch()
         return _wrap_scroll(w)
+
+    def _build_health_panel(self, lay: QVBoxLayout) -> None:
+        from core.vsdc.vsdc_health import SYNC_MIN_RANGE
+        lay.addWidget(_sub_header("Capture health"))
+        self.health_sync_spin = QSpinBox()
+        self.health_sync_spin.setRange(*SYNC_MIN_RANGE)
+        self.health_sync_spin.setSuffix(" min")
+        self.health_sync_spin.setFixedWidth(90)
+        lay.addWidget(_setting_row("Share this PC's capture health every",
+            "Every PC shares a short note on whether capture is working (state, build, counts; never client "
+            "details) so the table below shows the whole office. A change of state is shared at once; "
+            "otherwise at this interval. Applies when you save.", self.health_sync_spin))
+
+        box = QWidget()
+        box.setStyleSheet("background: transparent;")
+        v = QVBoxLayout(box)
+        v.setContentsMargins(28, 10, 28, 10)
+        v.setSpacing(8)
+        self.health_table = QTableWidget(0, 7)
+        self.health_table.setHorizontalHeaderLabels(
+            ["PC", "Build", "State", "Since", "Last record", "Blind / stalled today", "Rows"])
+        self.health_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.health_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.health_table.verticalHeader().setVisible(False)
+        self.health_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.health_table.setMinimumHeight(170)
+        v.addWidget(self.health_table)
+        buttons = QHBoxLayout()
+        refresh = QPushButton("Refresh")
+        refresh.clicked.connect(self._refresh_health_panel)
+        copy = QPushButton("Copy report")
+        copy.clicked.connect(self._copy_health_report)
+        buttons.addWidget(refresh)
+        buttons.addWidget(copy)
+        buttons.addStretch()
+        v.addLayout(buttons)
+        digest_title = QLabel("Yesterday's digest")
+        digest_title.setStyleSheet(f"font-size: 12px; font-weight: 600; color: {_TEXT_PRI};")
+        v.addWidget(digest_title)
+        self.health_digest_label = QLabel("")
+        self.health_digest_label.setWordWrap(True)
+        self.health_digest_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.health_digest_label.setStyleSheet(f"font-size: 11.5px; color: {_TEXT_SEC};")
+        v.addWidget(self.health_digest_label)
+        lay.addWidget(box)
+        self._health_rows = []
+
+    def _refresh_health_panel(self, *args, snapshot: "dict | None" = None) -> None:
+        from datetime import datetime
+        from core import fleet_health
+        from core.sgt.sgt_digest import TEXT_KEY
+        try:
+            if snapshot is None:
+                snapshot = self.db.get_all_settings()
+            rows = fleet_health.read_fleet(snapshot, datetime.now())
+        except Exception:
+            rows = []
+            snapshot = snapshot or {}
+        self._health_rows = rows
+        colours = {fleet_health.OK: _ACCENT_LIGHT, fleet_health.WARN: "#E0A030",
+                   fleet_health.ALERT: _DANGER, fleet_health.OFF: _TEXT_SEC}
+        self.health_table.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            cells = [r.device, r.version or "?", f"{r.state} ({r.note})", r.since[11:16] or "?",
+                     fleet_health.age_text(r.age_min), f"{r.blind_min} / {r.stalled_min} min", str(r.rows_sent)]
+            for j, text in enumerate(cells):
+                item = QTableWidgetItem(text)
+                if j == 2:
+                    item.setForeground(QColor(colours.get(r.level, _TEXT_PRI)))
+                self.health_table.setItem(i, j, item)
+        self.health_digest_label.setText(
+            snapshot.get(TEXT_KEY) or "No digest yet. The admin PC makes one on its first capture tick of each day.")
+
+    def _copy_health_report(self) -> None:
+        from PySide6.QtWidgets import QApplication
+        from core import fleet_health
+        QApplication.clipboard().setText(fleet_health.report_text(self._health_rows))
 
     def _build_page_screentime(self) -> QWidget:
         w = QWidget()
@@ -1439,6 +1519,7 @@ class UnifiedSettingsDialog(QDialog):
             state["sdis_record"] = self.sdis_record_check.isChecked()
             state["sgt_i_mode"] = self.sgt_i_combo.currentData()
             state["arn_autofix_enabled"] = self.arn_autofix_check.isChecked()
+            state["health_sync_min"] = self.health_sync_spin.value()
         state["vis"] = {cid: cb.isChecked() for cid, cb in self.vis_cbs.items()}
         state["qc"] = {cid: cb.isChecked() for cid, cb in self.qc_cbs.items()}
         state["admin_vis"] = {cid: cb.isChecked() for cid, cb in self.admin_vis_cbs.items()}
@@ -1557,6 +1638,9 @@ class UnifiedSettingsDialog(QDialog):
             self.sdis_record_check.setChecked(g("sdis_record", "1") == "1")
             _set(self.sgt_i_combo, g("sgt_i_mode", "off"))
             self.arn_autofix_check.setChecked(g("arn_autofix_enabled", "1") != "0")
+            from core.fleet_health import read_sync_min
+            self.health_sync_spin.setValue(read_sync_min(g))
+            self._refresh_health_panel(snapshot=snapshot)
 
     #── Save settings ─────────────────────────────────────────────────────────
     def _on_save_settings(self):
@@ -1637,6 +1721,7 @@ class UnifiedSettingsDialog(QDialog):
                 bulk_settings["sdis_record"] = b(self.sdis_record_check)
                 bulk_settings["sgt_i_mode"] = self.sgt_i_combo.currentData() or "off"
                 bulk_settings["arn_autofix_enabled"] = b(self.arn_autofix_check)
+                bulk_settings["capture_health_sync_min"] = str(self.health_sync_spin.value())
 
             if hasattr(self.db, "set_settings_bulk"):
                 self.db.set_settings_bulk(bulk_settings)
