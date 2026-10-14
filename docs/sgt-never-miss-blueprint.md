@@ -1368,6 +1368,13 @@ Every WP agent follows this table. Where it differs from the text elsewhere in t
 | D14 | Ignored | Out of scope, as recommended (the health check reports `specs-silent`). |
 | D15 | Yes | Use Opus for WP3, WP4, WP5 and WP10. |
 
+**How the WPs are run (owner, 2026-10-14):** by `tools/sgt_never_miss.py` (tracker and dispatcher,
+files in `docs/sgt_never_miss/`), one fresh CLI session per WP, **on `main` in the APP folder, with
+no separate worktree or branch**. Section 9's "branch and process as `docs/sgt-overhaul-runner.md`"
+means `docs/sgt_never_miss/sgt-never-miss-runner.md` instead. Owner STOPs are recorded as checks and
+the run carries on with the blueprint's defaults. The restore point from before the first WP is the
+git tag `restore-point/pre-sgt-never-miss`. Hand-off notes go in section 14.
+
 **Watch out for clashing ids:** the decision ids D1-D15 in these tables are not the navigation
 scenario ids D1-D15 in section 11 and the report's section 5D. For example, "D13 (address bar
 typed)" in WP6 is the scenario, not this decision.
@@ -1506,3 +1513,9 @@ The spec file and its loader, the resolver's rules, the submit ladder, dataset r
 the tracker merge rules, Sera Sync, the HUD pill's look, the SDIS and SGT-I contracts (they only
 receive the Core's nodes instead of reading their own), the crosshair engines (off, untouched),
 the scope allow-list, the privacy rules of the logs, and the process in constraint 12.
+
+---
+
+## 14. Hand-off notes
+
+(written by each WP)
