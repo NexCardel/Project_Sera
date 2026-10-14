@@ -1,16 +1,16 @@
-# SGT never-miss — report (2026-10-14 17:02)
+# SGT never-miss — report (2026-10-14 17:17)
 
 Deadline: 2026-10-17T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 9 |
+| Not started | 8 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 8 |
+| Done | 9 |
 | Blocked | 0 |
 
-Runs: 12   output tokens: 561540   API-equivalent cost: $39.30
+Runs: 13   output tokens: 626002   API-equivalent cost: $44.02
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -22,7 +22,7 @@ Runs: 12   output tokens: 561540   API-equivalent cost: $39.30
 | WP4 | Done | opus | a055055 | CaptureLoop: the SGT path out of the router | CaptureLoop + gate + foreground windows wired for SGT; crosshair keeps own URL read (R7); tick 0.35 (R10); 18 tests, sgt/vsdc 1201 passed; checks 11-12 |
 | WP5 | Done | opus | e60c416 | SGT absorbs by provenance: late results, torn and blind rules, source policy | absorb by provenance: owners + closed ring with R1 cuts, torn/blind rules, OCR add-only with R6; loop and replay on absorb; test_sgt_absorb 20 pass; owner check |
 | WP6 | Done | sonnet | 1a31b24 | Simulation harness and the six day profiles | Sim harness tests/sgt_sim, profiles 1-6 pass at full size, 37 scenario tests (5 strict xfails for WP7/WP9/WP10); fixed cross-tab absorb and wedged pending read; |
-| WP7 | Not started | sonnet |  | Change gate v2 tuning and the flash OCR trigger |  |
+| WP7 | Done | sonnet | c5e3c1c | Change gate v2 tuning and the flash OCR trigger | OCR lane plus flash/green/paused triggers; held until a read confirms the tab; R2 and C1-heavy xfails now green; owner check 15 for the D4 histogram |
 | WP8 | Not started | sonnet |  | Blind pages on every portal |  |
 | WP9 | Not started | sonnet |  | Identity persistence |  |
 | WP10 | Not started | opus |  | Visible windows that are not in front |  |
@@ -43,6 +43,8 @@ Runs: 12   output tokens: 561540   API-equivalent cost: $39.30
 - **WP5** R1 closed ring and cuts: which boundaries cut a session's unanswered reads? → Ends by logout, login page, shutdown/switched off/recovered cut them; idle and window closed do not. Another client's PAN/GSTIN cuts only when it is not a new tab's first page (that is a tab switch, the reads asked on the old tab are about the old client). (R1 names logout, login page and identity contradiction; a new tab's first read showing another client is the existing 'first_read' tab-switch path, not a contradiction inside one tab, and cutting it would lose the shelved session's own late reads (6.1 edge case).)
 - **WP5** R6 in the dataset in progress: may OCR fill the status piece or complete the draft into a row? → No. OCR fills only empty non-status pieces and never turns the draft into a row or closes it (no new period from OCR); the next UIA read or the session end writes it. OCR rows come only from a dataset that carries its own ARN. (A status piece or a draft row from OCR would let wording promote without an identifier, which R6 forbids; filling form/period/year pieces stays allowed by 5.2.)
 - **WP5** absorb() details the blueprint leaves open (clock, blind counter, logout page) → absorb(result, frame, ocr, now, blind_retries): age checked on the reader's clock (now) from asked_at as the reader does; s.last_read set on SGT's own clock at absorb; the blind-retry counter lives in the loop's WindowState and is reset by a URL change or a non-blind read; observe_window returns None on a logout page and the loop asks no page read there; when a page read is the newest word on the window's URL the loop calls observe_window with it before absorb. (The result's times are time.monotonic while SGT's clock is wall time; mixing them would break observe()'s 15 s re-read gate. Calling observe_window first makes a logout/login reached during the read end the session before its text could land (R1).)
+- **WP7** An OCR picture has no tab bracketing like a UIA read; how is it attributed? → Held until the first clean read that began after the picture shows the same tab (absorbed), else dropped (The loop's tab knowledge is up to 1 s old; a flash right after a tab switch was attributed to the old tab's session (test_b1). An immediate scope read confirms the tab.)
+- **WP7** How does a toast that appears in the same tick as a navigation get a flash scan? → A change of FLASH_MIN_CELLS or more arms the flash for OCR_ARM_SEC (1 s); the first tick where UIA is busy fires it (That tick's read is only just asked, so the busy test fails there; the toast is still up a tick later (R2 toast, C1 heavy).)
 
 ## Checks waiting for you
 
@@ -60,3 +62,4 @@ Runs: 12   output tokens: 561540   API-equivalent cost: $39.30
 - #12 (WP4) Capture loop day run (WP4 done-when): with SGT on (shadow or live), work a normal day on the dev PC, then look at logs/vsdc.log heartbeat lines. Pass: they show uia_reads counts rising, late=0 (no dropped reads), loop_errors absent or 0, and the GST/ITR rows of the day appear in the tracker as before; no health state stalled/uia-paused except during real browser hangs. Fail: send the heartbeat lines' counts (no page text). — Not run
 - #13 (WP5) Replay diff on the real corpus (WP5 STOP, D3): on the dev PC run 'venv/Scripts/python.exe tools/sgt_replay.py diff' against the replay_baseline.json made at WB (re-run 'baseline' first only if it is missing). PASS = every line is 'newly written' (OCR-only rows with an ARN) or no lines at all; FAIL = any 'no longer written' or 'changed' line, especially a PAN/name/period/status that came from an OCR page before (OCR no longer sets the profile, changes pieces or raises a status without an ARN). Read the output on the PC only; do not paste values anywhere. — Not run
 - #14 (WP6) Run the real-sleep profile runs (about 18 min): set the environment variable SGT_SIM_REAL to 1, then run venv/Scripts/python.exe -m pytest -q -p no:cacheprovider tests/test_sgt_sim_profiles.py -k real_sleeps. Both tests must pass. — Not run
+- #15 (WP7) Confirm the D4 gate thresholds (GATE_MIN_CELLS=3, FLASH_MIN_CELLS=8, GATE_LEVEL_DELTA=2) against WP0's histogram. On an office PC with a real browser on the GST portal, run: venv/Scripts/python.exe tools/sgt_probe_pack.py gate --minutes 10 while filing normally (typing in a form, a toast, a page change). Pass: caret/typing frames fall in the 0-2 cell buckets, nearly all toast/banner frames in the 8+ buckets, and the tick cost stays low (D7). If many toasts land in 3-7 cells, report the histogram so FLASH_MIN_CELLS can be lowered; the defaults stay until then. — Not run
