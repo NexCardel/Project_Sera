@@ -241,7 +241,9 @@ class SeraApp:
         self._update_announced = set()      # staged versions already shown on the HUD (once each)
         self._capture_ui_refresh_pending = False
         self._capture_queue = queue.Queue()
-        from core import capture_outbox
+        # fleet_health pulls in the core.vsdc package; import it here on the main thread so the
+        # capture thread's own import finds it loaded (two threads importing core.vsdc deadlock).
+        from core import capture_outbox, fleet_health  # noqa: F401
         self._outbox = capture_outbox.CaptureOutbox(
             self._process_extension_result,
             capture_outbox.DeadLetter(capture_outbox.default_dir() / capture_outbox.DEAD_LETTER_NAME),

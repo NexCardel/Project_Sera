@@ -1,16 +1,16 @@
-# SGT never-miss — report (2026-10-14 18:43)
+# SGT never-miss — report (2026-10-14 19:13)
 
 Deadline: 2026-10-17T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 1 |
+| Not started | 0 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 16 |
+| Done | 17 |
 | Blocked | 0 |
 
-Runs: 20   output tokens: 909482   API-equivalent cost: $69.71
+Runs: 21   output tokens: 961630   API-equivalent cost: $75.88
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -30,7 +30,7 @@ Runs: 20   output tokens: 909482   API-equivalent cost: $69.71
 | WP12 | Done | sonnet | 369f49e | Fleet health view and the mandatory update path | Fleet panel, sharing interval setting, daily digest, mandatory update path. Narrow runs green: test_sgt_* 877, test_vsdc_* 434, fleet and update tests. Full sui |
 | WP13 | Done | sonnet | 5b8ef20 | Live soak tool and pass/fail | tools/sgt_soak_report.py (7 rows + info, --expected ARN count, no identifiers in output) and --soak page in the node bench; 7 tests, narrow run 1318 passed; own |
 | WP14 | Done | haiku | c47ec3d | Scenario sweep and documentation | Scenario sweep done: 1318 passed, 3 skipped, 1 xfailed; 4 named tests missing and marked; D1 kept as open xfail |
-| WPR | Not started | opus |  | Final review |  |
+| WPR | Done | opus | 3afdaa5 | Final review | Review done: 3 fixes (D1 harsh wrong-client, mandatory update path, digest off capture thread), recovery acceptance test, merge-readiness note; suite T=3361 F=2 |
 
 ## Decisions taken for you
 
@@ -58,6 +58,10 @@ Runs: 20   output tokens: 909482   API-equivalent cost: $69.71
 - **WP13** How are missed submissions counted, and how does the report stay free of identifiers? → each ARN in --expected must appear in a dataset event or session_end payload of the window at status Submitted or higher; the report prints counts and line numbers of the expected file only, and the final text passes through redact_identifiers (exact count without printing any ARN, client or link; an ARN found at Draft is under-stated, which is as bad as missing it)
 - **WP14** Four scenario tests named in section 11 do not exist (A8, D3, D4, D12) → Mark each row in section 11 with what exists and what is missing; do not write new tests in this sweep (WP14 is a sweep and documentation WP; D4 already has an equivalent unit test under a different name, and the others need new harness scenarios, which is a separate piece of work)
 - **WP14** D1 harsh case is an open xfail (test_d1_harsh_both_tabs_unread_before_the_first_switch) → Keep the xfail; section 11 D1 becomes Partial, not Closed (The xfail is a real open finding from WP6 that WP9 left untouched; marking it Closed would hide it)
+- **WPR** The daily digest ran on the capture thread (full tracker read + settings writes on the first portal page of the day). Keep or move? → Move it to a daemon thread; its counts reach the log and the pill on the next tick (a never-miss capture tick must not wait seconds on the database once a day; the test contract stays (one call per day, counts only))
+- **WPR** 8.2 layer 2 names tests/test_sgt_sim_health.py (8 states within 20 s) which no WP built. Write it now? → No; the states are covered one by one in tests/test_vsdc_health.py (blind 20 s, stalled, uia-paused, scope-lost, specs-silent, disk, busy-long, old-build); listed as an open item (there is no 'wedged' state (stalled covers it) and old-build is informational by design; a sim copy would re-test the same monitor)
+- **WPR** A mandatory update with an SGT session open returned None outright, blocking even the normal 3-min idle path; a portal page left in front keeps its session open all day. Keep? → No: with a session open a mandatory update follows the normal rules (3 min idle, or 8 h staged + 30 s); without one, 30 s at once (D12/R13 exist to reach all-day PCs sooner; a mandatory update must never be slower than a normal one, and the 30 s path still never cuts an open session)
+- **WPR** D1 harsh open finding: a tab that joined an unnamed session (two logins side by side) named the shared session, so the other tab's ack was written under the wrong client. Fix how? → A joined tab stays provisional until its session is named; if its page names a client while the session holds other tabs, it splits into its own session and the unnamed one is kept; the other tab's ack is then unattributed, never wrong (never a wrong client (constraint 5): the other tab's client page was never on screen, so unattributed is the only correct outcome; rule is per kind (tabs), not per page)
 
 ## Checks waiting for you
 
@@ -86,3 +90,5 @@ Runs: 20   output tokens: 909482   API-equivalent cost: $69.71
 - #23 (WP12) Owner: after the next release, confirm a staged update shows the 'Update ready' HUD event once and that the PC restarts itself when idle; the ps1 change (mandatory copied into pending.json) is untested outside the code review. — Not run
 - #24 (WP13) 5 h soak on the dev PC (mock pages, no client): with Sera running (capture engine on, VSDC_ALLOW_LOCAL_TEST=1) run 'python tools/sgt_i_uia_node_bench.py --soak --hours 5'; it prints the exact report command and writes the expected-ARN file to the temp folder. Afterwards run that command (python tools/sgt_soak_report.py --start ... --end ... --expected ...). PASS = overall PASS: 0 missed, p95 read time in the last hour under 2x the first hour, working set growth under 100 MB, 0 stalls, 0 beat gaps, 0 abandoned workers. Put the numbers only into docs/sgt-never-miss-soak.md. — Not run
 - #25 (WP13) 5 h soak on one office PC with real work: write the ARNs of that day's test filings (one per line, outside the repo) and run python tools/sgt_soak_report.py --start 'YYYY-MM-DD HH:MM' --end 'YYYY-MM-DD HH:MM' --expected <file> on that PC (end = a minute after the last filing). PASS = same as the dev PC soak. Record the numbers only (no ARNs, names or links) in docs/sgt-never-miss-soak.md. — Not run
+- #26 (WPR) D12 timing: the agent that copies 'mandatory' into pending.json and the app code that reads it ship INSIDE this release, so PCs still on the old build ignore the flag for this release (normal 3 min idle / 8 h + 30 s rule). Setting mandatory: true in version.json still costs nothing, but it only fast-tracks the release AFTER this one. Pass: you accept this, or you push this release out by hand on the all-day PCs (close Sera once at a quiet moment), then check Settings > Tracker > Capture health shows every PC on the new build within a day. — Not run
+- #27 (WPR) Two-logins-side-by-side rule (WPR fix of the D1 harsh case): a tab opened before any tab of the window named a client now gets its own session when its page names a client. Real check: in one browser window open two ITR (or GST) login tabs, log in two different test clients without visiting either profile page first, switch tabs a few times, then open one client's profile page. Pass: in the tracker, nothing of client 1 ever shows under client 2; a row of the tab whose client page you never opened is unattributed (and the phone alert fires if set up). — Not run

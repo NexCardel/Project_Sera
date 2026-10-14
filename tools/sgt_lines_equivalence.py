@@ -260,6 +260,10 @@ def check_corpus(directory: Optional[Path] = None) -> Tuple[int, int, List[Tuple
     mismatches: List[Tuple[str, List[Diff]]] = []
     for rec in pages:
         docs = rec.get(CORPUS_NODE_KEY)
+        # OCR lines come from a screenshot; the recorder attached a separate UIA node dump to them,
+        # so they can never equal node-rebuilt lines. Only UIA-sourced records are comparable.
+        if rec.get("source") not in (None, "uia"):
+            docs = None
         if not docs:
             no_nodes += 1
             continue
