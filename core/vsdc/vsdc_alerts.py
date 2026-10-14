@@ -198,31 +198,8 @@ class AlertSender:
         A submission was captured but no client is known. True when an alert was queued.
         The text carries no client data (see the module docstring).
         """
-        now = time.time()
-        if not self.enabled and self._reads_config_file and now - self._last_reload >= self.RELOAD_INTERVAL_SEC:
-            # The app may have been started before the config file existed (or before it was
-            # fixed). Pick it up now rather than staying silent until the next restart.
-            self._last_reload = now
-            cfg = load_alert_config()
-            if cfg:
-                self.config = cfg
-                print(f"[VSDC Alert] phone alerts ON via {cfg['server']} (topic ...{cfg['topic'][-4:]}, "
-                      f"this PC: '{self._machine()}') - config found after start-up")
-        if not self.enabled:
-            if now - self._warned_off_at > 600:
-                self._warned_off_at = now
-                print(f"[VSDC Alert] a submission with no client was captured, but phone alerts are not configured "
-                      f"({_config_path()} / VSDC_ALERT_TOPIC) - no alert sent")
+        if not self._admit("a submission with no client was captured"):
             return False
-        while self._sent and now - self._sent[0] > 3600:
-            self._sent.popleft()
-        if len(self._sent) >= self.MAX_PER_HOUR:
-            if not self._warned_limit:
-                self._warned_limit = True
-                print(f"[VSDC Alert] {self.MAX_PER_HOUR} alerts in the last hour - holding further ones back")
-            return False
-        self._sent.append(now)
-        self._warned_limit = False
 
         when = when or datetime.now()
         page = redact_identifiers(page_url or "") or "(address bar not readable)"
@@ -236,13 +213,66 @@ class AlertSender:
             "page on that machine so it can be linked.",
         ))
         print(f"[VSDC Alert] submission with no client captured - alerting ({self._machine()})")
-        title = "Sera: submission captured, client unknown"
+        self._dispatch("Sera: submission captured, client unknown", body)
+        return True
+
+    def notify_capture_health(self, device: Optional[str], state: str, detail: str = "",
+                              when: Optional[datetime] = None) -> bool:
+        """
+        Capture stopped working on a PC (core/vsdc/vsdc_health). True when an alert was queued.
+        Counts toward the same hourly limit as the other alerts. The text is the PC name, the
+        state's name and a fixed sentence, redacted like every alert: no client data.
+        """
+        if not self._admit("capture has a problem"):
+            return False
+        when = when or datetime.now()
+        pc = redact_identifiers(device or self._machine())[:40]
+        body = "\n".join((
+            f"PC: {pc}",
+            f"State: {redact_identifiers(state or 'unknown')}",
+            f"Seen: {when.strftime('%d-%b %H:%M')}",
+            "",
+            redact_identifiers(detail or "")[:200],
+        )).rstrip()
+        print(f"[VSDC Alert] capture problem ({state}) - alerting ({pc})")
+        self._dispatch(f"Sera: capture problem on {pc}", body)
+        return True
+
+    def _admit(self, what: str) -> bool:
+        """Configured, and under the hourly limit? (Reloads a config that appeared after start-up.)"""
+        now = time.time()
+        if not self.enabled and self._reads_config_file and now - self._last_reload >= self.RELOAD_INTERVAL_SEC:
+            # The app may have been started before the config file existed (or before it was
+            # fixed). Pick it up now rather than staying silent until the next restart.
+            self._last_reload = now
+            cfg = load_alert_config()
+            if cfg:
+                self.config = cfg
+                print(f"[VSDC Alert] phone alerts ON via {cfg['server']} (topic ...{cfg['topic'][-4:]}, "
+                      f"this PC: '{self._machine()}') - config found after start-up")
+        if not self.enabled:
+            if now - self._warned_off_at > 600:
+                self._warned_off_at = now
+                print(f"[VSDC Alert] {what}, but phone alerts are not configured "
+                      f"({_config_path()} / VSDC_ALERT_TOPIC) - no alert sent")
+            return False
+        while self._sent and now - self._sent[0] > 3600:
+            self._sent.popleft()
+        if len(self._sent) >= self.MAX_PER_HOUR:
+            if not self._warned_limit:
+                self._warned_limit = True
+                print(f"[VSDC Alert] {self.MAX_PER_HOUR} alerts in the last hour - holding further ones back")
+            return False
+        self._sent.append(now)
+        self._warned_limit = False
+        return True
+
+    def _dispatch(self, title: str, body: str) -> None:
         url = f"{self.config['server']}/{self.config['topic']}"
         if self._sync:
             self._deliver(url, title, body)
         else:
             threading.Thread(target=self._deliver, args=(url, title, body), daemon=True, name="vsdc-alert").start()
-        return True
 
     def _deliver(self, url: str, title: str, body: str) -> bool:
         for attempt in (1, 2):

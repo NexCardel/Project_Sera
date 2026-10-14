@@ -61,7 +61,7 @@ class VSDCWorker(QThread):
         vsdc_diag.note("capture worker started")
         beat = vsdc_diag.Heartbeat()
         self.last_progress = time.monotonic()
-        vsdc_diag.watch_worker(self)
+        vsdc_diag.watch_worker(self, monitor=getattr(self.router, "health", None))
 
         try:
             while self._running:

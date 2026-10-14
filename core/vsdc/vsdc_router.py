@@ -23,6 +23,7 @@ from .vsdc_scope import (
     sanitize_page_url, registered_domain,
 )
 from .vsdc_alerts import AlertSender, stamp_device_name
+from .vsdc_health import HealthMonitor
 from .vsdc247 import Vsdc247Scanner, configured_mode, MODE_OFF, MODE_SHADOW, MODE_LIVE
 
 SGT_OFF = "off"
@@ -306,6 +307,12 @@ class VSDCRouter:
         self._tripwire_hosts: Dict[str, List[float]] = {}
         # Phone alert for a submission captured with no client (off unless configured).
         self.alerts: AlertSender = AlertSender()
+        # Is capture working? States, a short HUD event, a phone alert and a vsdc.log line when not
+        # (core/vsdc/vsdc_health). The callables read self.alerts at call time, so a replaced sender is used.
+        self.health = HealthMonitor(
+            hud=self._health_hud,
+            phone=lambda device, state, detail: self.alerts.notify_capture_health(device, state, detail),
+            alerts_enabled=lambda: self.alerts.enabled)
 
         # The acknowledgement of the return currently being e-Verified, read off an
         # earlier step of the e-Verify wizard. The confirmation screen names the form and
@@ -500,7 +507,8 @@ class VSDCRouter:
                                   mode=self._sgt_mode,
                                   alert_unattributed=lambda form, page: self.alerts.notify_unattributed_submission(form, page),
                                   ask_demotion=self.notify_demotion,
-                                  resolve_client=getattr(self, "_client_lookup", None))
+                                  resolve_client=getattr(self, "_client_lookup", None),
+                                  on_read=self.health.read_result, on_hits=self.health.hits)
             self._apply_sgt_i()
             self._apply_scc()
         # Which tab of the window is in front: SGT keeps one session per tab, so a page that
@@ -549,6 +557,7 @@ class VSDCRouter:
         if not cue:
             return      # nothing to see yet (UIA warm-up, page still loading) or not a portal: retry / ignore
         self._tripwire_hosts[host] = [-1, now]         # raised once for this host; done
+        self.health.unlisted_portal()
         print(f"[VSDC Scope] {host} shows the {cue} logo but is not on the allowed list - VSDC is paused there. "
               f"Add it to vsdc_scope.json if this is the real portal.")
         # SDIS Part T: the domain a 'watch it too' offer (W4-5) would add as an extra_domains entry.
@@ -1021,11 +1030,33 @@ class VSDCRouter:
 
         return None
 
+    def _health_hud(self, title: str, subtitle: str = "") -> None:
+        """A capture-health HUD event. Straight to the callback, not through this tick's buffer: the
+        watch thread raises "stuck" while the capture thread is inside a tick that never ends."""
+        self._emit_activity("prompt", title, subtitle, {})
+
     def evaluate_tick(self) -> Optional[Dict[str, Any]]:
         """
         Executes a single monitoring tick (called every 1–2s by worker).
         Returns completed master payload dictionary if a filing is finalized, else None.
+        Capture health (vsdc_health) is evaluated at the end of every tick, whatever the tick did.
         """
+        try:
+            return self._evaluate_tick()
+        finally:
+            self._health_end_of_tick()
+
+    def _health_end_of_tick(self) -> None:
+        try:
+            h = self.health
+            h.uia_paused(bool(vsdc_uia_text.worker_health().get("disabled")))
+            h.tick()
+            if h.due():
+                h.write()
+        except Exception:
+            pass
+
+    def _evaluate_tick(self) -> Optional[Dict[str, Any]]:
         # SGT tracker rows waiting to be saved go out first, one per tick - even when the
         # engines were just switched off (switching SGT off queues its last rows) and whatever
         # window is in front. They are SGT's own rows: never recorded in _dispatched_ids, so
@@ -1165,6 +1196,8 @@ class VSDCRouter:
                               in_scope="yes" if in_scope else "no")
         if in_scope:
             self.diag_tick.update(portal=self._tick_portal, page=self._tick_page_url or None)
+        self.health.window(hwnd, in_scope, self._tick_portal or "", titled_portal=is_portal_title,
+                           url_readable=address_bar_readable)
 
         matched_crosshair = None
         if in_scope and (address_bar_readable or is_portal_title):

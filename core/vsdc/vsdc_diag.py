@@ -115,6 +115,7 @@ class Heartbeat:
                                       "max_tick_ms": round(self.max_tick_ms), "paused": "yes" if paused else None,
                                       "threads": threading.active_count()}
             fields.update(getattr(router, "diag_tick", None) or {})
+            fields["health_state"] = getattr(getattr(router, "health", None), "state", None)
             sgt = getattr(router, "_sgt", None)
             if sgt is not None and hasattr(sgt, "take_diag"):
                 fields.update({f"sgt_{k}": v for k, v in sgt.take_diag().items()})
@@ -139,9 +140,11 @@ def tick_error(exc: BaseException) -> None:
     note_limited("tick-error:" + msg, f"tick error {msg}\n{stack}")
 
 
-def watch_worker(worker: Any, stall_s: float = STALL_S) -> Optional[threading.Thread]:
+def watch_worker(worker: Any, stall_s: float = STALL_S, monitor: Any = None) -> Optional[threading.Thread]:
     """Starts a thread that watches worker.last_progress (time.monotonic(), set after every tick)
-    while worker._running and not worker._paused. A stall dumps every thread's stack to hang.log."""
+    while worker._running and not worker._paused. A stall dumps every thread's stack to hang.log.
+    The health monitor (core/vsdc/vsdc_health), if given, is told each second how long it has lasted
+    (0 once ticks finish again) - the capture thread itself cannot say it is stuck."""
     def run():
         dumps, last_dump, stalled_since = 0, 0.0, None
         while getattr(worker, "_running", False):
@@ -155,8 +158,12 @@ def watch_worker(worker: Any, stall_s: float = STALL_S) -> Optional[threading.Th
                     # A tick finished since the stall was reported (even if the next one is slow).
                     note(f"capture worker moving again after {last - stalled_since:.0f} s")
                     stalled_since = None
+                    if monitor is not None:
+                        monitor.stall(0.0)
                 if stalled < stall_s:
                     continue
+                if monitor is not None:
+                    monitor.stall(stalled)
                 if stalled_since is None:
                     stalled_since, dumps, last_dump = last, 0, 0.0
                 if dumps < MAX_STALL_DUMPS and time.monotonic() - last_dump >= STALL_REPEAT_S:

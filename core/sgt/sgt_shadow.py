@@ -290,8 +290,14 @@ class SgtShadow:
         sdis: Any = None,
         ask_demotion: Optional[Callable[[Dict[str, Any]], Any]] = None,
         resolve_client: Optional[Callable[[str, str], Optional[Dict[str, Any]]]] = None,
+        on_read: Optional[Callable[[bool, float, str], None]] = None,
+        on_hits: Optional[Callable[[str, bool, bool], None]] = None,
     ) -> None:
         self.mode = MODE_SHADOW
+        # Capture health (core/vsdc/vsdc_health): on_read(usable, ms, source) after each page read
+        # (source "uia", "ocr" or "busy"); on_hits(session id, any datapoint yet, logged-in page).
+        self._on_read = on_read
+        self._on_hits = on_hits
         # (portal, portal user ID) -> {"gstin", "pan"} of the saved client who owns it, or None
         # (core/sgt/sgt_client_link.ClientLink). Names the client where the page itself does not.
         self._resolve_client = resolve_client
@@ -626,6 +632,7 @@ class SgtShadow:
             # not read at all, so it must not count as read - the next tick asks again.
             s.last_hash, s.last_read = prev_hash, prev_read
             self._diag["busy"] += 1
+            self._report(self._on_read, False, 0.0, "busy")
             return None
         lines = list(res.get("lines") or [])
         source = "uia"
@@ -645,10 +652,12 @@ class SgtShadow:
                 source = "ocr"
                 s.ocr_reads += 1
                 self._diag["ocr"] += 1
-        s.read_ms += (time.perf_counter() - t0) * 1000
+        read_ms = (time.perf_counter() - t0) * 1000
+        s.read_ms += read_ms
         s.reads += 1
         self._diag["last_lines"] = len(lines)
         self._diag["last_source"] = source
+        self._report(self._on_read, bool(lines) and not is_blind(lines), read_ms, source)
         if not lines:
             return None
         today = self._today()
@@ -684,6 +693,9 @@ class SgtShadow:
             self._stats.record_hits(portal, [h.spec for h in res.profile.values()]
                                     + [h.spec for h in res.current.values()]
                                     + [d.record for d in res.datasets], today)
+        self._report(self._on_hits, s.session_id,
+                     bool(s.profile or res.profile or res.current or res.datasets),
+                     not _LOGIN.search(url or ""))
         clash = None if res.is_list else self._identity_conflict(s, res)
         if clash:
             # Another client's PAN/GSTIN: this window moved to someone else without passing a
@@ -1135,6 +1147,15 @@ class SgtShadow:
         carrier = s.sdis.carrier
         if carrier is not None and (every or carrier.sent_key is not None):
             self._queue(s, carrier)
+
+    @staticmethod
+    def _report(callback: Optional[Callable[..., None]], *args: Any) -> None:
+        """Tells the health monitor something; it must never disturb capture."""
+        if callback is not None:
+            try:
+                callback(*args)
+            except Exception:
+                pass
 
     @staticmethod
     def _fresh_diag() -> Dict[str, Any]:
