@@ -1195,8 +1195,8 @@ is acceptable (it already is for open sessions).
 
 **Files:** `core/vsdc/vsdc_windows.py` (full `browser_windows` of section 4.7, `EnumWindows`
 through ctypes, `GetWindowRect`, `MonitorFromWindow`); `core/vsdc/vsdc_capture.py` (background
-cadence, `ctx.background`); `core/vsdc/vsdc_ocr.py` (no change; PrintWindow fallback exists);
-`core/vsdc/vsdc_scope.py` (`browsers` list from `vsdc_scope.json`, D11).
+cadence, `ctx.background`); `core/vsdc/vsdc_ocr.py` (no change; PrintWindow fallback exists).
+No `vsdc_scope.py` change: the owner rejected D11 (2026-10-14).
 
 **Rules:** foreground first; background windows every `BG_TICK_SEC`; `MAX_WATCHED_WINDOWS = 3`;
 a background window's lane may be closed by the reader when the cap is hit; a background window
@@ -1395,7 +1395,7 @@ with what remains), **Out** (by constraint, with the constraint), **Unobservable
 | B6 | Closed | lanes + WP10; `test_b6_two_clients_two_windows_alternating` |
 | C1, C2, C3 | Closed | frame watch + flash OCR + late reads; `test_c1_toast_one_second_on_heavy_page_is_caught_by_ocr`, `test_c2_redirect_after_success`, `test_c3_user_closes_modal_at_once` |
 | C4 | Partial | PDF viewer Document in scope if WP0 shows text through UIA; else the ack page before it is caught |
-| C5 | Out until D9 | WP15 |
+| C5 | Out (owner rejected D9): listed in the daily digest only | none |
 | C6 | Unobservable | listed by the digest (unverified ITR rows older than 7 days) |
 | C7 | Closed without events | the frame watch replaces reliance on UIA events; `FlashWatcher` stays SGT-I's |
 | C8 | Closed (D6) | WP10; `test_c8_success_on_second_monitor_is_captured` |
@@ -1439,7 +1439,7 @@ with what remains), **Out** (by constraint, with the constraint), **Unobservable
 | G5 | OK | signature is of the client area |
 | G6 | OK | sessions park |
 | G7 | Partial as today | Gecko rules kept in the shared helper |
-| G8 | Closed (D11) | |
+| G8 | Out (owner rejected D11: no extra browsers needed) | |
 | G9 | Closed | OCR net + health `blind` |
 | G10 | Closed | dead letter + snapshot + parked on disk |
 | H1 | Closed for noticing | health `stalled` + phone; no COM on the capture thread after WP4 |
