@@ -1,1 +1,2 @@
 Run,WP,Model,Attempt,Started,Minutes,Outcome,Input tokens,Output tokens,Cache read,Cache write,Cost USD,Turns,Summary
+20261014-142417,WB,claude-haiku-5-5,1,2026-10-14 14:01,23.0,Done,20,3357,688703,4933,1.1520909999999998,10,"WB is done. The baseline suite result is **T=3078 F=2 S=1**, with no code changed.  Pre-existing failures that every later WP should compare against: - `tests/test_class_diff_render.py::test_output_paths_never_recorder_or_tracked_folders` - `tests/test_sdis_tables.py::test_command_line_prints_no_val"
