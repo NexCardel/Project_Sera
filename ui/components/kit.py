@@ -837,6 +837,26 @@ class FieldLabel(QLabel):
             self.setBuddy(for_widget)
 
 
+class Caption(QLabel):
+    """A plain muted 12 px line (the mockup's .lab-less captions such as "Sort"); not a field label."""
+
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self.setStyleSheet(f"QLabel {{ color: {T['muted']}; font-size: {T['f_s']}px; background: transparent; }}")
+
+
+class Avatar(QLabel):
+    """The editor's initials square (the mockup's .mc .ed-hd .av): emdim, mint 15 px bold, radius 10."""
+
+    def __init__(self, text="+", parent=None):
+        super().__init__(text, parent)
+        self.setFixedSize(K["d_avatar_ed"], K["d_avatar_ed"])
+        self.setAlignment(Qt.AlignCenter)
+        self.setStyleSheet(
+            f"QLabel {{ background: {T['emdim']}; color: {T['mint']}; border-radius: {K['r_avatar_ed']}px;"
+            f" font-size: {K['f_avatar_ed']}px; font-weight: 700; }}")
+
+
 class Input(QLineEdit):
     """Single-line field. icon: leading "mdi.*" name. add_trailing(widget) puts a small IconButton
     (eye, copy ...) inside the right edge and keeps the text clear of it. Everything else is
@@ -2332,6 +2352,7 @@ class GridDelegate(QStyledItemDelegate):
         super().__init__(view)
         self._view = view
         self.tone = tone
+        self.list_mode = False          # DataGrid(list_mode=True): services as tinted pills
 
     # ---- geometry shared by paint, clicks and tooltips
     def _pal(self):
@@ -2566,7 +2587,44 @@ class GridDelegate(QStyledItemDelegate):
                                           side, side))
         painter.setOpacity(1.0)
 
+    def _paint_service_pills(self, painter, option, cr, items):
+        """List mode (Manage Clients): each service a tinted pill (the mockup's .gpill), right-aligned,
+        "+N" when they do not fit."""
+        font = self._small_font(option, T["f_xs"])
+        font.setWeight(QFont.DemiBold)
+        fm = QFontMetrics(font)
+        h, pad, gap = K["h_gpill"], K["pad_gpill"], K["gap_svc"]
+        total = len(items)
+        shown, used = 0, 0
+        for i, (name, _colour) in enumerate(items):
+            step = fm.horizontalAdvance(name) + 2 * pad + (gap if shown else 0)
+            reserve = fm.horizontalAdvance(f"+{total}") + gap if i < total - 1 else 0
+            if used + step + reserve > cr.width():
+                break
+            used += step
+            shown += 1
+        more = total - shown
+        more_w = fm.horizontalAdvance(f"+{more}") + gap if more else 0
+        x = cr.right() - used - more_w + 1
+        cy = cr.center().y()
+        painter.setFont(font)
+        for name, colour in items[:shown]:
+            w = fm.horizontalAdvance(name) + 2 * pad
+            r = QRectF(x, cy - h / 2, w, h)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(_qcolor(colour, 0.13))
+            painter.drawRoundedRect(r, h / 2, h / 2)
+            painter.setPen(QColor(colour))
+            painter.drawText(r, Qt.AlignCenter, name)
+            x += w + gap
+        if more:
+            painter.setPen(QColor(self._pal()["mute"]))
+            painter.drawText(QRectF(x, cy - h / 2, more_w, h), Qt.AlignLeft | Qt.AlignVCenter, f"+{more}")
+
     def _paint_services(self, painter, option, cr, items):
+        if self.list_mode:
+            self._paint_service_pills(painter, option, cr, items)
+            return
         font = self._small_font(option, T["f_s"])
         fm = QFontMetrics(font)
         shown = self._services_shown(fm, items, cr.width())
@@ -2896,6 +2954,7 @@ class DataGrid(QTableWidget):
         self.setMouseTracking(True)
         self.viewport().setMouseTracking(True)
         self.delegate = GridDelegate(self, tone)
+        self.delegate.list_mode = list_mode
         self.setItemDelegate(self.delegate)
         if list_mode:
             header.hide()

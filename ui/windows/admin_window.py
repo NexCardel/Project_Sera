@@ -42,7 +42,7 @@ from ui.components.kit import (
     MessageBox,
     ROLE_PILL, ROLE_SERVICES, ROLE_SUB, Banner, Card, Checkbox, Chip, ChipBar, DataGrid, DialogFrame,
     FieldLabel, GridFooter, GridFrame, Input, LabelledAction, PageHeader, SectionLabel, SelectionBar,
-    Select, TextArea, set_page_margins,
+    Select, TextArea, set_page_margins, Avatar, Caption,
 )
 from ui.utils.dynamic_form_widgets import make_input_widget, read_input_widget, set_input_widget_value
 from ui.utils.responsive import WidthAware, WidthMode
@@ -63,6 +63,7 @@ def _icon(name: str, colour: str = None):
 # _refresh_activity_tags already uses).
 _ACTIVITY_ROLE = Qt.UserRole + 2
 _SUBLINE_ROLE = Qt.UserRole + 3
+_SHORT_SUBLINE_ROLE = Qt.UserRole + 5   # the list's painted sub-line: "#id · PAN" (mockup)
 _TAGS_ROLE = Qt.UserRole + 4
 
 # Dot colour of a service in the list, picked by the service's position.
@@ -292,7 +293,8 @@ class AdminWindow(WidthAware, QWidget):
         back_btn.set_icon_only(True)
         back_btn.clicked.connect(self.back_requested.emit)
         self.page_header.add_leading(back_btn)
-        self.new_btn = LabelledAction("New client", variant="soft", icon="mdi.account-plus",
+        # owner decision 4: the emerald primary with a plus (the mockup's "New client")
+        self.new_btn = LabelledAction("New client", variant="primary", icon="mdi.plus",
                                       tooltip="Start a blank client form (Ctrl+N)")
         self.new_btn.clicked.connect(self._on_new)
         self.page_header.add_action(self.new_btn)
@@ -353,7 +355,7 @@ class AdminWindow(WidthAware, QWidget):
 
         sort_row = QHBoxLayout()
         sort_row.setSpacing(T["s_2"])
-        sort_row.addWidget(FieldLabel("Sort"))
+        sort_row.addWidget(Caption("Sort"))
         self.sort_combo = Select()
         self.sort_combo.addItem("ID (Ascending: 1, 2, 3...)", ("id", "asc"))
         self.sort_combo.addItem("ID (Descending: 3, 2, 1...)", ("id", "desc"))
@@ -424,10 +426,7 @@ class AdminWindow(WidthAware, QWidget):
         head = QHBoxLayout(head_row)
         head.setContentsMargins(0, 0, 0, 0)
         head.setSpacing(T["s_3"])
-        self.editor_avatar = QLabel("+")
-        self.editor_avatar.setProperty("class", "EditorAvatar")
-        self.editor_avatar.setFixedSize(40, 40)
-        self.editor_avatar.setAlignment(Qt.AlignCenter)
+        self.editor_avatar = Avatar("+")
         head.addWidget(self.editor_avatar)
         title_box = QVBoxLayout()
         title_box.setSpacing(1)
@@ -457,7 +456,7 @@ class AdminWindow(WidthAware, QWidget):
         self.more_btn.setMenu(more_menu)
         head.addWidget(self.more_btn)
 
-        self.save_btn = LabelledAction("Save", variant="primary", icon="mdi.content-save-outline",
+        self.save_btn = LabelledAction("Save", variant="primary", icon="mdi.check",
                                        tooltip="Save this client (Ctrl+S)")
         self.save_btn.clicked.connect(self._on_save)
         head.addWidget(self.save_btn)
@@ -982,8 +981,14 @@ class AdminWindow(WidthAware, QWidget):
 
             lbl = self._get_identity_label(c, identity_cols)
             item1 = SmartTableWidgetItem(lbl)
-            subline = [f"#{c.get('client_id_token') or c['id']}"] + self._client_key_values(c, mcl_cols)
+            key_vals = self._client_key_values(c, mcl_cols)
+            subline = [f"#{c.get('client_id_token') or c['id']}"] + key_vals
             item1.setData(_SUBLINE_ROLE, " · ".join(subline))
+            # the mockup's painted sub-line is "#id · PAN"; GSTIN goes in the row tooltip
+            pan = next((v for v in key_vals if len(v) == 10 and v.isalnum()), "")
+            gstin = next((v for v in key_vals if len(v) == 15), "")
+            item1.setData(_SHORT_SUBLINE_ROLE, " · ".join([subline[0]] + ([pan] if pan else [])))
+            tip_lines = [lbl] + ([f"GSTIN: {gstin}"] if gstin else [])
             tags = [service_tags[sid] for sid in c.get("service_ids", []) if sid in service_tags]
             item1.setData(_TAGS_ROLE, tags if tags else ([("No services", T["warn"])] if services else []))
             item1.setData(_ACTIVITY_ROLE, "")
@@ -991,7 +996,8 @@ class AdminWindow(WidthAware, QWidget):
             if act_list:
                 item1.setData(_ACTIVITY_ROLE, self._activity_text(act_list))
                 tooltip_lines = [f"• {a['action_type']} ({'just now' if a['age_seconds'] < 60 else str(a['age_seconds']//60) + 'm ago'})" for a in act_list[:4]]
-                item1.setToolTip(f"{lbl}\n\nRecent Activity:\n" + "\n".join(tooltip_lines))
+                tip_lines += ["", "Recent Activity:"] + tooltip_lines
+            item1.setToolTip("\n".join(tip_lines))
             self._paint_subline(item1)
             self.table.setItem(r, 1, item1)
 
@@ -1025,9 +1031,8 @@ class AdminWindow(WidthAware, QWidget):
 
     @staticmethod
     def _paint_subline(item):
-        """The grid draws ROLE_SUB under the name: ID · PAN · GSTIN, then the recent-activity text."""
-        parts = [str(item.data(_SUBLINE_ROLE) or ""), str(item.data(_ACTIVITY_ROLE) or "")]
-        item.setData(ROLE_SUB, "  ·  ".join(p for p in parts if p))
+        """The grid draws ROLE_SUB under the name: "#id · PAN" in mono (mockup)."""
+        item.setData(ROLE_SUB, str(item.data(_SHORT_SUBLINE_ROLE) or ""))
 
     def _refresh_activity_tags(self):
         # Only while someone can see it (see SearchWindow._on_activity_tick); SeraApp catches up
