@@ -1,12 +1,16 @@
 """Scenario tests of the never-miss blueprint (sections 8 and 11) in the simulation: one test per scenario id the
 harness can express. Fictional data only. A test marked xfail(strict) names the work package that closes its
 gap; when that package lands the test turns green and strict makes the marker come off."""
+import json
+
 import pytest
 
+from core.sgt.sgt_specs import BUILTIN_FIELDS_PATH
 from tests.sgt_sim.fake_browser import OUTSIDE, PORTAL_GST, PORTAL_ITR, Browser, Page, Tab, Toast
 from tests.sgt_sim.harness import assert_profile, problems, sim  # noqa: F401 - sim is a fixture
-from tests.sgt_sim.pages import (GST_FILE, GST_RET, ITR, ITR_LOGIN, ITR_LOGOUT, ITR_PROFILE, ITR_SUCCESS, LOGGED_OUT,
-                                 arn_toast, gst_filing, gst_header, itr_ack, itr_filing, make_client, make_clients)
+from tests.sgt_sim.pages import (GST_FILE, GST_LOGOUT, GST_RET, GST_SVC, ITR, ITR_LOGIN, ITR_LOGOUT, ITR_PROFILE, ITR_SUCCESS, LOGGED_OUT,
+                                 READY, Submission, arn_toast, gst_arn, gst_filing, gst_header, itr_ack, itr_filing,
+                                 make_client, make_clients)
 from tests.sgt_sim.profiles import SAVED, _away, _start, parallel_filing
 
 LATER = "closed by a later work package"
@@ -513,6 +517,53 @@ def test_f4_processing_error_never_promotes(sim):
                                       "Status - Not Filed"], PORTAL_GST))
     h = go(sim, b, [], 40.0, known=[c])
     assert not [r for _t, r in h.rows if r["status"] in ("Submitted", "Submitted & Verified", "Submitted (Not Verified)")]
+
+
+def _enable_overlay(tmp_path, *names):
+    """An overlay that switches shipped-but-disabled records on (their labels still wait for the owner's corpus)."""
+    shipped = json.loads(BUILTIN_FIELDS_PATH.read_text(encoding="utf-8"))["records"]
+    path = tmp_path / "enable.json"
+    path.write_text(json.dumps({"records": [dict(r, disabled=False) for r in shipped if r["name"] in names]}),
+                    encoding="utf-8")
+    return path
+
+
+def test_f2_arn_appearing_later_on_track_status_is_captured(sim, tmp_path):
+    """6.5: the filing's own page was never seen; the ARN shows up days later on the Track Return Status list.
+    The latest filing there is a row for the right client, recovered from the list."""
+    b = Browser()
+    _w, tab = _start(b)
+    c = make_client(425)
+    header = gst_header(c)
+    arn = gst_arn(1)
+    tab.navigate(2.0, Page(GST_SVC + "auth/fowelcome", [f"Welcome {c.name} to GST Common Portal", header, "View Profile"],
+                           PORTAL_GST))
+    card = lambda month, a, day: ["Return Type", "GSTR3B", "Return Period", f"{month} 2026", "Date of Filing", day,
+                                  "ARN", a, "Status", "Filed"]
+    older = card("August", "AA010826000009Z", "11/09/2026") + card("July", "AA010726000008Y", "11/08/2026")
+    tab.navigate(8.0, Page(GST_RET + "trackstatus", ["Track Return Status", header, "Financial Year", "2026-27"]
+                           + card("September", arn, "12/10/2026") + older, PORTAL_GST))
+    tab.navigate(22.0, Page(GST_LOGOUT, LOGGED_OUT, PORTAL_GST))
+    sub = Submission(c, "GSTR3B", "September", arn, READY, 8.0, 22.0)
+    h = go(sim, b, [sub], 40.0, specs=[_enable_overlay(tmp_path, "gst_track_return_status")])
+    mine = [r for _t, r in h.rows if r["pan"] == c.pan]
+    assert {r["arn"] for r in mine if r["arn"] != "N/A"} == {arn}          # five cards, one row: the latest only
+
+
+def test_d2_an_old_success_page_reopened_does_not_duplicate(sim):
+    """The success page of a filing already recorded is opened again later in the same session: nothing new."""
+    b = Browser()
+    _w, tab = _start(b)
+    c = make_client(426)
+    t, sub = itr_filing(tab, 2.0, c, 1, logout=False)
+    reopened = t + 6.0
+    tab.navigate(t, Page(ITR + "dashboard", ["Dashboard", "Welcome Back", c.pan], PORTAL_ITR))
+    tab.navigate(reopened, Page(ITR_SUCCESS, ["You have successfully submitted your return!", "Acknowledgement Number :",
+                                              sub.arn, "ITR-4 for A.Y. 2026-27", "You still need to e-Verify within 30 days"],
+                                PORTAL_ITR))
+    h = go(sim, b, [sub], t + 30.0)
+    assert [r for tt, r in h.rows if tt > reopened + 1.0 and r["arn"] == sub.arn] == []
+    assert len({(r["arn"], r["status"]) for _t, r in h.rows if r["arn"] == sub.arn}) == 1
 
 
 def test_g3_partial_first_read_after_idle_is_retried(sim):

@@ -760,6 +760,94 @@
           ]
         }
       ]
+    },
+    {
+      "name": "gst_track_return_status",
+      "portals": ["GST Portal"],
+      "disabled": true,
+      "note": "DISABLED until the owner confirms the labels (docs/sgt-recovery-spec-notes.md, owner check on WP11). Recovery: the Track Return Status result list gives each filed return its ARN, so a return whose confirmation page was missed is still recorded; only the latest period's card is kept (latest_period_only). Every label below is a GUESS shaped like the portal, not taken from the owner's corpus. To enable: replace the guessed labels with the confirmed ones and delete the 'disabled' line.",
+      "start": "^Return Type$",
+      "max_lines": 20,
+      "require": ["form", "period", "arn"],
+      "fields": [
+        {
+          "field": "form",
+          "labels": ["Return Type"],
+          "within": 1,
+          "pattern": "^(GSTR-? ?(?:1|3B|4|5|6|7|8|9C?|10|11)|CMP-? ?08)$",
+          "transforms": ["dash_form"],
+          "confidence": 90,
+          "note": "Only real return forms: an OCR-style slip such as 'GSTR38' (3B read with an 8) is not a form.",
+          "examples": ["GSTR3B", "GSTR-1"],
+          "counter_examples": ["GSTR-2A", "GSTR38", "Annual Return"]
+        },
+        {
+          "field": "period",
+          "labels": ["Return Period"],
+          "within": 1,
+          "pattern": "^([A-Za-z]{3,9}\\s*[-,]?\\s*20\\d{2})$",
+          "transforms": ["gst_month_period"],
+          "confidence": 90,
+          "examples": ["August 2026", "Jun - 2026"],
+          "counter_examples": ["2026-27", "Xyz 2026x"]
+        },
+        {
+          "field": "arn",
+          "labels": ["ARN"],
+          "within": 1,
+          "pattern": "^([A-Z]{2}[0-9]{12}[0-9A-Z])$",
+          "confidence": 90,
+          "examples": ["AA070826000001Z"],
+          "counter_examples": ["AA07082600000", "12070826000001Z"]
+        },
+        {
+          "field": "filing_date",
+          "labels": ["Date of Filing"],
+          "within": 1,
+          "pattern": "^(\\d{2}/\\d{2}/20\\d{2})$",
+          "transforms": ["parse_date"],
+          "checks": ["not_future"],
+          "confidence": 90,
+          "examples": ["11/07/2026"],
+          "counter_examples": ["31/02/2026"]
+        },
+        {
+          "field": "status",
+          "labels": ["Status"],
+          "within": 1,
+          "pattern": "^(Not Filed|Filed|Submitted)$",
+          "map": [
+            ["^not filed$", "Not Submitted"],
+            ["^filed$", "Submitted & Verified"],
+            ["^submitted$", "Submitted (Not Verified)"]
+          ],
+          "confidence": 90,
+          "examples": ["Filed", "Not Filed"],
+          "counter_examples": ["Invalid", "Filed on"]
+        }
+      ],
+      "examples": [
+        {
+          "lines": ["Track Return Status", "Return Type", "GSTR3B", "Return Period", "June 2026", "Date of Filing",
+                    "11/07/2026", "ARN", "AA070626000003X", "Status", "Filed",
+                    "Return Type", "GSTR3B", "Return Period", "May 2026", "Date of Filing",
+                    "10/06/2026", "ARN", "AA070526000004W", "Status", "Filed"],
+          "expect": [{"form": "GSTR-3B", "period": "June (FY 2026-27)", "arn": "AA070626000003X",
+                      "filing_date": "2026-07-11", "status": "Submitted & Verified"},
+                     {"form": "GSTR-3B", "period": "May (FY 2026-27)", "arn": "AA070526000004W",
+                      "filing_date": "2026-06-10", "status": "Submitted & Verified"}]
+        },
+        {
+          "lines": ["Track Return Status", "ARN", "AA070826000001Z", "Status", "Filed"],
+          "expect": []
+        }
+      ]
+    },
+    {
+      "name": "itr_filed_returns_history",
+      "portals": ["Income Tax"],
+      "disabled": true,
+      "note": "DISABLED. The View Filed Returns page is already read, from the owner's corpus, by itr_dataset_cards, so a golden session (itr_filed_returns_history) pins that: five cards, one row (the latest filing), marked recovered. This entry is only a place for a separate layout, should the owner's corpus show a filed-returns page that itr_dataset_cards cannot read. Labels needed: docs/sgt-recovery-spec-notes.md. Do not enable it as is: it has no fields."
     }
   ],
 

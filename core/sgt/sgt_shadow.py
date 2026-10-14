@@ -1897,7 +1897,8 @@ class SgtShadow:
                 s.draft = _Draft()
                 self._event(s, "current", change="completed by a submission", arn=values["arn"], page=url)
         self._merge_values(s, values, ds.record, ds.confidence, url, source, claimed=claimed,
-                           follow=whole and not add_only, status_explicit=bool(values.get("status")))
+                           follow=whole and not add_only, status_explicit=bool(values.get("status")),
+                           recovered=not whole)
 
     def _request_demotion(self, s: _Session, slot: _Slot, old: str, new: str, evidence: str,
                           stamp: str, url: str) -> None:
@@ -1960,11 +1961,12 @@ class SgtShadow:
 
     def _merge_values(self, s: _Session, values: Dict[str, str], record: str, confidence: int,
                       url: str, source: str, claimed: Optional[List[str]] = None, follow: bool = False,
-                      status_explicit: bool = False) -> Optional[_Slot]:
+                      status_explicit: bool = False, recovered: bool = False) -> Optional[_Slot]:
         """
         follow: this is a page read of one dataset (a whole-page record, the return being built), not a card
         of a list: a value the SAME page, still in view, now shows differently replaces the one it set.
         status_explicit: the page itself shows a status right now (not a default the dataset was lifted to).
+        recovered: the values are a card of a list page, so a row born from them is "recovered" (6.5).
         """
         if not values.get("arn") and not (values.get("form") and values.get("period")):
             return None                         # nothing to key it on - not a dataset yet
@@ -1985,7 +1987,7 @@ class SgtShadow:
         if slot is None:
             slot = _Slot(dict(values), record, confidence, url, claimed=claimed)
             slot.owner = {} if add_only else {k: stamp for k in values}
-            slot.evidence_source = slot.first_seen_as = "ocr" if add_only else "uia"
+            slot.evidence_source = slot.first_seen_as = "ocr" if add_only else "recovered" if recovered else "uia"
             s.slots.append(slot)
             if add_only:
                 if self._stats is not None:
@@ -2011,6 +2013,10 @@ class SgtShadow:
         if not add_only and slot.evidence_source == "ocr" and slot.arn and values.get("arn") == slot.arn:
             slot.evidence_source = "uia"        # a UIA read shows the same ARN: the row no longer rests on OCR
             changes["evidence_source"] = ["ocr", "uia"]
+        elif (not add_only and not recovered and slot.evidence_source == "recovered"
+              and values.get("arn") and slot.arn in (None, values["arn"])):
+            slot.evidence_source = "uia"        # a confirmation page shows the ack; first_seen_as keeps "recovered"
+            changes["evidence_source"] = ["recovered", "uia"]
         for k, v in values.items():
             old = slot.values.get(k)
             if k == "status_evidence":

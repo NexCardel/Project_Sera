@@ -1,5 +1,7 @@
 """Tracker dump status pills (2026-10-06): a submit message with no ARN is "Submitted" (light green); with an ARN
 it is "Submitted & E-verified" (dark green). Nothing stored changes, only what the table shows."""
+import json
+
 import pytest
 from PySide6.QtWidgets import QApplication
 
@@ -68,3 +70,11 @@ def test_the_status_filter_separates_submitted_from_everified(tmp_path):
     APP.processEvents()
     assert pills() == ["Submitted & E-verified"]
     win.deleteLater()
+
+
+def test_the_row_detail_says_when_a_row_was_first_seen_on_a_list_page():
+    mark = lambda how: {"raw_payload": {"source": {"first_seen_as": how}}}
+    assert tdw._first_seen_note(json.dumps(mark("recovered"))) == "First seen: list page (recovered)"
+    assert tdw._first_seen_note(mark("recovered")) == "First seen: list page (recovered)"
+    assert tdw._first_seen_note(json.dumps(mark("uia"))) == tdw._first_seen_note(json.dumps(mark("ocr"))) == ""
+    assert [tdw._first_seen_note(x) for x in (None, "", "not json", "[]", "{}")] == [""] * 5

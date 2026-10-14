@@ -297,6 +297,41 @@ def test_uia_confirmation_upgrades_the_ocr_mark(tmp_path):
     assert (src["evidence_source"], src["first_seen_as"]) == ("uia", "ocr")
 
 
+ACK_TODAY = "123456789150726"                   # dated the rig's "today", so a success page may take it
+SUBMITTED = ["You have successfully submitted your return!", "Acknowledgement Number :", ACK_TODAY]
+
+
+def test_a_row_born_on_a_list_page_is_marked_recovered(tmp_path):
+    """6.5: a card of a list page can make a row on its own, and says it was born there."""
+    r = AbsorbRig(tmp_path)
+    r.read(PROFILE_URL, PROFILE_PAGE)
+    r.read(FILED_URL, filed_page(ack=ACK_TODAY))
+    row = [x for x in r.rows() if x["arn"] == ACK_TODAY][-1]
+    src = row["raw_payload"]["source"]
+    assert row["pan"] == PAN_A
+    assert (src["evidence_source"], src["first_seen_as"]) == ("recovered", "recovered")
+
+
+def test_a_later_confirmation_keeps_the_first_seen_mark(tmp_path):
+    r = AbsorbRig(tmp_path)
+    r.read(PROFILE_URL, PROFILE_PAGE)
+    r.read(FILED_URL, filed_page(ack=ACK_TODAY))
+    r.rows()
+    r.read(DASHBOARD, SUBMITTED, advance=1)                        # the confirmation page, seen late
+    rows = [x for x in r.rows() if x["arn"] == ACK_TODAY]
+    src = rows[-1]["raw_payload"]["source"]
+    assert (src["evidence_source"], src["first_seen_as"]) == ("uia", "recovered")
+    assert len([sl for sl in r.session().slots if sl.arn == ACK_TODAY]) == 1       # one row, not two
+
+
+def test_the_same_list_page_again_stays_one_recovered_row(tmp_path):
+    r = AbsorbRig(tmp_path)
+    r.read(PROFILE_URL, PROFILE_PAGE)
+    for _ in range(3):
+        r.read(FILED_URL, filed_page(ack=ACK_TODAY), advance=1)
+    assert [sl.evidence_source for sl in r.session().slots] == ["recovered"]
+
+
 def test_ocr_never_asks_for_a_demotion(tmp_path):
     asked = []
     r = AbsorbRig(tmp_path)

@@ -44,8 +44,9 @@ class _Health:
 class Harness:
     def __init__(self, browser: Browser, tmp_path, *, keep_state: bool = False, today: date = TODAY,
                  ocr: bool = True, tick_sec: float = FRAME_TICK_SEC, idle_step: float = IDLE_STEP_SEC,
-                 real: bool = False) -> None:
-        self.real = real                          # sleep each step for real (the owner's --real runs)
+                 real: bool = False, specs: Sequence[Path] = ()) -> None:
+        self.specs = list(specs)                  # extra spec files over the shipped ones (an overlay may enable a disabled record)
+        self.real = real                         # sleep each step for real (the owner's --real runs)
         self.browser, self.tmp, self.today = browser, Path(tmp_path), today
         self.keep_state, self.use_ocr, self.tick_sec, self.idle_step = keep_state, ocr, tick_sec, idle_step
         self.vc = VirtualClock()
@@ -62,7 +63,7 @@ class Harness:
         self.reader = PageReader(self.backend, clock=self.vc.now, diag=lambda m: None)
         self.platform = FakePlatform(self.browser, self.vc)
         self.ocr = FakeOcr() if self.use_ocr else None
-        self.sgt = SgtShadow(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
+        self.sgt = SgtShadow(store=SpecStore([BUILTIN_FIELDS_PATH, *self.specs], log=lambda m: None),
                              read_uia=lambda hwnd: {"lines": []}, dispatched_ids=lambda: [],
                              log_dir=self.tmp / "shadow", clock=self.vc.now, today=lambda: self.today,
                              echo=lambda m: None,

@@ -78,6 +78,19 @@ def _parse_record_datetime(ts_str: str) -> datetime | None:
         return None
 
 
+def _first_seen_note(raw_json) -> str:
+    """'First seen: list page (recovered)' for a row SGT first read as a card on a list page; '' otherwise."""
+    try:
+        obj = json.loads(raw_json) if isinstance(raw_json, str) else raw_json
+        raw = obj.get("raw_payload") if isinstance(obj, dict) else None
+        src = raw.get("source") if isinstance(raw, dict) else None
+        if isinstance(src, dict) and src.get("first_seen_as") == "recovered":
+            return "First seen: list page (recovered)"
+    except Exception:
+        pass
+    return ""
+
+
 def _resolve_ltt_submission_status(record: dict) -> tuple[str, dict]:
     """
     Evaluates raw record status into an authoritative
@@ -935,6 +948,7 @@ class PayloadInspectorDialog(QDialog):
             str(item_data.get('portal') or "Government Portal"),
             f"{captures} capture{'s' if captures != 1 else ''}",
             f"Updated {_format_to_local_time(item_data.get('last_updated') or item_data.get('created_at'))}",
+            _first_seen_note(raw_json),
         ) if p]
         meta_lbl = QLabel("  ·  ".join(meta_parts))
         meta_lbl.setObjectName("InspMeta")
