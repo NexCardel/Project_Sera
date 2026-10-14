@@ -14,5 +14,5 @@ WP10,3,Visible windows that are not in front,Done,claude-opus-5-5,1,8d62ece,"Vis
 WP11,3,Recovery: the latest filing on list and status pages,Done,claude-sonnet-5-5,1,f9135b1,Rows born on a list page are marked recovered; GST Track Return Status and ITR history specs ship disabled; owner check 20 asks for the labels.,2026-10-14 18:08
 WP12,4,Fleet health view and the mandatory update path,Done,claude-sonnet-5-5,1,369f49e,"Fleet panel, sharing interval setting, daily digest, mandatory update path. Narrow runs green: test_sgt_* 877, test_vsdc_* 434, fleet and update tests. Full suite not run. Owner checks 21 to 23.",2026-10-14 18:26
 WP13,4,Live soak tool and pass/fail,Done,claude-sonnet-5-5,1,5b8ef20,"tools/sgt_soak_report.py (7 rows + info, --expected ARN count, no identifiers in output) and --soak page in the node bench; 7 tests, narrow run 1318 passed; owner checks 24 and 25 are the 5 h soaks",2026-10-14 18:36
-WP14,5,Scenario sweep and documentation,Not started,claude-haiku-5-5,0,,,
+WP14,5,Scenario sweep and documentation,Done,claude-haiku-5-5,1,c47ec3d,"Scenario sweep done: 1318 passed, 3 skipped, 1 xfailed; 4 named tests missing and marked; D1 kept as open xfail",2026-10-14 18:42
 WPR,5,Final review,Not started,claude-opus-5-5,0,,,

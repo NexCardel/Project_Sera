@@ -1,16 +1,16 @@
-# SGT never-miss — report (2026-10-14 18:27)
+# SGT never-miss — report (2026-10-14 18:36)
 
 Deadline: 2026-10-17T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 3 |
+| Not started | 2 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 14 |
+| Done | 15 |
 | Blocked | 0 |
 
-Runs: 18   output tokens: 868223   API-equivalent cost: $64.88
+Runs: 19   output tokens: 905649   API-equivalent cost: $67.40
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -28,7 +28,7 @@ Runs: 18   output tokens: 868223   API-equivalent cost: $64.88
 | WP10 | Done | opus | 8d62ece | Visible windows that are not in front | Visible windows not in front watched every 1 s (cap 3, front first, covered by union left out); C8/profile 3 background success green; 1296 passed; owner checks |
 | WP11 | Done | sonnet | f9135b1 | Recovery: the latest filing on list and status pages | Rows born on a list page are marked recovered; GST Track Return Status and ITR history specs ship disabled; owner check 20 asks for the labels. |
 | WP12 | Done | sonnet | 369f49e | Fleet health view and the mandatory update path | Fleet panel, sharing interval setting, daily digest, mandatory update path. Narrow runs green: test_sgt_* 877, test_vsdc_* 434, fleet and update tests. Full sui |
-| WP13 | Not started | sonnet |  | Live soak tool and pass/fail |  |
+| WP13 | Done | sonnet | 5b8ef20 | Live soak tool and pass/fail | tools/sgt_soak_report.py (7 rows + info, --expected ARN count, no identifiers in output) and --soak page in the node bench; 7 tests, narrow run 1318 passed; own |
 | WP14 | Not started | haiku |  | Scenario sweep and documentation |  |
 | WPR | Not started | opus |  | Final review |  |
 
@@ -54,6 +54,8 @@ Runs: 18   output tokens: 868223   API-equivalent cost: $64.88
 - **WP12** What does the daily digest text hold? → Fixed sentences with counts and PC names only, 7 lines always; saved in capture_digest_text, once a day, admin PC only (Privacy rule: no client data anywhere; the HUD pill and settings panel show the same text)
 - **WP12** How do the panel colours cope with a sharing interval of 1 to 60 minutes? → Fresh for sync_min + 3 minutes, silent after max(10, 2 x sync_min); the interval travels in each record (The old 3 minute green rule would turn every PC amber at the 15 minute default)
 - **WP12** How does the digest get yesterday's blind and stalled minutes and the row counters? → Records carry blind/stalled totals for yesterday (copied at day rollover); row counters are since each PC last started (A PC that restarts mid-day loses its counters, so the digest says 'counted since each PC last started' instead of claiming a day total)
+- **WP13** How is p95 read time measured from the logs, and what is the pass line? → p95 of each beat's uia_last_ms (beats with at least one read) in the first segment vs the last segment (an hour each, or a third of the window under 3 h); last <= max(2 x first, 100 ms) (vsdc.log has only a per-minute last/max read time, not each read; max would over-count outliers; the 100 ms floor stops a 20 -> 45 ms drift failing the soak)
+- **WP13** How are missed submissions counted, and how does the report stay free of identifiers? → each ARN in --expected must appear in a dataset event or session_end payload of the window at status Submitted or higher; the report prints counts and line numbers of the expected file only, and the final text passes through redact_identifiers (exact count without printing any ARN, client or link; an ARN found at Draft is under-stated, which is as bad as missing it)
 
 ## Checks waiting for you
 
@@ -80,3 +82,5 @@ Runs: 18   output tokens: 868223   API-equivalent cost: $64.88
 - #21 (WP12) Owner: set mandatory to true in version.json for the next release that carries WP1 to WP5 (I never set it). Until then every update keeps the normal 3 minute idle rule. — Not run
 - #22 (WP12) Owner: confirm the 15 minute default sharing interval (D10) and the Capture health panel and digest wording in Settings > Tracker on a real PC; the panel was only built offscreen in tests, never looked at in a real window. — Not run
 - #23 (WP12) Owner: after the next release, confirm a staged update shows the 'Update ready' HUD event once and that the PC restarts itself when idle; the ps1 change (mandatory copied into pending.json) is untested outside the code review. — Not run
+- #24 (WP13) 5 h soak on the dev PC (mock pages, no client): with Sera running (capture engine on, VSDC_ALLOW_LOCAL_TEST=1) run 'python tools/sgt_i_uia_node_bench.py --soak --hours 5'; it prints the exact report command and writes the expected-ARN file to the temp folder. Afterwards run that command (python tools/sgt_soak_report.py --start ... --end ... --expected ...). PASS = overall PASS: 0 missed, p95 read time in the last hour under 2x the first hour, working set growth under 100 MB, 0 stalls, 0 beat gaps, 0 abandoned workers. Put the numbers only into docs/sgt-never-miss-soak.md. — Not run
+- #25 (WP13) 5 h soak on one office PC with real work: write the ARNs of that day's test filings (one per line, outside the repo) and run python tools/sgt_soak_report.py --start 'YYYY-MM-DD HH:MM' --end 'YYYY-MM-DD HH:MM' --expected <file> on that PC (end = a minute after the last filing). PASS = same as the dev PC soak. Record the numbers only (no ARNs, names or links) in docs/sgt-never-miss-soak.md. — Not run
