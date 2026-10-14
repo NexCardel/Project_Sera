@@ -1,16 +1,16 @@
-# SGT never-miss — report (2026-10-14 18:36)
+# SGT never-miss — report (2026-10-14 18:43)
 
 Deadline: 2026-10-17T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 2 |
+| Not started | 1 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 15 |
+| Done | 16 |
 | Blocked | 0 |
 
-Runs: 19   output tokens: 905649   API-equivalent cost: $67.40
+Runs: 20   output tokens: 909482   API-equivalent cost: $69.71
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -29,7 +29,7 @@ Runs: 19   output tokens: 905649   API-equivalent cost: $67.40
 | WP11 | Done | sonnet | f9135b1 | Recovery: the latest filing on list and status pages | Rows born on a list page are marked recovered; GST Track Return Status and ITR history specs ship disabled; owner check 20 asks for the labels. |
 | WP12 | Done | sonnet | 369f49e | Fleet health view and the mandatory update path | Fleet panel, sharing interval setting, daily digest, mandatory update path. Narrow runs green: test_sgt_* 877, test_vsdc_* 434, fleet and update tests. Full sui |
 | WP13 | Done | sonnet | 5b8ef20 | Live soak tool and pass/fail | tools/sgt_soak_report.py (7 rows + info, --expected ARN count, no identifiers in output) and --soak page in the node bench; 7 tests, narrow run 1318 passed; own |
-| WP14 | Not started | haiku |  | Scenario sweep and documentation |  |
+| WP14 | Done | haiku | c47ec3d | Scenario sweep and documentation | Scenario sweep done: 1318 passed, 3 skipped, 1 xfailed; 4 named tests missing and marked; D1 kept as open xfail |
 | WPR | Not started | opus |  | Final review |  |
 
 ## Decisions taken for you
@@ -56,6 +56,8 @@ Runs: 19   output tokens: 905649   API-equivalent cost: $67.40
 - **WP12** How does the digest get yesterday's blind and stalled minutes and the row counters? → Records carry blind/stalled totals for yesterday (copied at day rollover); row counters are since each PC last started (A PC that restarts mid-day loses its counters, so the digest says 'counted since each PC last started' instead of claiming a day total)
 - **WP13** How is p95 read time measured from the logs, and what is the pass line? → p95 of each beat's uia_last_ms (beats with at least one read) in the first segment vs the last segment (an hour each, or a third of the window under 3 h); last <= max(2 x first, 100 ms) (vsdc.log has only a per-minute last/max read time, not each read; max would over-count outliers; the 100 ms floor stops a 20 -> 45 ms drift failing the soak)
 - **WP13** How are missed submissions counted, and how does the report stay free of identifiers? → each ARN in --expected must appear in a dataset event or session_end payload of the window at status Submitted or higher; the report prints counts and line numbers of the expected file only, and the final text passes through redact_identifiers (exact count without printing any ARN, client or link; an ARN found at Draft is under-stated, which is as bad as missing it)
+- **WP14** Four scenario tests named in section 11 do not exist (A8, D3, D4, D12) → Mark each row in section 11 with what exists and what is missing; do not write new tests in this sweep (WP14 is a sweep and documentation WP; D4 already has an equivalent unit test under a different name, and the others need new harness scenarios, which is a separate piece of work)
+- **WP14** D1 harsh case is an open xfail (test_d1_harsh_both_tabs_unread_before_the_first_switch) → Keep the xfail; section 11 D1 becomes Partial, not Closed (The xfail is a real open finding from WP6 that WP9 left untouched; marking it Closed would hide it)
 
 ## Checks waiting for you
 
