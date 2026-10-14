@@ -26,9 +26,9 @@ def test_profile_3_zero_missed(sim):
     _run(profiles.parallel_filing(), sim)
 
 
-@pytest.mark.xfail(strict=True, reason="WP10 watches visible browser windows that are not in front")
 def test_profile_3_background_success_is_caught(sim):
-    _run(profiles.parallel_filing(background_success=True), sim)
+    h = _run(profiles.parallel_filing(background_success=True), sim)
+    assert h.counts["bg"] > 0                       # the windows not in front were watched
 
 
 def test_profile_4_zero_missed(sim):

@@ -11,12 +11,13 @@ from typing import Any, List
 from PIL import Image, ImageDraw
 
 from core.vsdc import vsdc_windows
-from core.vsdc.vsdc_windows import WindowInfo
+from core.vsdc.vsdc_windows import TopWindow, WindowInfo
 
 from .fake_backend import VirtualClock
-from .fake_browser import Browser
+from .fake_browser import OTHER_APP, Browser
 
 SIZE = 320                        # 32 x 32 cells of 10 px: the gate's signature grid
+OTHER_APP_HWND = 9                # the other program's window (never a browser window's handle)
 TYPED_ROW, TOAST_ROW = 5, 20
 
 
@@ -29,14 +30,18 @@ class FakePlatform:
         return self._b.front_at(self._vc.rel())
 
     def windows(self, foreground: int) -> List[WindowInfo]:
-        """Foreground only, as vsdc_windows.browser_windows does today."""
-        w = self._b.window_of(foreground)
-        if w is None or not w.alive_at(self._vc.rel()):
-            return []
-        page = w.page_at(self._vc.rel())
-        title = page.window_title() if page is not None else "New Tab - Google Chrome"
-        info = WindowInfo(hwnd=w.hwnd, title=title, proc_name="chrome.exe")
-        return [info] if vsdc_windows.is_watchable(info) else []
+        """As vsdc_windows.browser_windows: the real choice (pick_windows) over the browser's z-order, so a
+        window behind a maximised one is covered and one on another monitor is watched."""
+        t = self._vc.rel()
+        tops = []
+        for hwnd, rect in self._b.z_order_at(t):
+            if hwnd == OTHER_APP:
+                tops.append(TopWindow(hwnd=OTHER_APP_HWND, rect=rect, title="Book1 - Excel", proc_name="excel.exe"))
+                continue
+            page = self._b.window_of(hwnd).page_at(t)
+            title = page.window_title() if page is not None else "New Tab - Google Chrome"
+            tops.append(TopWindow(hwnd=hwnd, rect=rect, title=title, proc_name="chrome.exe"))
+        return vsdc_windows.pick_windows(foreground, tops)
 
     def screenshot(self, hwnd: int) -> Any:
         self.shots += 1

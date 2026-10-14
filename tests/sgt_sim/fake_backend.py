@@ -87,6 +87,7 @@ class FakeBackend:
         self.reads = 0
         self.calls: Counter = Counter()
         self.scope_times: List[float] = []        # virtual seconds at which a Document list was asked for
+        self.spans: List[Tuple[int, float, float]] = []   # (browser pid, start, end) of every page read (R9)
 
     def init_thread(self) -> None:
         pass
@@ -150,4 +151,6 @@ class FakeBackend:
         elif seen.partial_first_read and seen.reads == 1:
             lines = lines[:2]
         self._vc.spend(page.read_ms / 1000.0)
+        w = self._b.window_of_tab(element)
+        self.spans.append((w.pid if w else 0, t, t + page.read_ms / 1000.0))
         return seen.nodes or [{"parent": -1, "depth": 0, "ctype": CT_TEXT, "name": ln} for ln in lines]

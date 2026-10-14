@@ -547,3 +547,66 @@ def test_sgt_alone_uses_only_the_capture_loop(harness):
     harness.tick()
     r.extract_browser_url.assert_not_called()
     assert r.capture is not None
+
+
+# ---- WP10: windows that are not in front ----------------------------------------------------------------
+
+def _behind(r, title=TITLE):
+    """The rig's window is on screen but another program is in front."""
+    r.platform.fg = 99
+    r.platform.windows = lambda fg: [WindowInfo(hwnd=HWND, title=title, proc_name="chrome.exe", background=True)]
+
+
+def test_a_background_window_is_looked_at_every_bg_tick(rig):
+    from core.vsdc import vsdc_windows
+    r = rig()
+    _behind(r)
+    r.step(30)                                                # 10.5 s at 0.35 s a tick
+    looks = 10.5 / vsdc_windows.BG_TICK_SEC
+    assert looks - 2 <= r.platform.shots <= looks + 1
+    assert r.page_reads() and all(c.background for c in r.asked)
+    assert r.backend.reads
+
+
+def test_a_background_window_is_not_read_before_its_url_is_known(rig):
+    r = rig()
+    _behind(r)
+    r.step()
+    assert [c.reason for c in r.asked] == ["scope"] and r.platform.shots == 0
+
+
+def test_the_tripwire_looks_only_at_the_window_in_front(rig):
+    r = rig(docs=[Doc("https://registry.example.gov.in/home", ["Not a portal"])], title="Registry - Google Chrome")
+    _behind(r, "Registry - Google Chrome")
+    r.step(12)
+    assert r.out_of_scope == [] and r.backend.reads == []
+
+
+def test_health_counts_a_background_window_only_on_its_document_url(rig):
+    r = rig(docs=[Doc("", ["Fictional GST page"])], bar=PORTAL)
+    _behind(r)
+    r.step(12)
+    calls = [c for c in r.health.window.call_args_list if c.args[0] == HWND]
+    assert calls and not any(c.args[1] for c in calls)        # address bar only: never counted as in scope
+    assert not any(c.kwargs.get("titled_portal") for c in calls)
+    assert r.backend.reads                                    # but the page is still read
+    r2 = rig()
+    _behind(r2)
+    r2.step(12)
+    assert any(c.args[1] for c in r2.health.window.call_args_list)
+
+
+def test_each_absorbed_read_tells_health_its_window(rig):
+    r = rig()
+    _behind(r)
+    r.step(12)
+    assert r.sgt.observed
+    r.health.reading.assert_called_with(HWND)
+
+
+def test_the_heartbeat_front_fields_describe_only_the_window_in_front(rig):
+    r = rig()
+    _behind(r)
+    r.step(12)
+    d = r.loop.diag()
+    assert d.get("front") == "other" and d.get("bg") == 1 and "page" not in d and "in_scope" not in d

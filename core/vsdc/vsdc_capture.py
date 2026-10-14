@@ -1,8 +1,9 @@
 """
 core/vsdc/vsdc_capture.py - the capture loop: SGT's path, out of the router
 ============================================================================
-SGT never-miss blueprint sections 4.4, 4.7 (foreground only for now), 4.8 and WP4, with the
-review corrections R2, R7 and R10.
+SGT never-miss blueprint sections 4.4, 4.7, 4.8 and WP4, with the review corrections R2, R7 and
+R10. WP10: visible browser windows that are not in front are watched too, each every BG_TICK_SEC,
+by the same rules as the one in front (their own scope gate, lane and reads; ctx.background).
 
 Before: SGT's page reads ran inside the router's tick, behind the router's own address-bar read
 on the capture thread, and a read that took longer than 3 s was thrown away. Now, each tick:
@@ -180,8 +181,10 @@ class CaptureLoop:
                 self._diag["error"] = type(e).__name__
         foreground = self._platform.foreground()
         windows = self._platform.windows(foreground)
-        if not windows:
+        if all(w.background for w in windows):
             self._diag["front"] = "none" if not foreground else "other"
+        if any(w.background for w in windows):
+            self._diag["bg"] = sum(1 for w in windows if w.background)
         for w in windows:
             ws = self._states.get(w.hwnd)
             if ws is None:
@@ -304,6 +307,7 @@ class CaptureLoop:
                 keep.append(r)
             elif verdict:
                 self._counts["ocr_absorbed"] += 1
+                self._health_reading(r.ctx.hwnd)
                 self._sgt.absorb(r, now=now)
             else:
                 self._counts["ocr_dropped"] += 1
@@ -314,6 +318,16 @@ class CaptureLoop:
             self._health.answered()
         except Exception:
             pass
+
+    def _health_reading(self, hwnd: int) -> None:
+        """SGT reports the read it absorbs to health without a window: say which one it is (with windows not
+        in front, the last window of a tick is not always the one read)."""
+        reading = getattr(self._health, "reading", None)
+        if reading is not None:
+            try:
+                reading(hwnd)
+            except Exception:
+                pass
 
     def _learn_url(self, ws: WindowState, r: ReadResult) -> None:
         url = r.url
@@ -338,6 +352,7 @@ class CaptureLoop:
             portal = self._scope.portal_for_url(r.url) or r.ctx.portal
             self._sgt.observe_window(r.ctx.hwnd, r.tab_after, portal, url, r.ctx.title)
         self._counts["absorbed"] += 1
+        self._health_reading(r.ctx.hwnd)
         out = self._sgt.absorb(r, frame=frame, ocr=self._ocr, now=self._clock(), blind_retries=ws.blind_retries)
         if isinstance(out, str) and out == REASON_BLIND_RETRY:
             ws.blind_retries += 1           # a page that read fine before came back blind: again, 0.3 s on
@@ -365,20 +380,27 @@ class CaptureLoop:
             in_scope = self._scope.is_in_scope_url(ws.url)
             if in_scope:
                 ws.scope_verified_at = now
-            elif self._on_out_of_scope is not None:
-                self._on_out_of_scope(w.hwnd, ws.url)
+            elif self._on_out_of_scope is not None and not w.background:
+                self._on_out_of_scope(w.hwnd, ws.url)   # the tripwire looks only at the window in front
         else:
             in_scope = (titled_portal and ws.scope_verified_at > 0
                         and now - ws.scope_verified_at <= SCOPE_GRACE_SEC)
         portal = (self._scope.portal_for_url(ws.url) if fresh else "") or ws.portal
-        self._health.window(w.hwnd, in_scope, portal, titled_portal=titled_portal, url_readable=fresh)
-        self._diag.update(front=w.proc_name or "?", url=(ws.url_source or "read") if fresh else "none",
-                          in_scope="yes" if in_scope else "no", tab="known" if ws.tab else "unknown")
+        if w.background:
+            # WP10: a window not in front counts for health only while its own Document URL is on a portal
+            # (browser_windows already left out covered ones); it never raises scope-lost.
+            self._health.window(w.hwnd, in_scope and fresh and ws.url_source == "document", portal,
+                                titled_portal=False, url_readable=fresh)
+        else:
+            self._health.window(w.hwnd, in_scope, portal, titled_portal=titled_portal, url_readable=fresh)
+            self._diag.update(front=w.proc_name or "?", url=(ws.url_source or "read") if fresh else "none",
+                              in_scope="yes" if in_scope else "no", tab="known" if ws.tab else "unknown")
         if not in_scope:
             ws.last_sig = ws.prev_sig = None    # nothing of a page outside the portals is kept
             ws.green, ws.ocr_due, ws.flash_armed_at = (), "", 0.0
             return
-        self._diag.update(portal=portal, page=self._scope.sanitize_page_url(ws.url) if fresh else None)
+        if not w.background:
+            self._diag.update(portal=portal, page=self._scope.sanitize_page_url(ws.url) if fresh else None)
         owner = None
         if self._sgt is not None:
             # SGT's session bookkeeping for the page in view; a read asked now belongs to `owner`.

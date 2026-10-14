@@ -123,10 +123,13 @@ def due_date_rush(clients: int = 20, *, ack_visible: float = 10.0, seed: int = 2
 
 def parallel_filing(clients: int = 3, *, background_success: bool = False, ack_visible: float = 10.0) -> Profile:
     """Several windows, a different client in each, the user alternating while the portals process.
-    background_success: each success appears in a window the user has left and is replaced (by the portal's
-    own logout) before they come back; today only the front window is watched."""
+    background_success: each window is on its own monitor, and each success appears in a window the user has
+    left and is replaced (by the portal's own logout) before they come back (WP10 watches visible windows)."""
     b = Browser()
     windows = [b.window(tabs=1, opened=0.0) for _ in range(clients)]
+    if background_success:
+        for k, w in enumerate(windows):
+            w.rect = (1920 * k, 0, 1920 * (k + 1), 1040)
     expected, spans, t_end = [], [], 0.0
     for k, (w, c) in enumerate(zip(windows, make_clients(clients))):
         t, sub = gst_filing(w.tabs[0], 2.0 + 37.0 * k, c, k + 1, form="GSTR3B", month=k, ack_visible=ack_visible,

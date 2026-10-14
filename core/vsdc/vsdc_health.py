@@ -181,6 +181,13 @@ class HealthMonitor:
         except Exception:
             pass
 
+    def reading(self, hwnd: int) -> None:
+        """The read_result calls that follow belong to this window (the capture loop says so before
+        each read it hands to SGT: with windows not in front watched too, WP10, the last window() of a
+        tick is not always the window read)."""
+        with self._lock:
+            self._cur = hwnd
+
     def requested(self, ctx: Any = None) -> None:
         """A page read was handed to a worker (WP3+). Until read_result, it counts as in flight."""
         try:

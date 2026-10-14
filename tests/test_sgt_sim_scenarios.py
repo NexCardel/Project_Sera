@@ -223,10 +223,14 @@ def test_b4_modal_mid_read_invents_nothing(sim):
     assert not [r for _t, r in h.rows if r["pan"] == other.pan]
 
 
-def test_b6_two_clients_two_windows_alternating(sim):
+@pytest.mark.parametrize("side_by_side", [False, True])
+def test_b6_two_clients_two_windows_alternating(sim, side_by_side):
+    """Maximised one over the other, or side by side (WP10: then the one not in front is watched too)."""
     b = Browser()
     w1 = b.window(tabs=1)
     w2 = b.window(tabs=1)
+    if side_by_side:
+        w1.rect, w2.rect = (0, 0, 960, 1040), (960, 0, 1920, 1040)
     c1, c2 = make_clients(2, first=140)
     _t, s1 = gst_filing(w1.tabs[0], 2.0, c1, 1, ack_visible=30.0)
     _t, s2 = gst_filing(w2.tabs[0], 2.0, c2, 2, ack_visible=30.0)
@@ -279,13 +283,76 @@ def test_c3_user_closes_modal_at_once(sim):
     go(sim, b, [sub], t + 20.0)
 
 
-@pytest.mark.xfail(strict=True, reason="WP10 watches visible browser windows that are not in front")
 def test_c8_success_on_second_monitor_is_captured(sim):
     p = parallel_filing(clients=3, background_success=True)
     h = sim(p.browser)
     h.run(p.duration)
     h.end_day()
     assert_profile(h, p.expected)
+
+
+def test_c8_success_behind_a_maximised_program_is_not_watched(sim):
+    """The control: the same success behind a maximised Excel is covered, so nothing reads that window."""
+    b = Browser()
+    w, tab = _start(b)
+    c = make_client(155)
+    t, sub = gst_filing(tab, 2.0, c, 1, ack_visible=10.0)
+    b.focus(sub.visible_from - 1.0, None)
+    h = sim(b)
+    h.run(sub.visible_from + 8.0)
+    reads = len(h.backend.spans)
+    h.run(sub.visible_until - 0.5)
+    assert len(h.backend.spans) == reads
+    assert "bg" not in h.counts
+
+
+def test_an_out_of_scope_background_window_is_never_read(sim):
+    """A news site in the window beside the portal: its address is looked at, its page never read or pictured."""
+    b = Browser()
+    w1, w2 = b.window(tabs=1), b.window(tabs=1)
+    w1.rect, w2.rect = (0, 0, 960, 1040), (960, 0, 1920, 1040)
+    b.focus(0.0, w1)
+    news = w2.tabs[0].navigate(0.5, Page("https://news.example.com/today", ["Headline", "Story"], OUTSIDE,
+                                         title="News - Google Chrome"))
+    for k in range(10):
+        w2.tabs[0].toast(3.0 + 4.0 * k, Toast(["Breaking"], 1.5, 14))
+    c = make_client(156)
+    t, sub = gst_filing(w1.tabs[0], 2.0, c, 1)
+    h = go(sim, b, [sub], t + 20.0)
+    assert news.reads == 0
+    assert not [s for s in h.backend.spans if s[0] == w2.pid]
+    assert h.backend.calls["documents"] > 0          # its URL was asked for (the scope gate) - only that
+
+
+def test_d10_signing_dialog_in_front_still_reads_the_browser(sim):
+    """The DSC signer's dialog is in front while the portal shows the ARN: the browser behind it is watched."""
+    b = Browser()
+    w, tab = _start(b)
+    c = make_client(157)
+    t, sub = gst_filing(tab, 2.0, c, 1, ack_visible=8.0)
+    b.focus(sub.visible_from - 2.0, None, other_rect=(760, 380, 1160, 660))
+    b.focus(sub.visible_until + 3.0, w)
+    h = go(sim, b, [sub], t + 20.0)
+    assert h.counts["bg"] > 0
+
+
+def test_r9_a_background_window_never_reads_a_heavy_page_beside_its_browser(sim):
+    """R9 holds for windows not in front: two windows of one browser process, both on 1.5 s pages that keep
+    changing, never have two heavy reads running at once once each page's weight is known."""
+    b = Browser()
+    w1 = b.window(tabs=1)
+    w2 = b.window(tabs=1, pid=w1.pid)
+    w1.rect, w2.rect = (0, 0, 1920, 1040), (1920, 0, 3840, 1040)
+    b.focus(0.0, w1)
+    for w, n in ((w1, 1), (w2, 2)):
+        w.tabs[0].navigate(0.5, Page(GST_RET + f"gstr1/{n}", ["Returns", "B2B invoices", f"Invoice {n}"],
+                                     PORTAL_GST, read_ms=1500.0))
+        w.tabs[0].typing(1.0, 40.0)
+    h = sim(b)
+    h.run(40.0)
+    spans = sorted((s, e) for pid, s, e in h.backend.spans if pid == w1.pid and s >= 8.0)
+    assert len(spans) >= 6
+    assert all(a[1] <= b_[0] + 1e-9 for a, b_ in zip(spans, spans[1:]))
 
 
 # ---- D: where the page is ------------------------------------------------------------------------------------------------

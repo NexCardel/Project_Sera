@@ -71,6 +71,29 @@ class HealthStateTests(unittest.TestCase):
         self.assertEqual(r.phone[0][:2], ("PC-One", "blind"))
         self.assertTrue(any(line.startswith("health state=blind") for line in r.logs))
 
+    def test_reads_count_for_the_window_named_by_reading(self):
+        """WP10: the window in front reads fine, a window behind it (looked at last) does not - the
+        blind reads land on neither by accident: each read names its window."""
+        r = Rig()
+        for _ in range(30):
+            r.clock.advance(1.0)
+            r.m.window(1, True, "GST Portal")
+            r.m.window(2, False, "GST Portal")       # behind, address bar only: not counted in scope
+            r.m.reading(1)
+            r.m.read_result(True, 100.0)
+            r.m.reading(2)
+            r.m.read_result(False, 100.0)
+            r.m.tick()
+        self.assertEqual(r.m.state, "ok")
+        for _ in range(25):                            # the window in front turns blind: noticed
+            r.clock.advance(1.0)
+            r.m.window(1, True, "GST Portal")
+            r.m.window(2, False, "GST Portal")
+            r.m.reading(1)
+            r.m.read_result(False, 100.0)
+            r.m.tick()
+        self.assertEqual(r.m.state, "blind")
+
     def test_blind_needs_a_read_attempt(self):
         r = Rig()
         for _ in range(40):

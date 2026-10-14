@@ -15,6 +15,8 @@ from typing import Dict, List, Optional
 PORTAL_ITR = "itr"
 PORTAL_GST = "gst"
 OUTSIDE = ""                      # a page outside both portals
+FULL = (0, 0, 1920, 1040)         # a maximised window on the first monitor (every window's default)
+OTHER_APP = 0                     # focus(t, None): another program is in front (Excel, Tally, a signing dialog)
 ACTIVE_BEFORE_SEC = 8.0           # the harness runs at the capture loop's own pace this long around a change
 ACTIVE_AFTER_SEC = 3.0
 
@@ -107,6 +109,7 @@ class Window:
     def __init__(self, hwnd: int, pid: int, tabs: List[Tab], opened: float = 0.0) -> None:
         self.hwnd, self.pid, self.tabs = hwnd, pid, list(tabs)
         self.opened, self.closed = opened, None
+        self.rect = FULL                  # where it is on screen (another monitor: (1920, 0, 3840, 1040))
         self._sel_t: List[float] = [opened]
         self._sel: List[Tab] = [self.tabs[0]]
         self.marks: List[float] = [opened]
@@ -151,6 +154,7 @@ class Browser:
         self._pids = itertools.count(5001)
         self._front_t: List[float] = []
         self._front: List[int] = []
+        self._other_rect: List[tuple] = []        # the other program's rectangle, per focus(t, None)
         self._marks: List[float] = []
         self._tabs: List[Tab] = []
         self._sorted_marks: List[float] = []
@@ -166,11 +170,34 @@ class Browser:
         self.windows[w.hwnd] = w
         return w
 
-    def focus(self, t: float, window: Optional[Window]) -> None:
+    def focus(self, t: float, window: Optional[Window], other_rect: tuple = FULL) -> None:
+        """`window` comes in front at t; None: another program does, maximised unless `other_rect` says
+        otherwise (a small signing dialog covers nothing)."""
         assert not self._front_t or t >= self._front_t[-1]
         self._front_t.append(t)
-        self._front.append(window.hwnd if window else 0)
+        self._front.append(window.hwnd if window else OTHER_APP)
+        self._other_rect.append(other_rect)
         self._marks.append(t)
+
+    def z_order_at(self, t: float) -> List[tuple]:
+        """(hwnd, rect) of the browser windows open at t and of the other program, top first: the most
+        recently focused on top, windows never focused at the bottom."""
+        out, seen = [], set()
+        i = bisect.bisect_right(self._front_t, t) - 1
+        for k in range(i, -1, -1):
+            hwnd = self._front[k]
+            if hwnd in seen:
+                continue
+            seen.add(hwnd)
+            if hwnd == OTHER_APP:
+                out.append((OTHER_APP, self._other_rect[k]))
+            elif self.windows[hwnd].alive_at(t):
+                out.append((hwnd, self.windows[hwnd].rect))
+        out += [(h, w.rect) for h, w in sorted(self.windows.items()) if h not in seen and w.alive_at(t)]
+        return out
+
+    def window_of_tab(self, tab: Tab) -> Optional[Window]:
+        return next((w for w in self.windows.values() if tab in w.tabs), None)
 
     def crash(self, t: float) -> None:
         """The browser is gone (a power cut, a crash): every window closes."""
