@@ -1,16 +1,16 @@
-# SGT never-miss — report (2026-10-14 17:36)
+# SGT never-miss — report (2026-10-14 17:51)
 
 Deadline: 2026-10-17T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 6 |
+| Not started | 5 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 11 |
+| Done | 12 |
 | Blocked | 0 |
 
-Runs: 15   output tokens: 689587   API-equivalent cost: $49.72
+Runs: 16   output tokens: 737943   API-equivalent cost: $53.50
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -25,7 +25,7 @@ Runs: 15   output tokens: 689587   API-equivalent cost: $49.72
 | WP7 | Done | sonnet | c5e3c1c | Change gate v2 tuning and the flash OCR trigger | OCR lane plus flash/green/paused triggers; held until a read confirms the tab; R2 and C1-heavy xfails now green; owner check 15 for the D4 histogram |
 | WP8 | Done | sonnet | 6a5885f | Blind pages on every portal | Per-day ocr_only_rows in SpecStats + health row hook; GST plan note; blind-page switch already done by WP5/WP7. 1259 passed. |
 | WP9 | Done | sonnet | d79a413 | Identity persistence | 4 h idle, 12 h parked identity on disk, resume by client, window_idle/window_gone, monotonic idle clock; narrow run green; owner check 17 |
-| WP10 | Not started | opus |  | Visible windows that are not in front |  |
+| WP10 | Done | opus | 8d62ece | Visible windows that are not in front | Visible windows not in front watched every 1 s (cap 3, front first, covered by union left out); C8/profile 3 background success green; 1296 passed; owner checks |
 | WP11 | Not started | sonnet |  | Recovery: the latest filing on list and status pages |  |
 | WP12 | Not started | sonnet |  | Fleet health view and the mandatory update path |  |
 | WP13 | Not started | sonnet |  | Live soak tool and pass/fail |  |
@@ -45,6 +45,9 @@ Runs: 15   output tokens: 689587   API-equivalent cost: $49.72
 - **WP5** absorb() details the blueprint leaves open (clock, blind counter, logout page) → absorb(result, frame, ocr, now, blind_retries): age checked on the reader's clock (now) from asked_at as the reader does; s.last_read set on SGT's own clock at absorb; the blind-retry counter lives in the loop's WindowState and is reset by a URL change or a non-blind read; observe_window returns None on a logout page and the loop asks no page read there; when a page read is the newest word on the window's URL the loop calls observe_window with it before absorb. (The result's times are time.monotonic while SGT's clock is wall time; mixing them would break observe()'s 15 s re-read gate. Calling observe_window first makes a logout/login reached during the read end the session before its text could land (R1).)
 - **WP7** An OCR picture has no tab bracketing like a UIA read; how is it attributed? → Held until the first clean read that began after the picture shows the same tab (absorbed), else dropped (The loop's tab knowledge is up to 1 s old; a flash right after a tab switch was attributed to the old tab's session (test_b1). An immediate scope read confirms the tab.)
 - **WP7** How does a toast that appears in the same tick as a navigation get a flash scan? → A change of FLASH_MIN_CELLS or more arms the flash for OCR_ARM_SEC (1 s); the first tick where UIA is busy fires it (That tick's read is only just asked, so the busy test fails there; the toast is still up a tick later (R2 toast, C1 heavy).)
+- **WP10** What counts as a covered background window? → Its rectangle (DWM frame bounds) is fully hidden by the union of shown windows above it in z-order (rect subtraction, 2 px slack); click-through and tool windows hide nothing; minimised, cloaked (other virtual desktop), hung and off-monitor windows are never watched behind (4.7 only named the foreground's rectangle; a browser behind two side-by-side programs, or behind a maximised program that is not in front, is just as covered (Chromium builds no tree) and would read blind and raise false health alerts; IsHungAppWindow keeps PrintWindow off a hung browser)
+- **WP10** Which background windows get the MAX_WATCHED_WINDOWS slots? → Window in front first, then background windows titled like a portal (router PORTAL_KEYWORDS), then the rest by z-order (with more than 2 visible browser windows a news or PiP window must not take a lane slot from a portal window; uses the router's existing quick gate, no new portal rule)
+- **WP10** How do background windows feed health and the unlisted-portal tripwire? → Health counts a background window in scope only on a fresh Document URL, never raises scope-lost for it, and each absorbed read names its window (HealthMonitor.reading); the tripwire looks only at the window in front; heartbeat front/page fields stay the front window's, plus bg=<count> (WP10 rule: blind only if its Document URL is in scope and not covered; read_result had no window and would land on whichever window was looked at last; the tripwire probes UI names of an unlisted page, so its reach is not widened)
 
 ## Checks waiting for you
 
@@ -65,3 +68,5 @@ Runs: 15   output tokens: 689587   API-equivalent cost: $49.72
 - #15 (WP7) Confirm the D4 gate thresholds (GATE_MIN_CELLS=3, FLASH_MIN_CELLS=8, GATE_LEVEL_DELTA=2) against WP0's histogram. On an office PC with a real browser on the GST portal, run: venv/Scripts/python.exe tools/sgt_probe_pack.py gate --minutes 10 while filing normally (typing in a form, a toast, a page change). Pass: caret/typing frames fall in the 0-2 cell buckets, nearly all toast/banner frames in the 8+ buckets, and the tick cost stays low (D7). If many toasts land in 3-7 cells, report the histogram so FLASH_MIN_CELLS can be lowered; the defaults stay until then. — Not run
 - #16 (WP8) On the dev PC after a GST day: open ~/AmanAssociates_Sera/sgt_shadow/spec_stats.json and look at the ocr_rows key (counts per portal per day, no client data). Pass: it exists, ocr_rows for GST Portal is a small number (0 on a normal day), and a vsdc.log health line shows ocr_only_rows matching the day's count. Ask me if a GST row marked evidence_source=ocr appears that no UIA read ever confirmed. — Not run
 - #17 (WP9) Parked client identity (a PAN or GSTIN plus the draft in progress) is now kept on disk in sessions_state.json for up to 12 h so a restart or a new window can resume it. Default taken: yes, acceptable. Please confirm. — Not run
+- #18 (WP10) D6 STOP: run Sera with SGT on for a full office day with two browser windows visible (second monitor or side by side). Task Manager: Sera's CPU stays under ~5% average with both visible (compare with one window); vsdc.log heartbeat shows bg=1 or 2 and uia lanes <= 3, uia_late stays 0 and no health state=blind for a window you were not looking at. Pass = all of that; if CPU is too high, the fix is BG_TICK_SEC (core/vsdc/vsdc_windows.py), not turning D6 off. — Not run
+- #19 (WP10) Second-monitor filing: file one real return (GST or ITR) in a browser window on the second monitor while working in another program (Excel/Tally) in front on the first monitor, and leave the success page there. Pass = the tracker row (with ARN/ack) appears within ~10 s without ever clicking the browser. Then repeat with the browser maximised BEHIND a maximised Excel on the same monitor: no row is expected there (covered windows are not watched) and health must not say blind. — Not run
