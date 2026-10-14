@@ -65,8 +65,11 @@ def test_the_grid_holds_no_widgets_in_cells(win):
 def test_status_is_a_pill_and_the_client_cell_has_a_second_line(win):
     pills = [win.table.item(r, W.COL_STATUS).data(ROLE_PILL) for r in range(win.table.rowCount())]
     assert all(p and p[0] and p[1] for p in pills)
-    assert dict(pills)["Submitted & E-verified"] == "emerald"
-    assert dict(pills)["Not submitted"] != "emerald"
+    # (text, tone, dot): the dot is on for every status pill (mockup .gpill)
+    assert all(p[2] for p in pills)
+    tones = {p[0]: p[1] for p in pills}
+    assert tones["Submitted & E-verified"] == "emerald"
+    assert tones["Not submitted"] != "emerald"
     sub = win.table.item(0, W.COL_CLIENT).data(ROLE_SUB)
     assert sub and "ABCPD1001E" in sub
 
@@ -82,8 +85,11 @@ def test_every_row_action_has_a_tooltip_and_autofill_is_the_emerald_primary(win)
     for r in range(win.table.rowCount()):
         actions = win.table.item(r, W.COL_ACTIONS).data(ROLE_ACTIONS)
         assert actions and all(a.tooltip for a in actions)
-    first = win.table.item(0, W.COL_ACTIONS).data(ROLE_ACTIONS)[0]
-    assert first.key == "autofill" and first.primary and first.colour is None   # red means danger only
+    actions = win.table.item(0, W.COL_ACTIONS).data(ROLE_ACTIONS)
+    # owner decision 3: Inspect, then Autofill (the primary), then ⋮
+    assert actions[0].key == "view"
+    auto = next(a for a in actions if a.key == "autofill")
+    assert auto.primary and auto.colour is None   # red means danger only
 
 
 def test_rows_are_the_kit_tall_rows_in_both_modes(win):

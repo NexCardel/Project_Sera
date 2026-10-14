@@ -232,9 +232,9 @@ _STATUS_PILL_TONES = {
 }
 
 
-def _status_pill(status_text: str) -> tuple[str, str]:
-    """The grid delegate's pill for a submission status: (text, tone)."""
-    return status_text, _STATUS_PILL_TONES.get(status_text, "red")
+def _status_pill(status_text: str) -> tuple[str, str, bool]:
+    """The grid delegate's pill for a submission status: (text, tone, dot)."""
+    return status_text, _STATUS_PILL_TONES.get(status_text, "red"), True
 
 
 def _portal_ink(label: str) -> str:
@@ -727,7 +727,7 @@ class PayloadInspectorDialog(QDialog):
         if is_unreg:
             frame.add_header_widget(Pill("No matching client", "amber"))
         head_status, _ = _resolve_ltt_submission_status(item_data)
-        _, head_tone = _status_pill(head_status)
+        head_tone = _status_pill(head_status)[1]
         status_pill = Pill(head_status, "emerald" if head_tone == "green" else head_tone)
         status_pill.setToolTip("Latest submission status")
         frame.add_header_widget(status_pill)
@@ -1502,7 +1502,7 @@ class TrackerDumpWindow(QWidget):
         self._summary_tiles = {}
         for key, caption, tone, tip in (
             ("total", "Client containers", None, "Show everything (clears all filters)"),
-            ("unregistered", "Need a client", "amber", "Captures not matched to a registered client"),
+            ("unregistered", "Need a client", "orange", "Captures not matched to a registered client"),
             ("pending", "Awaiting e-verification", "amber", "Submitted, e-verification still pending"),
             ("not_submitted", "Not submitted", "red", "Not submitted or option expired"),
             ("today", "Captured today", "emerald", "Updated since midnight"),
@@ -1516,7 +1516,7 @@ class TrackerDumpWindow(QWidget):
         # ---- Filter row ----
         filter_layout = QHBoxLayout()
         filter_layout.setContentsMargins(0, 0, 0, 0)
-        filter_layout.setSpacing(T["s_2"])
+        filter_layout.setSpacing(K["gap_filter_row"])
         main_layout.addLayout(filter_layout)
         self._filter_layout = filter_layout
         # COMPACT moves the filter chips onto this second row (hidden in WIDE, so it takes no space).
@@ -1660,6 +1660,7 @@ class TrackerDumpWindow(QWidget):
 
         self.cmb_page_size = Select(items=["25", "50", "100", "200", "All"])
         self.cmb_page_size.setFixedHeight(K["h_sm"])
+        self.cmb_page_size.setFixedWidth(K["w_pager_sel"])
         self.cmb_page_size.setCurrentText("25")
         self.cmb_page_size.currentIndexChanged.connect(self._on_page_size_changed)
         self.grid_footer.add_widget(self.cmb_page_size)
@@ -1743,7 +1744,7 @@ class TrackerDumpWindow(QWidget):
         self._lbl_subtitle.setVisible(not compact)
 
         self.txt_search.setMinimumWidth(180)
-        self.txt_search.setMaximumWidth(320)
+        self.txt_search.setMaximumWidth(K["w_search_max"])
 
         for button, text, short in self._seg_buttons:
             label = short if compact else text
@@ -2220,13 +2221,14 @@ class TrackerDumpWindow(QWidget):
         """The buttons the grid draws in a row's Actions cell: autofill (registered clients), inspect,
         create client (unregistered rows) and the ⋮ overflow menu. A click arrives in _on_grid_action."""
         actions = []
-        if bool(item.get("client_id")) and not item.get("is_unassigned"):
-            actions.append(self._autofill_action(item))
+        # owner decision 3: Inspect · Autofill · ⋮ (the mockup's order)
         if is_grouped:
             tot = item.get("total_captures", 1)
             actions.append(CellAction("view", "mdi.eye-outline", f"Inspect ({tot} capture{'s' if tot != 1 else ''})"))
         else:
             actions.append(CellAction("view", "mdi.eye-outline", "View Payload"))
+        if bool(item.get("client_id")) and not item.get("is_unassigned"):
+            actions.append(self._autofill_action(item))
         if item.get("is_unassigned") or (not is_grouped and not item.get("client_id")):
             actions.append(CellAction("create", "mdi.account-plus", "Create a client from this capture"))
         actions.append(CellAction("more", "mdi.dots-vertical", "More actions (Create Client, Delete)"))
@@ -2393,7 +2395,7 @@ class TrackerDumpWindow(QWidget):
 
             portal_str = r.get("portal") or "Income Tax Portal"
             short, _ = _portal_short(portal_str)
-            p_item = self._table_item(row_idx, self.COL_FILING, _portal_ink(short))
+            p_item = self._table_item(row_idx, self.COL_FILING, T["text2"])
             p_item.setText(_filing_type(portal_str, short))
             p_item.setToolTip(portal_str)
 
@@ -2414,7 +2416,7 @@ class TrackerDumpWindow(QWidget):
             s_item.setToolTip("\n".join(tooltip_lines))
 
             dev_name = _extract_device_name(r)
-            dev_item = self._table_item(row_idx, self.COL_DEVICE, K["orange"])
+            dev_item = self._table_item(row_idx, self.COL_DEVICE, T["text2"])
             dev_item.setText(dev_name)
             method_val = r.get("capture_method", "Unknown")
             dev_item.setToolTip(f"Device: {dev_name}\nCapture Method: {method_val}")
@@ -2454,7 +2456,7 @@ class TrackerDumpWindow(QWidget):
 
             portal_str = r.get("service_name") or r.get("portal") or "Portal"
             short, _ = _portal_short(portal_str)
-            portal_item = self._table_item(row_idx, self.COL_FILING, _portal_ink(short))
+            portal_item = self._table_item(row_idx, self.COL_FILING, T["text2"])
             portal_item.setText(_filing_type(portal_str, short))
             portal_item.setToolTip(portal_str)
 
@@ -2475,7 +2477,7 @@ class TrackerDumpWindow(QWidget):
             s_item.setToolTip("\n".join(tooltip_lines))
 
             dev_name = _extract_device_name(r)
-            dev_item = self._table_item(row_idx, self.COL_DEVICE, K["orange"])
+            dev_item = self._table_item(row_idx, self.COL_DEVICE, T["text2"])
             dev_item.setText(dev_name)
             method = r.get("capture_method", "DOM_Tracker")
             dev_item.setToolTip(f"Device: {dev_name}\nCapture Method: {method}")

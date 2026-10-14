@@ -82,7 +82,7 @@ class TestTrackerDumpAutofillButton(unittest.TestCase):
         win = TrackerDumpWindow(mock_db, defer_first_load=True)
 
         registered = win._row_actions({"client_id": 5, "portal": "Income Tax"}, is_grouped=True)
-        self.assertEqual([a.key for a in registered], ["autofill", "view", "more"])
+        self.assertEqual([a.key for a in registered], ["view", "autofill", "more"])
 
         unassigned = win._row_actions({"client_id": None, "is_unassigned": True, "portal": "Income Tax"}, is_grouped=True)
         self.assertEqual([a.key for a in unassigned], ["view", "create", "more"])

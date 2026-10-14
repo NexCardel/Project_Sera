@@ -189,7 +189,7 @@ class TestWidthModes(_WindowCase):
         assert not self.win._lbl_subtitle.isHidden()
         assert not self.win._chip_row.isVisible()
         assert self.win.table.verticalHeader().defaultSectionSize() == 52
-        assert self.win.txt_search.width() == 320
+        assert self.win.txt_search.width() == 360   # mockup: the search box grows to 360
 
     def test_compact_page_moves_the_chips_to_their_own_row_and_back(self):
         self.win.resize(1000, 700)
