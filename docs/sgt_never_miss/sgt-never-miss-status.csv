@@ -9,7 +9,7 @@ WP5,2,"SGT absorbs by provenance: late results, torn and blind rules, source pol
 WP6,3,Simulation harness and the six day profiles,Done,claude-sonnet-5-5,2,1a31b24,"Sim harness tests/sgt_sim, profiles 1-6 pass at full size, 37 scenario tests (5 strict xfails for WP7/WP9/WP10); fixed cross-tab absorb and wedged pending read; owner check 14 real-sleep runs",2026-10-14 17:02
 WP7,3,Change gate v2 tuning and the flash OCR trigger,Done,claude-sonnet-5-5,1,c5e3c1c,OCR lane plus flash/green/paused triggers; held until a read confirms the tab; R2 and C1-heavy xfails now green; owner check 15 for the D4 histogram,2026-10-14 17:17
 WP8,3,Blind pages on every portal,Done,claude-sonnet-5-5,1,6a5885f,Per-day ocr_only_rows in SpecStats + health row hook; GST plan note; blind-page switch already done by WP5/WP7. 1259 passed.,2026-10-14 17:23
-WP9,3,Identity persistence,Not started,claude-sonnet-5-5,0,,,
+WP9,3,Identity persistence,Done,claude-sonnet-5-5,1,d79a413,"4 h idle, 12 h parked identity on disk, resume by client, window_idle/window_gone, monotonic idle clock; narrow run green; owner check 17",2026-10-14 17:36
 WP10,3,Visible windows that are not in front,Not started,claude-opus-5-5,0,,,
 WP11,3,Recovery: the latest filing on list and status pages,Not started,claude-sonnet-5-5,0,,,
 WP12,4,Fleet health view and the mandatory update path,Not started,claude-sonnet-5-5,0,,,

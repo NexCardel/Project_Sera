@@ -1,16 +1,16 @@
-# SGT never-miss — report (2026-10-14 17:17)
+# SGT never-miss — report (2026-10-14 17:24)
 
 Deadline: 2026-10-17T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 8 |
+| Not started | 7 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 9 |
+| Done | 10 |
 | Blocked | 0 |
 
-Runs: 13   output tokens: 626002   API-equivalent cost: $44.02
+Runs: 14   output tokens: 641879   API-equivalent cost: $45.62
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -23,7 +23,7 @@ Runs: 13   output tokens: 626002   API-equivalent cost: $44.02
 | WP5 | Done | opus | e60c416 | SGT absorbs by provenance: late results, torn and blind rules, source policy | absorb by provenance: owners + closed ring with R1 cuts, torn/blind rules, OCR add-only with R6; loop and replay on absorb; test_sgt_absorb 20 pass; owner check |
 | WP6 | Done | sonnet | 1a31b24 | Simulation harness and the six day profiles | Sim harness tests/sgt_sim, profiles 1-6 pass at full size, 37 scenario tests (5 strict xfails for WP7/WP9/WP10); fixed cross-tab absorb and wedged pending read; |
 | WP7 | Done | sonnet | c5e3c1c | Change gate v2 tuning and the flash OCR trigger | OCR lane plus flash/green/paused triggers; held until a read confirms the tab; R2 and C1-heavy xfails now green; owner check 15 for the D4 histogram |
-| WP8 | Not started | sonnet |  | Blind pages on every portal |  |
+| WP8 | Done | sonnet | 6a5885f | Blind pages on every portal | Per-day ocr_only_rows in SpecStats + health row hook; GST plan note; blind-page switch already done by WP5/WP7. 1259 passed. |
 | WP9 | Not started | sonnet |  | Identity persistence |  |
 | WP10 | Not started | opus |  | Visible windows that are not in front |  |
 | WP11 | Not started | sonnet |  | Recovery: the latest filing on list and status pages |  |
@@ -63,3 +63,4 @@ Runs: 13   output tokens: 626002   API-equivalent cost: $44.02
 - #13 (WP5) Replay diff on the real corpus (WP5 STOP, D3): on the dev PC run 'venv/Scripts/python.exe tools/sgt_replay.py diff' against the replay_baseline.json made at WB (re-run 'baseline' first only if it is missing). PASS = every line is 'newly written' (OCR-only rows with an ARN) or no lines at all; FAIL = any 'no longer written' or 'changed' line, especially a PAN/name/period/status that came from an OCR page before (OCR no longer sets the profile, changes pieces or raises a status without an ARN). Read the output on the PC only; do not paste values anywhere. — Not run
 - #14 (WP6) Run the real-sleep profile runs (about 18 min): set the environment variable SGT_SIM_REAL to 1, then run venv/Scripts/python.exe -m pytest -q -p no:cacheprovider tests/test_sgt_sim_profiles.py -k real_sleeps. Both tests must pass. — Not run
 - #15 (WP7) Confirm the D4 gate thresholds (GATE_MIN_CELLS=3, FLASH_MIN_CELLS=8, GATE_LEVEL_DELTA=2) against WP0's histogram. On an office PC with a real browser on the GST portal, run: venv/Scripts/python.exe tools/sgt_probe_pack.py gate --minutes 10 while filing normally (typing in a form, a toast, a page change). Pass: caret/typing frames fall in the 0-2 cell buckets, nearly all toast/banner frames in the 8+ buckets, and the tick cost stays low (D7). If many toasts land in 3-7 cells, report the histogram so FLASH_MIN_CELLS can be lowered; the defaults stay until then. — Not run
+- #16 (WP8) On the dev PC after a GST day: open ~/AmanAssociates_Sera/sgt_shadow/spec_stats.json and look at the ocr_rows key (counts per portal per day, no client data). Pass: it exists, ocr_rows for GST Portal is a small number (0 on a normal day), and a vsdc.log health line shows ocr_only_rows matching the day's count. Ask me if a GST row marked evidence_source=ocr appears that no UIA read ever confirmed. — Not run
