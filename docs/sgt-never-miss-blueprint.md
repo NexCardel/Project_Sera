@@ -1518,4 +1518,4 @@ the scope allow-list, the privacy rules of the logs, and the process in constrai
 
 ## 14. Hand-off notes
 
-(written by each WP)
+- **WB** (2026-10-14, claude-haiku-5-5): baseline only, no code changed. Full suite via `venv/Scripts/python.exe tools/sgt_never_miss_suite.py` (log `logs/sgt-never-miss/suite-20261014-140145.log`): **T=3078 F=2 S=1**. Pre-existing failures at baseline (not yet diagnosed; a later WP's failure is new only if it is absent here): `tests/test_class_diff_render.py::test_output_paths_never_recorder_or_tracked_folders` and `tests/test_sdis_tables.py::test_command_line_prints_no_values`. Replay baseline: `venv/Scripts/python.exe tools/sgt_replay.py baseline` writes `replay_baseline.json` to `~/AmanAssociates_Sera` (client data, never in the repo); then `diff` after a spec edit, `diff --specs <file>` to try a spec without installing it; `show` and `health` also exist. Use `--days N` and `--corpus DIR` to narrow or relocate. The suite ran for over 10 min on this PC, so run it in the background and watch the log for the `--- T=` line.
