@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 import sera_keys
+from ui.components.kit import Caption
 from ui.components.kit import MessageBox, Banner, DialogFrame, FieldLabel, Input
 from ui.utils.tokens import TOKENS
 
@@ -66,7 +67,10 @@ class ChangeMasterPasswordDialog(QDialog):
         self.confirm_pw.setAccessibleName("Confirm new password")
         frame.add_widget(_field(FieldLabel("Confirm new password", for_widget=self.confirm_pw), self.confirm_pw))
 
-        frame.add_widget(Banner("The database is not modified. Only the key recovery file is re-encrypted.", "i"))
+        # the mockup's plain muted note, not an info banner
+        note = Caption("The database is not modified. Only the key recovery file is re-encrypted.")
+        note.setWordWrap(True)
+        frame.add_widget(note)
 
         self.lbl_error = Banner("", "r")
         self.lbl_error.hide()

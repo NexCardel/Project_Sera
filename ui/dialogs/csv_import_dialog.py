@@ -100,7 +100,7 @@ class CSVImportDialog(QDialog):
             "Attach services with a <i>'Services'</i> column or columns named <i>'Service: [Name]'</i> holding Yes/No.",
             "i"))
 
-        self.file_label = QLabel("No CSV file selected.")
+        self.file_label = QLabel("No CSV file selected. The file's encoding is detected and shown here.")
         self.file_label.setWordWrap(True)
         browse_btn = LabelledAction("Browse CSV…", icon="mdi.folder-open-outline",
                                     tooltip="Choose the CSV file to import")
