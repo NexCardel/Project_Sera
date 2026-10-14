@@ -1,16 +1,16 @@
-# SGT never-miss — report (2026-10-14 15:54)
+# SGT never-miss — report (2026-10-14 16:28)
 
 Deadline: 2026-10-17T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 11 |
+| Not started | 9 |
 | In progress | 0 |
-| Retry | 0 |
-| Done | 6 |
+| Retry | 1 |
+| Done | 7 |
 | Blocked | 0 |
 
-Runs: 8   output tokens: 292160   API-equivalent cost: $20.27
+Runs: 11   output tokens: 483261   API-equivalent cost: $33.69
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -20,8 +20,8 @@ Runs: 8   output tokens: 292160   API-equivalent cost: $20.27
 | WP2 | Done | sonnet | 366c04e | Rows never lost: database retry and dead letter | Retry + dead letter (core/capture_outbox.py), wired in main.py; 17 tests incl. a 6.5 s raw-DB lock; narrow run 1139 passed |
 | WP3 | Done | opus | 65611c4 | Reader v2: MTA lanes, cached read, tickets, torn detection, Document URL | Reader v2 built (not wired): MTA lanes with content+scope workers, R3 queue, R9 hold, torn, Document URL; 31 tests; owner checks 9-10 |
 | WP4 | Done | opus | a055055 | CaptureLoop: the SGT path out of the router | CaptureLoop + gate + foreground windows wired for SGT; crosshair keeps own URL read (R7); tick 0.35 (R10); 18 tests, sgt/vsdc 1201 passed; checks 11-12 |
-| WP5 | Not started | opus |  | SGT absorbs by provenance: late results, torn and blind rules, source policy |  |
-| WP6 | Not started | sonnet |  | Simulation harness and the six day profiles |  |
+| WP5 | Done | opus | e60c416 | SGT absorbs by provenance: late results, torn and blind rules, source policy | absorb by provenance: owners + closed ring with R1 cuts, torn/blind rules, OCR add-only with R6; loop and replay on absorb; test_sgt_absorb 20 pass; owner check |
+| WP6 | Retry | sonnet |  | Simulation harness and the six day profiles | stopped by usage limit, resumes after 16:40 |
 | WP7 | Not started | sonnet |  | Change gate v2 tuning and the flash OCR trigger |  |
 | WP8 | Not started | sonnet |  | Blind pages on every portal |  |
 | WP9 | Not started | sonnet |  | Identity persistence |  |
@@ -40,6 +40,9 @@ Runs: 8   output tokens: 292160   API-equivalent cost: $20.27
 - **WP4** WP4 text says delete the router's own URL read and remove burst ticks; what was done? → Router keeps _init_uia, extract_browser_url, _cached_address_elements and its 15 ms burst ticks for the crosshair engines only; while SGT is on the worker skips burst ticks and the capture loop bursts its own reads (BURST_READS=3, 0.3 s apart) (R7 overrides the deletion; burst ticks only served the crosshair OCR engine, and with SGT on a 15 ms tick would add screenshots, not reads)
 - **WP4** Frame tick and the OCR flash trigger in WP4 → FRAME_TICK_SEC=0.35 (worker default), FRAME_TICK_FAST_SEC=0.2 named; OCR flash read not wired (WP7), the loop keeps screenshotting during a heavy read so WP7 can fire it (R10: 0.2 s only after WP0's gate probe measures a tick under 15 ms; WP7 owns the flash trigger and FLASH_MIN_CELLS)
 - **WP4** How does the loop keep the URL fresh (R2) and hand reads to today's SGT? → A URL-only read is asked once the window's URL is 1 s old (SCOPE_POLL_SEC < URL_FRESH_SEC 2 s); a page read is handed to SgtShadow.observe(read={lines,docs,ms}) under the read's own URL, tab and title (_absorb_compat, deleted by WP5); torn and error results are never absorbed (R1) (polling at half the freshness limit keeps the scope gate open without a gap; observe(read=) reuses the whole existing SGT path with no second read)
+- **WP5** R1 closed ring and cuts: which boundaries cut a session's unanswered reads? → Ends by logout, login page, shutdown/switched off/recovered cut them; idle and window closed do not. Another client's PAN/GSTIN cuts only when it is not a new tab's first page (that is a tab switch, the reads asked on the old tab are about the old client). (R1 names logout, login page and identity contradiction; a new tab's first read showing another client is the existing 'first_read' tab-switch path, not a contradiction inside one tab, and cutting it would lose the shelved session's own late reads (6.1 edge case).)
+- **WP5** R6 in the dataset in progress: may OCR fill the status piece or complete the draft into a row? → No. OCR fills only empty non-status pieces and never turns the draft into a row or closes it (no new period from OCR); the next UIA read or the session end writes it. OCR rows come only from a dataset that carries its own ARN. (A status piece or a draft row from OCR would let wording promote without an identifier, which R6 forbids; filling form/period/year pieces stays allowed by 5.2.)
+- **WP5** absorb() details the blueprint leaves open (clock, blind counter, logout page) → absorb(result, frame, ocr, now, blind_retries): age checked on the reader's clock (now) from asked_at as the reader does; s.last_read set on SGT's own clock at absorb; the blind-retry counter lives in the loop's WindowState and is reset by a URL change or a non-blind read; observe_window returns None on a logout page and the loop asks no page read there; when a page read is the newest word on the window's URL the loop calls observe_window with it before absorb. (The result's times are time.monotonic while SGT's clock is wall time; mixing them would break observe()'s 15 s re-read gate. Calling observe_window first makes a logout/login reached during the read end the session before its text could land (R1).)
 
 ## Checks waiting for you
 
@@ -55,3 +58,4 @@ Runs: 8   output tokens: 292160   API-equivalent cost: $20.27
 - #10 (WP3) Equivalence on three live pages, reader v2 included (D1, D2 as built): with no browser sidebar or extension pane open, put a portal page in front and run venv/Scripts/python.exe tools/sgt_lines_equivalence.py --skip-corpus --title "<words from its window title>" for (1) a GST return page, (2) an Income Tax page, (3) a large GSTR-1 B2B list; once in Edge or Chrome, once in Firefox. Pass: each run ends PASS and its 'reader v2:' line shows error=none (MTA init works, D2) and rule=document in Edge/Chrome (Document URL works, D1); Firefox may show document or address_bar. — Not run
 - #11 (WP4) D7 frame tick (WP4 STOP): after check #4 (gate probe) comes back, read its 'frame tick ms' line. Pass for 0.2 s: median screenshot+signature under 15 ms -> set FRAME_TICK_SEC = FRAME_TICK_FAST_SEC in core/vsdc/vsdc_capture.py; otherwise keep 0.35 s (R10). Fill section 12's frame-tick row. — Not run
 - #12 (WP4) Capture loop day run (WP4 done-when): with SGT on (shadow or live), work a normal day on the dev PC, then look at logs/vsdc.log heartbeat lines. Pass: they show uia_reads counts rising, late=0 (no dropped reads), loop_errors absent or 0, and the GST/ITR rows of the day appear in the tracker as before; no health state stalled/uia-paused except during real browser hangs. Fail: send the heartbeat lines' counts (no page text). — Not run
+- #13 (WP5) Replay diff on the real corpus (WP5 STOP, D3): on the dev PC run 'venv/Scripts/python.exe tools/sgt_replay.py diff' against the replay_baseline.json made at WB (re-run 'baseline' first only if it is missing). PASS = every line is 'newly written' (OCR-only rows with an ARN) or no lines at all; FAIL = any 'no longer written' or 'changed' line, especially a PAN/name/period/status that came from an OCR page before (OCR no longer sets the profile, changes pieces or raises a status without an ARN). Read the output on the PC only; do not paste values anywhere. — Not run
