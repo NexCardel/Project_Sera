@@ -3664,6 +3664,11 @@ class PageHeader(QFrame):
         self._lay.addWidget(text, 1)
         self.setStyleSheet(_page_hd_qss(False, self._title_px))
 
+    def set_title_px(self, px):
+        """The title's pixel size (Settings pages use 19 px; None goes back to the default)."""
+        self._title_px = px
+        self.setStyleSheet(_page_hd_qss(self._compact, self._title_px))
+
     def title(self):
         return self.title_label.text()
 

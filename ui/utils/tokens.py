@@ -316,6 +316,7 @@ KIT = {
     "gap_banner": 10,
     "gap_filter_row": 10,
     "w_search_max": 360,
+    "gap_set_nav": 2,
     "h_tile_num": 22,
     "h_tile_num_sm": 18,
     "h_tile_lbl": 17,

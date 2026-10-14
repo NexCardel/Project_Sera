@@ -44,7 +44,7 @@ from ui.components.kit import (
 )
 from ui.dialogs.mcl_manager_dialog import mcl_role as _mcl_role
 from ui.utils.masking import mask_password
-from ui.utils.tokens import TOKENS
+from ui.utils.tokens import KIT, TOKENS
 
 try:
     import qtawesome as qta
@@ -286,7 +286,7 @@ class UnifiedSettingsDialog(QDialog):
         nav_w.setObjectName("SidebarScrollContent")
         self._nav_layout = QVBoxLayout(nav_w)
         self._nav_layout.setContentsMargins(0, 0, 0, 0)
-        self._nav_layout.setSpacing(1)
+        self._nav_layout.setSpacing(KIT["gap_set_nav"])
 
         def _sec(txt):
             lbl = NavLabel(txt)
@@ -384,10 +384,13 @@ class UnifiedSettingsDialog(QDialog):
     def _kit_page(self, *blocks) -> QScrollArea:
         """Scrolling settings page: the blocks stacked with kit spacing, no legacy colours."""
         content = QWidget()
+        content.setMaximumWidth(KIT["w_stack"])      # the mockup's .stack: cards stop at 820 px
         lay = QVBoxLayout(content)
-        lay.setContentsMargins(TOKENS["s_5"], TOKENS["s_3"], TOKENS["s_5"], TOKENS["s_6"])
-        lay.setSpacing(TOKENS["s_4"])
+        lay.setContentsMargins(KIT["pad_set_h"], KIT["pad_set_top"], KIT["pad_set_h"], KIT["pad_set_bot"])
+        lay.setSpacing(KIT["gap_main"])
         for block in blocks:
+            if isinstance(block, PageHeader):
+                block.set_title_px(KIT["f_set_title"])   # owner decision 8: Settings titles at 19 px
             lay.addWidget(block)
         lay.addStretch(1)
         scroll = QScrollArea()
@@ -677,16 +680,16 @@ class UnifiedSettingsDialog(QDialog):
         header = PageHeader("Master Column List",
             lead="The schema for every client field; changes apply at once. "
                  "Shows on ticks (M · Q · A) wait for Save.")
-        self._mcl_btn_add = LabelledAction("Add column", variant="primary", icon="mdi.plus",
+        self._mcl_btn_add = LabelledAction("Add column", sm=True, variant="primary", icon="mdi.plus",
                                            tooltip="Add a column to the Master Column List")
         header.add_action(self._mcl_btn_add)
 
         self._mcl_sel_tag = Tag("Selected: —")
-        self._mcl_btn_edit = LabelledAction("Edit", icon="mdi.pencil-outline",
+        self._mcl_btn_edit = LabelledAction("Edit", sm=True, icon="mdi.pencil-outline",
                                             tooltip="Edit the selected column")
-        self._mcl_btn_up = LabelledAction("Move up", icon="mdi.arrow-up",
+        self._mcl_btn_up = LabelledAction("Move up", sm=True, icon="mdi.arrow-up",
                                           tooltip="Move the selected column up (Alt+↑)")
-        self._mcl_btn_dn = LabelledAction("Move down", icon="mdi.arrow-down",
+        self._mcl_btn_dn = LabelledAction("Move down", sm=True, icon="mdi.arrow-down",
                                           tooltip="Move the selected column down (Alt+↓)")
         self._mcl_btn_del = LabelledAction("Delete column…", variant="danger", icon="mdi.delete-outline",
                                            tooltip="Asks first: all client values in this column are removed")
@@ -744,11 +747,11 @@ class UnifiedSettingsDialog(QDialog):
     def _build_page_services(self) -> QWidget:
         header = PageHeader("Services",
             lead="Define compliance portals and automation services. Changes apply at once.")
-        self._svc_btn_add = LabelledAction("Add service", variant="primary", icon="mdi.plus",
+        self._svc_btn_add = LabelledAction("Add service", sm=True, variant="primary", icon="mdi.plus",
                                            tooltip="Add a compliance service")
         header.add_action(self._svc_btn_add)
 
-        self._svc_btn_edit = LabelledAction("Edit", icon="mdi.pencil-outline",
+        self._svc_btn_edit = LabelledAction("Edit", sm=True, icon="mdi.pencil-outline",
                                             tooltip="Edit the selected service")
         self._svc_btn_del = LabelledAction("Delete service…", variant="danger", icon="mdi.delete-outline",
                                            tooltip="Asks first: the service is detached from all client profiles")
