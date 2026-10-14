@@ -240,6 +240,11 @@ class SeraApp:
         self._update_applied = False
         self._capture_ui_refresh_pending = False
         self._capture_queue = queue.Queue()
+        from core import capture_outbox
+        self._outbox = capture_outbox.CaptureOutbox(
+            self._process_extension_result,
+            capture_outbox.DeadLetter(capture_outbox.default_dir() / capture_outbox.DEAD_LETTER_NAME),
+            health=lambda: getattr(getattr(getattr(self, "vsdc_worker", None), "router", None), "health", None))
         self._capture_worker = threading.Thread(target=self._capture_worker_loop, daemon=True)
         self._capture_worker.start()
         
@@ -543,6 +548,13 @@ class SeraApp:
             self._shadow_check_timer.start(30 * 60 * 1000)
             _run_shadow_check_async()
 
+        # Rows that could not be saved earlier (core/capture_outbox.py) are written now and every 10 minutes.
+        from core import capture_outbox
+        self._queue_outbox_replay()
+        self._outbox_replay_timer = QTimer(self.app)
+        self._outbox_replay_timer.timeout.connect(self._queue_outbox_replay)
+        self._outbox_replay_timer.start(capture_outbox.REPLAY_EVERY_SEC * 1000)
+
         # Updates. Installed builds have the SYSTEM update agent (core/update_agent.py): it downloads
         # and installs with no prompt; the app only closes itself when the PC is idle. Without the
         # agent (source runs, older installs) the in-app updater below downloads and installs on exit.
@@ -827,16 +839,26 @@ class SeraApp:
 
     def _capture_worker_loop(self):
         """Serially process incoming captures without blocking the Qt thread."""
+        from core import capture_outbox
+        emit = self.sync_bridge.capture_processed_signal.emit
         while True:
             msg = self._capture_queue.get()
             try:
-                result = self._process_extension_result(msg)
-                if result:
-                    self.sync_bridge.capture_processed_signal.emit(msg, result)
+                if msg is capture_outbox.REPLAY:
+                    self._outbox.replay(on_result=emit)
+                else:
+                    result = self._outbox.handle(msg, on_result=emit)
+                    if result:
+                        emit(msg, result)
             except Exception as e:
-                print(f"[Capture Worker Error] {e}")
+                print(f"[Capture Worker Error] {type(e).__name__}")
             finally:
                 self._capture_queue.task_done()
+
+    def _queue_outbox_replay(self):
+        from core import capture_outbox
+        if self._outbox.dead.pending():
+            self._capture_queue.put(capture_outbox.REPLAY)
 
     def _on_vsdc_activity_event(self, event_type: str, title: str, subtitle: str = "", context=None):
         """Displays real-time bottom-left HUD overlay (no system tray, disappears within 3s)."""
@@ -1139,8 +1161,9 @@ class SeraApp:
 
             return results[0] if len(results) == 1 else {"datasets": results, "count": len(results)}
         except Exception as e:
-            print(f"[Tracker Dump Error] {e}")
-            return None
+            # The capture outbox retries a failed write and keeps the row (core/capture_outbox.py).
+            print(f"[Tracker Dump Error] {type(e).__name__}")
+            raise
 
     def _ask_sgt_demotion(self, info: dict):
         """A page shows a lower status than a filing that has an ARN. Lowering it is risky, so the user decides;
@@ -2030,6 +2053,22 @@ class SeraApp:
         q = getattr(self, "_capture_queue", None)
         while q is not None and q.unfinished_tasks and _time.monotonic() < deadline:
             _time.sleep(0.05)
+        outbox = getattr(self, "_outbox", None)
+        if q is None or outbox is None or not q.unfinished_tasks:
+            return
+        # Still busy (a locked database): the row in flight and the rows behind it go to the dead
+        # letter, which the next start replays, instead of being lost with the daemon thread.
+        from core import capture_outbox
+        queued = []
+        while True:
+            try:
+                item = q.get_nowait()
+            except queue.Empty:
+                break
+            q.task_done()
+            if item is not capture_outbox.REPLAY:
+                queued.append(item)
+        outbox.stop_and_flush(queued)
 
     def _on_app_about_to_quit(self):
         if self._update_applied:
