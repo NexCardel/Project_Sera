@@ -1,22 +1,22 @@
-# SGT never-miss — report (2026-10-14 14:36)
+# SGT never-miss — report (2026-10-14 14:51)
 
 Deadline: 2026-10-17T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 15 |
+| Not started | 14 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 2 |
+| Done | 3 |
 | Blocked | 0 |
 
-Runs: 2   output tokens: 67646   API-equivalent cost: $4.57
+Runs: 3   output tokens: 121601   API-equivalent cost: $8.49
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | WB | Done | haiku | bd0570a | Baseline: the test suite before any change | Baseline: T=3078 F=2 S=1; failing: test_class_diff_render::test_output_paths_never_recorder_or_tracked_folders, test_sdis_tables::test_command_line_prints_no_va |
 | WP0 | Done | sonnet | db317c5 | Probe pack: the Windows measurements tool | tools/sgt_probe_pack.py + 7 tests (1089 sgt/vsdc tests pass); 6 owner checks added; no probe run |
-| WP1 | Not started | sonnet |  | Capture health: states, HUD event, phone alert, log |  |
+| WP1 | Done | sonnet | 0cc5e4a | Capture health: states, HUD event, phone alert, log | HealthMonitor (13 states), HUD event, phone alert, health log lines; 33 new tests, narrow run 1200 passed 1 skipped; owner check 7 added |
 | WP2 | Not started | sonnet |  | Rows never lost: database retry and dead letter |  |
 | WP3 | Not started | opus |  | Reader v2: MTA lanes, cached read, tickets, torn detection, Document URL |  |
 | WP4 | Not started | opus |  | CaptureLoop: the SGT path out of the router |  |
@@ -40,3 +40,4 @@ Runs: 2   output tokens: 67646   API-equivalent cost: $4.57
 - #4 (WP0) gate: work normally on a portal page in front (type invoice rows, let a toast / banner / modal / spinner appear) and note the clock time of each: venv/Scripts/python.exe tools/sgt_probe_pack.py gate --minutes 5   Fill section 12 rows 'frame tick cost' (TOTAL 'frame tick ms' median/p95) -> D7 and R10: 0.2 s tick if a tick costs under 15 ms, else the 0.35 s fallback; and 'cells changed by typing/caret/spinner/toast/banner/modal' (histogram and 'largest changes' matched to your notes, plus how often the legacy hash fired vs >= GATE_MIN_CELLS 3 / FLASH_MIN_CELLS 8) -> D4. — Not run
 - #5 (WP0) toast: do a REAL filing yourself (the tool submits nothing) while this runs on the portal tab in front: venv/Scripts/python.exe tools/sgt_probe_pack.py toast --minutes 20   Fill section 12 row 'ARN visibility UIA vs OCR plus what FlashWatcher catches' from the 'ARN visibility' lines (visible seconds per channel, sample interval, FlashWatcher caught / did not) and the OCR ms line -> D5 (and the C1-C3 capture-channel choice). Add --no-ocr if OCR is unavailable on that PC. — Not run
 - #6 (WP0) switches: during a normal hour of B2B work run: venv/Scripts/python.exe tools/sgt_probe_pack.py switches --minutes 60   It keeps counts only (no titles, links or text). Fill section 12 row 'foreground/tab switches per minute' with the TOTAL foreground changes and tab changes per minute median/max -> D1 (how often the page identity must be re-resolved) and D4 (harness profile 1: how bursty switching is). — Not run
+- #7 (WP1) OWNER: read the HUD wording and D8. Title 'Capture paused on this PC' with one fixed sentence per state (stalled, uia-paused, blind, scope-lost, busy-long, specs-silent, disk; unlisted-portal keeps the router's own prompt and only phones), recovery 'Capture back to normal'. D8: blind after 20 s with a failed read, HUD at most once per 60 s per state and repeating every 5 min, phone at most once per 30 min per state and inside the shared hourly limit. Pass = wording is clear to staff and the timings feel right; fail = say what to change. — Not run
