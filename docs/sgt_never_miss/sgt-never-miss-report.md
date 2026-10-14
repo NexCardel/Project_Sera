@@ -1,4 +1,4 @@
-# SGT never-miss — report (2026-10-14 16:28)
+# SGT never-miss — report (2026-10-14 17:02)
 
 Deadline: 2026-10-17T23:00:00+05:30
 
@@ -6,11 +6,11 @@ Deadline: 2026-10-17T23:00:00+05:30
 | :--- | ---: |
 | Not started | 9 |
 | In progress | 0 |
-| Retry | 1 |
-| Done | 7 |
+| Retry | 0 |
+| Done | 8 |
 | Blocked | 0 |
 
-Runs: 11   output tokens: 483261   API-equivalent cost: $33.69
+Runs: 12   output tokens: 561540   API-equivalent cost: $39.30
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -21,7 +21,7 @@ Runs: 11   output tokens: 483261   API-equivalent cost: $33.69
 | WP3 | Done | opus | 65611c4 | Reader v2: MTA lanes, cached read, tickets, torn detection, Document URL | Reader v2 built (not wired): MTA lanes with content+scope workers, R3 queue, R9 hold, torn, Document URL; 31 tests; owner checks 9-10 |
 | WP4 | Done | opus | a055055 | CaptureLoop: the SGT path out of the router | CaptureLoop + gate + foreground windows wired for SGT; crosshair keeps own URL read (R7); tick 0.35 (R10); 18 tests, sgt/vsdc 1201 passed; checks 11-12 |
 | WP5 | Done | opus | e60c416 | SGT absorbs by provenance: late results, torn and blind rules, source policy | absorb by provenance: owners + closed ring with R1 cuts, torn/blind rules, OCR add-only with R6; loop and replay on absorb; test_sgt_absorb 20 pass; owner check |
-| WP6 | Retry | sonnet |  | Simulation harness and the six day profiles | stopped by usage limit, resumes after 16:40 |
+| WP6 | Done | sonnet | 1a31b24 | Simulation harness and the six day profiles | Sim harness tests/sgt_sim, profiles 1-6 pass at full size, 37 scenario tests (5 strict xfails for WP7/WP9/WP10); fixed cross-tab absorb and wedged pending read; |
 | WP7 | Not started | sonnet |  | Change gate v2 tuning and the flash OCR trigger |  |
 | WP8 | Not started | sonnet |  | Blind pages on every portal |  |
 | WP9 | Not started | sonnet |  | Identity persistence |  |
@@ -59,3 +59,4 @@ Runs: 11   output tokens: 483261   API-equivalent cost: $33.69
 - #11 (WP4) D7 frame tick (WP4 STOP): after check #4 (gate probe) comes back, read its 'frame tick ms' line. Pass for 0.2 s: median screenshot+signature under 15 ms -> set FRAME_TICK_SEC = FRAME_TICK_FAST_SEC in core/vsdc/vsdc_capture.py; otherwise keep 0.35 s (R10). Fill section 12's frame-tick row. — Not run
 - #12 (WP4) Capture loop day run (WP4 done-when): with SGT on (shadow or live), work a normal day on the dev PC, then look at logs/vsdc.log heartbeat lines. Pass: they show uia_reads counts rising, late=0 (no dropped reads), loop_errors absent or 0, and the GST/ITR rows of the day appear in the tracker as before; no health state stalled/uia-paused except during real browser hangs. Fail: send the heartbeat lines' counts (no page text). — Not run
 - #13 (WP5) Replay diff on the real corpus (WP5 STOP, D3): on the dev PC run 'venv/Scripts/python.exe tools/sgt_replay.py diff' against the replay_baseline.json made at WB (re-run 'baseline' first only if it is missing). PASS = every line is 'newly written' (OCR-only rows with an ARN) or no lines at all; FAIL = any 'no longer written' or 'changed' line, especially a PAN/name/period/status that came from an OCR page before (OCR no longer sets the profile, changes pieces or raises a status without an ARN). Read the output on the PC only; do not paste values anywhere. — Not run
+- #14 (WP6) Run the real-sleep profile runs (about 18 min): set the environment variable SGT_SIM_REAL to 1, then run venv/Scripts/python.exe -m pytest -q -p no:cacheprovider tests/test_sgt_sim_profiles.py -k real_sleeps. Both tests must pass. — Not run

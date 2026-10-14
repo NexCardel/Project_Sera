@@ -7,7 +7,7 @@ WP3,2,"Reader v2: MTA lanes, cached read, tickets, torn detection, Document URL"
 WP4,2,CaptureLoop: the SGT path out of the router,Done,claude-opus-5-5,1,a055055,"CaptureLoop + gate + foreground windows wired for SGT; crosshair keeps own URL read (R7); tick 0.35 (R10); 18 tests, sgt/vsdc 1201 passed; checks 11-12",2026-10-14 15:53
 WP5,2,"SGT absorbs by provenance: late results, torn and blind rules, source policy",Done,claude-opus-5-5,1,e60c416,"absorb by provenance: owners + closed ring with R1 cuts, torn/blind rules, OCR add-only with R6; loop and replay on absorb; test_sgt_absorb 20 pass; owner check 13 (replay diff)",2026-10-14 16:10
 WP6,3,Simulation harness and the six day profiles,Done,claude-sonnet-5-5,2,1a31b24,"Sim harness tests/sgt_sim, profiles 1-6 pass at full size, 37 scenario tests (5 strict xfails for WP7/WP9/WP10); fixed cross-tab absorb and wedged pending read; owner check 14 real-sleep runs",2026-10-14 17:02
-WP7,3,Change gate v2 tuning and the flash OCR trigger,Not started,claude-sonnet-5-5,0,,,
+WP7,3,Change gate v2 tuning and the flash OCR trigger,Done,claude-sonnet-5-5,1,c5e3c1c,OCR lane plus flash/green/paused triggers; held until a read confirms the tab; R2 and C1-heavy xfails now green; owner check 15 for the D4 histogram,2026-10-14 17:17
 WP8,3,Blind pages on every portal,Not started,claude-sonnet-5-5,0,,,
 WP9,3,Identity persistence,Not started,claude-sonnet-5-5,0,,,
 WP10,3,Visible windows that are not in front,Not started,claude-opus-5-5,0,,,
