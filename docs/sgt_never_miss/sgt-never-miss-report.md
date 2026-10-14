@@ -1,4 +1,4 @@
-# SGT never-miss — report (2026-10-14 15:39)
+# SGT never-miss — report (2026-10-14 15:54)
 
 Deadline: 2026-10-17T23:00:00+05:30
 
@@ -6,11 +6,11 @@ Deadline: 2026-10-17T23:00:00+05:30
 | :--- | ---: |
 | Not started | 11 |
 | In progress | 0 |
-| Retry | 1 |
-| Done | 5 |
+| Retry | 0 |
+| Done | 6 |
 | Blocked | 0 |
 
-Runs: 7   output tokens: 282283   API-equivalent cost: $19.03
+Runs: 8   output tokens: 292160   API-equivalent cost: $20.27
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -19,7 +19,7 @@ Runs: 7   output tokens: 282283   API-equivalent cost: $19.03
 | WP1 | Done | sonnet | 0cc5e4a | Capture health: states, HUD event, phone alert, log | HealthMonitor (13 states), HUD event, phone alert, health log lines; 33 new tests, narrow run 1200 passed 1 skipped; owner check 7 added |
 | WP2 | Done | sonnet | 366c04e | Rows never lost: database retry and dead letter | Retry + dead letter (core/capture_outbox.py), wired in main.py; 17 tests incl. a 6.5 s raw-DB lock; narrow run 1139 passed |
 | WP3 | Done | opus | 65611c4 | Reader v2: MTA lanes, cached read, tickets, torn detection, Document URL | Reader v2 built (not wired): MTA lanes with content+scope workers, R3 queue, R9 hold, torn, Document URL; 31 tests; owner checks 9-10 |
-| WP4 | Retry | opus |  | CaptureLoop: the SGT path out of the router | stopped by network/API error, resumes after 15:44 |
+| WP4 | Done | opus | a055055 | CaptureLoop: the SGT path out of the router | CaptureLoop + gate + foreground windows wired for SGT; crosshair keeps own URL read (R7); tick 0.35 (R10); 18 tests, sgt/vsdc 1201 passed; checks 11-12 |
 | WP5 | Not started | opus |  | SGT absorbs by provenance: late results, torn and blind rules, source policy |  |
 | WP6 | Not started | sonnet |  | Simulation harness and the six day profiles |  |
 | WP7 | Not started | sonnet |  | Change gate v2 tuning and the flash OCR trigger |  |
@@ -37,6 +37,9 @@ Runs: 7   output tokens: 282283   API-equivalent cost: $19.03
 - **WP3** Address-bar fallback (no Document has a portal URL): which Documents are read? → Only on-screen Documents that give no URL of their own; a Document whose own URL is off the portals is never read (WP3 text said every on-screen Document; that would read an Edge sidebar or extension pane whenever the main page exposes no URL. Same coverage for browsers without a Document URL, no privacy leak.)
 - **WP3** R9: how is a page known to be heavy, and how are worker threads made? → Last read ms per lane per ctx.url (50 kept); unknown pages are not held. Each worker is a one-thread daemon executor, not ThreadPoolExecutor (R9 says the last read of that page; a URL key needs no new field. ThreadPoolExecutor threads are joined at exit, so a wedged UIA call would hold the app open; daemon threads satisfy 'close() leaves wedged threads daemon'.)
 - **WP3** R7 vs the WP3 move of extract_browser_url into vsdc_uia_text → address_bar_here holds the code; VSDCRouter.extract_browser_url stays and delegates to it with its own _uia and _cached_address_elements (One copy so the two readers cannot drift; the crosshair path keeps its method, object and cache exactly as R7 requires (its tests unchanged and green).)
+- **WP4** WP4 text says delete the router's own URL read and remove burst ticks; what was done? → Router keeps _init_uia, extract_browser_url, _cached_address_elements and its 15 ms burst ticks for the crosshair engines only; while SGT is on the worker skips burst ticks and the capture loop bursts its own reads (BURST_READS=3, 0.3 s apart) (R7 overrides the deletion; burst ticks only served the crosshair OCR engine, and with SGT on a 15 ms tick would add screenshots, not reads)
+- **WP4** Frame tick and the OCR flash trigger in WP4 → FRAME_TICK_SEC=0.35 (worker default), FRAME_TICK_FAST_SEC=0.2 named; OCR flash read not wired (WP7), the loop keeps screenshotting during a heavy read so WP7 can fire it (R10: 0.2 s only after WP0's gate probe measures a tick under 15 ms; WP7 owns the flash trigger and FLASH_MIN_CELLS)
+- **WP4** How does the loop keep the URL fresh (R2) and hand reads to today's SGT? → A URL-only read is asked once the window's URL is 1 s old (SCOPE_POLL_SEC < URL_FRESH_SEC 2 s); a page read is handed to SgtShadow.observe(read={lines,docs,ms}) under the read's own URL, tab and title (_absorb_compat, deleted by WP5); torn and error results are never absorbed (R1) (polling at half the freshness limit keeps the scope gate open without a gap; observe(read=) reuses the whole existing SGT path with no second read)
 
 ## Checks waiting for you
 
@@ -50,3 +53,5 @@ Runs: 7   output tokens: 282283   API-equivalent cost: $19.03
 - #8 (WP2) After a normal working day on the dev PC, look at ~/AmanAssociates_Sera/sgt_shadow/: undelivered_rows.jsonl should be absent or empty (rows that were retried and then replayed leave no file). If it exists, count its lines and send the count; also count undelivered_rows_held.jsonl (rows a retry cannot fix). Pass: both are zero or the retryable file empties within 10 minutes of the database being free. Never copy these files into the repo (they hold client data). — Not run
 - #9 (WP3) Equivalence on the real corpus (14.2 gate on the Core): run venv/Scripts/python.exe tools/sgt_lines_equivalence.py (synthetic + corpus). Pass: the last line says PASS; the corpus section says 'all identical', or 0 comparable records if the corpus still has no node dumps (then say so in the reply). — Not run
 - #10 (WP3) Equivalence on three live pages, reader v2 included (D1, D2 as built): with no browser sidebar or extension pane open, put a portal page in front and run venv/Scripts/python.exe tools/sgt_lines_equivalence.py --skip-corpus --title "<words from its window title>" for (1) a GST return page, (2) an Income Tax page, (3) a large GSTR-1 B2B list; once in Edge or Chrome, once in Firefox. Pass: each run ends PASS and its 'reader v2:' line shows error=none (MTA init works, D2) and rule=document in Edge/Chrome (Document URL works, D1); Firefox may show document or address_bar. — Not run
+- #11 (WP4) D7 frame tick (WP4 STOP): after check #4 (gate probe) comes back, read its 'frame tick ms' line. Pass for 0.2 s: median screenshot+signature under 15 ms -> set FRAME_TICK_SEC = FRAME_TICK_FAST_SEC in core/vsdc/vsdc_capture.py; otherwise keep 0.35 s (R10). Fill section 12's frame-tick row. — Not run
+- #12 (WP4) Capture loop day run (WP4 done-when): with SGT on (shadow or live), work a normal day on the dev PC, then look at logs/vsdc.log heartbeat lines. Pass: they show uia_reads counts rising, late=0 (no dropped reads), loop_errors absent or 0, and the GST/ITR rows of the day appear in the tracker as before; no health state stalled/uia-paused except during real browser hangs. Fail: send the heartbeat lines' counts (no page text). — Not run
