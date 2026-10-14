@@ -2,14 +2,15 @@
 harness can express. Fictional data only. A test marked xfail(strict) names the work package that closes its
 gap; when that package lands the test turns green and strict makes the marker come off."""
 import json
+from dataclasses import replace
 
 import pytest
 
 from core.sgt.sgt_specs import BUILTIN_FIELDS_PATH
 from tests.sgt_sim.fake_browser import OUTSIDE, PORTAL_GST, PORTAL_ITR, Browser, Page, Tab, Toast
 from tests.sgt_sim.harness import assert_profile, problems, sim  # noqa: F401 - sim is a fixture
-from tests.sgt_sim.pages import (GST_FILE, GST_LOGOUT, GST_RET, GST_SVC, ITR, ITR_LOGIN, ITR_LOGOUT, ITR_PROFILE, ITR_SUCCESS, LOGGED_OUT,
-                                 READY, Submission, arn_toast, gst_arn, gst_filing, gst_header, itr_ack, itr_filing,
+from tests.sgt_sim.pages import (GST_FILE, GST_LOGOUT, GST_RET, GST_SVC, ITR, ITR_LOGIN, ITR_LOGOUT, ITR_PROFILE, ITR_STATUS, ITR_SUCCESS, LOGGED_OUT,
+                                 NOT_VERIFIED, READY, Submission, arn_toast, gst_arn, gst_filing, gst_header, itr_ack, itr_filing,
                                  make_client, make_clients)
 from tests.sgt_sim.profiles import SAVED, _away, _start, parallel_filing
 
@@ -380,12 +381,15 @@ def test_d1_same_url_two_clients_two_tabs(sim):
     go(sim, b, expected, 260.0)
 
 
-@pytest.mark.xfail(strict=True, reason="OPEN FINDING: a tab never read before a second tab joins the session in view "
-                                       "(SgtShadow._observe_window); its later acknowledgement lands under the other "
-                                       "client. Rare; the fix belongs with WP9 identity persistence")
 def test_d1_harsh_both_tabs_unread_before_the_first_switch(sim):
-    b, expected = _two_tabs_same_address(2.0, 5.0)
-    go(sim, b, expected, 260.0)
+    """Two logins side by side, switched before either named its client: tab 1's profile names only tab 1 (it had
+    joined tab 0's unnamed session), never tab 0. Tab 0's own profile page is never on screen, so its ack can only be
+    written without a client (constraint 5), never under tab 1's client."""
+    b, (s1, s2) = _two_tabs_same_address(2.0, 5.0)
+    h = go(sim, b, [s1, s2], 260.0, allow_missed=True)
+    assert problems(h, [s1, s2]) == [f"missed: submission 0 (client {s1.client.index}, form ITR-4): "
+                                     "a row carries its ARN but not its client"]
+    assert h.rows_for_arn(s1.arn) and all(not r.get("pan") and not r.get("gstin") for r in h.rows_for_arn(s1.arn))
 
 
 def test_d13_typed_address_bar_does_not_change_scope(sim):
@@ -548,6 +552,32 @@ def test_f2_arn_appearing_later_on_track_status_is_captured(sim, tmp_path):
     h = go(sim, b, [sub], 40.0, specs=[_enable_overlay(tmp_path, "gst_track_return_status")])
     mine = [r for _t, r in h.rows if r["pan"] == c.pan]
     assert {r["arn"] for r in mine if r["arn"] != "N/A"} == {arn}          # five cards, one row: the latest only
+
+
+def test_missed_toast_is_recovered_from_filed_list(sim):
+    """8.2 layer 3: a submission missed on purpose (OCR off, the ack on screen for less than one read of its page)
+    becomes a row for the right client once the filed-returns list shows it, marked recovered. No wizard page: a
+    draft row of the same return would be upgraded by the list instead (6.5), not born there."""
+    b = Browser()
+    _w, tab = _start(b)
+    c = make_client(427)
+    missed = Submission(c, "ITR-4", "AY 2026-27", itr_ack(1), NOT_VERIFIED, 6.0, 6.5)
+    tab.navigate(2.0, Page(ITR_PROFILE, _profile_lines(c), PORTAL_ITR))
+    tab.navigate(6.0, Page(ITR_SUCCESS, ["You have successfully submitted your return!", "Acknowledgement Number :",
+                                         missed.arn, "ITR-4 for A.Y. 2026-27"], PORTAL_ITR, read_ms=3000.0))
+    tab.navigate(6.5, Page(ITR + "dashboard", ["Dashboard", "Welcome Back", c.pan], PORTAL_ITR))
+    listed = 12.0
+    tab.navigate(listed, Page(ITR_STATUS, [f"{c.name} Individual", "A.Y. 2026-27", "Filing Type", "Original", "done",
+                                           "Pending for e-verification", "ITR :", "ITR-4", "Acknowledgement No :",
+                                           missed.arn], PORTAL_ITR))
+    h = sim(b, ocr=False)
+    h.run(listed)
+    assert not h.rows_for_arn(missed.arn), "the success page was read after all: nothing was missed"
+    h.run(listed + 10.0)
+    h.end_day()
+    assert_profile(h, [replace(missed, visible_from=listed, visible_until=listed + 10.0)])
+    src = h.rows_for_arn(missed.arn)[-1]["raw_payload"]["source"]
+    assert (src["evidence_source"], src["first_seen_as"]) == ("recovered", "recovered")
 
 
 def test_d2_an_old_success_page_reopened_does_not_duplicate(sim):

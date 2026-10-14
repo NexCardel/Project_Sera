@@ -5,6 +5,7 @@ colours the rows, the copied report and the daily digest hold no client data, an
 """
 import json
 import re
+import time
 from datetime import date, datetime, timedelta
 
 from PIL import Image
@@ -286,7 +287,9 @@ class TestSgtHooks:
         r.sgt.set_digest(lambda today: calls.append(today) or {
             "title": "Capture digest ready", "subtitle": "1 PC(s) blind or stalled", "counts": {"old_build_pcs": 2}})
         r.sgt._daily_health_check()
-        r.sgt._daily_health_check()
+        r.sgt._digest_thread.join(5)              # made off the capture thread...
+        assert r.notified == []
+        r.sgt._daily_health_check()               # ...and reported on the next tick
         assert calls == [date(2026, 10, 14)]
         assert r.notified == [("prompt", "Capture digest ready", "1 PC(s) blind or stalled", {})]
         logged = [json.loads(line) for f in (tmp_path / "log").glob("*.jsonl")
@@ -297,7 +300,20 @@ class TestSgtHooks:
         r = SgtRig(tmp_path)
         r.sgt.set_digest(lambda today: 1 / 0)
         r.sgt._daily_health_check()
+        r.sgt._digest_thread.join(5)
+        r.sgt._daily_health_check()
         assert r.notified == []
+
+    def test_a_slow_digest_never_holds_up_the_capture_tick(self, tmp_path):
+        import threading
+        r = SgtRig(tmp_path)
+        release = threading.Event()
+        r.sgt.set_digest(lambda today: release.wait(5) and None)
+        started = time.monotonic()
+        r.sgt._daily_health_check()
+        assert time.monotonic() - started < 1.0
+        release.set()
+        r.sgt._digest_thread.join(5)
 
 
 # ── the Settings panel ──────────────────────────────────────────────────────────────────────────

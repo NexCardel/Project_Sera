@@ -10,8 +10,8 @@ Amas_Sera.exe is not running. This module lets the app take part:
 - pending_version(): the staged version, if newer than this build.
 - should_close_now(): the app closes itself for the update when nobody is using the PC (no input
   for 3 minutes), or after the update has waited 8 hours, as soon as input pauses for 30 s. A
-  mandatory update (version.json "mandatory": true) takes the 30 s path at once, but never while
-  SGT has a session with content open. At most twice a day per version, so a failing install cannot keep closing the app.
+  mandatory update (version.json "mandatory": true) takes the 30 s path at once, except while
+  SGT has a session with content open (then the usual rules). At most twice a day per version, so a failing install cannot keep closing the app.
 - start_relauncher(): hidden helper in the user's session that starts the agent task, waits for
   the install, then reopens the app (the old version too, if the install failed).
 - install_in_progress(): checked first thing at start-up. The app must not hold its own files
@@ -125,17 +125,16 @@ def is_mandatory(data: Optional[dict]) -> bool:
 
 def should_close_now(app_dir: Path, captures_busy: bool, sessions_open: bool = False) -> Optional[str]:
     """The pending version if the app should close itself for it now, else None. A mandatory update
-    needs only 30 s of idle at once, but never while a session with content is open."""
+    needs only 30 s of idle at once, but never while a session with content is open: then the usual
+    rules apply, so a mandatory update is never slower than a normal one."""
     data = pending_update()
     if not data or captures_busy:
         return None
     ver = str(data["version"])
     if _closes_today(app_dir, ver) >= MAX_CLOSES_PER_DAY:
         return None
-    mandatory = is_mandatory(data)
-    if mandatory and sessions_open:
-        return None
-    idle_needed = (LONG_WAIT_IDLE_SECONDS if mandatory or _staged_hours(data) >= LONG_WAIT_HOURS
+    fast = is_mandatory(data) and not sessions_open
+    idle_needed = (LONG_WAIT_IDLE_SECONDS if fast or _staged_hours(data) >= LONG_WAIT_HOURS
                    else IDLE_SECONDS)
     return ver if seconds_since_input() >= idle_needed else None
 

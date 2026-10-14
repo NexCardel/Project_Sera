@@ -351,6 +351,8 @@ class SgtShadow:
         self._log_checked: Set[str] = set() # log files already checked for a torn last line
         self._checked_day: Optional[date] = None
         self._digest: Optional[Callable[[date], Optional[Dict[str, Any]]]] = None
+        self._digest_thread: Any = None         # the day's digest runs off the capture thread
+        self._digest_made: Optional[Dict[str, Any]] = None     # its result, reported on a later tick
         # HUD pill: (event_type, title, subtitle, context). Only real captures reach it - a
         # client identified, a dataset found or promoted, a session with something in it
         # ending - never page reads or half-built datasets, so the pill stays quiet otherwise.
@@ -944,6 +946,18 @@ class SgtShadow:
                      not _LOGIN.search(url or ""))
         if policy["profile"] == "none":
             res.profile.clear()                 # OCR never names, splits or switches a client (5.2)
+        names = any(getattr(res.profile.get(k), "value", None) for k in _CLIENT_KEYS)
+        if (in_view and names and not res.is_list and tab and tab in s.unread_tabs and len(s.tabs) > 1
+                and not any((s.profile.get(k) or {}).get("value") for k in _CLIENT_KEYS)):
+            # A tab that joined this session before any of its tabs named a client now names one: it
+            # may be another login (two tabs opened side by side), so it becomes that client's own
+            # session rather than naming the tabs it joined. The session it leaves is kept, unnamed.
+            s.tabs.discard(tab)
+            s.unread_tabs.discard(tab)
+            self._shelf.setdefault(hwnd, []).append(s)
+            s = self._sessions[hwnd] = _Session(portal=portal, last_url=url, last_hash=h, last_read=now,
+                                                timeline=[url] if url else [])
+            self._claim_tab(hwnd, s, tab)
         clash = None if res.is_list or not policy["identity_check"] else self._identity_conflict(s, res)
         if clash and not in_view:
             # A late read of a session set aside or ended names another client: nothing of it is taken.
@@ -1003,7 +1017,8 @@ class SgtShadow:
         s.last_seen = now                   # a session made above was not stamped yet
         if not s.started:
             s.started = now
-        s.unread_tabs.discard(tab)
+        if names or any((s.profile.get(k) or {}).get("value") for k in _CLIENT_KEYS):
+            s.unread_tabs.discard(tab)      # until a client is named, a joined tab may still be another login
         s.conflicts += len(res.conflicts)
         self._page_pans = {p for ln in lines for p in _PAN_TOKEN.findall(ln or "")}
         self._foreign_pans = self._other_pans_on_page(s, res, lines)
@@ -2318,13 +2333,25 @@ class SgtShadow:
         self._digest = digest
 
     def _daily_digest(self, today: date) -> None:
-        if self._digest is None:
+        """Starts the day's digest on a thread of its own: it reads the whole tracker and writes
+        settings, which must never hold up the capture tick it was called from."""
+        digest = self._digest
+        if digest is None:
             return
-        try:
-            made = self._digest(today)
-        except Exception as ex:
-            self._echo(f"[SGT] {self._tag} the daily digest failed: {type(ex).__name__}")
-            return
+
+        def run() -> None:
+            try:
+                self._digest_made = digest(today)
+            except Exception as ex:
+                self._echo(f"[SGT] {self._tag} the daily digest failed: {type(ex).__name__}")
+
+        import threading
+        self._digest_thread = threading.Thread(target=run, name="sgt-daily-digest", daemon=True)
+        self._digest_thread.start()
+
+    def _report_digest(self) -> None:
+        """A digest made since the last tick reaches the log and the pill (counts only)."""
+        made, self._digest_made = self._digest_made, None
         if not made:
             return
         self._log({"event": "digest", **(made.get("counts") or {})})
@@ -2335,6 +2362,7 @@ class SgtShadow:
                 pass
 
     def _daily_health_check(self) -> None:
+        self._report_digest()
         today = self._today()
         if self._checked_day == today:
             return

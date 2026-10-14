@@ -101,11 +101,20 @@ class TestUpdateAgent(unittest.TestCase):
 
     def test_never_closes_with_a_session_open_or_rows_queued(self):
         self._stage(_newer(), mandatory=True)
-        with self._idle(9999):
+        with self._idle(update_agent.LONG_WAIT_IDLE_SECONDS):
             self.assertIsNone(update_agent.should_close_now(self.app_dir, captures_busy=True))
             self.assertIsNone(update_agent.should_close_now(self.app_dir, captures_busy=False, sessions_open=True))
             self.assertEqual(update_agent.should_close_now(self.app_dir, captures_busy=False, sessions_open=False),
                              _newer())
+
+    def test_a_mandatory_update_with_a_session_open_is_never_slower_than_a_normal_one(self):
+        # A portal page left in front keeps its session "open"; the usual idle rule still closes the app.
+        self._stage(_newer(), mandatory=True)
+        with self._idle(update_agent.IDLE_SECONDS):
+            self.assertEqual(update_agent.should_close_now(self.app_dir, captures_busy=False, sessions_open=True),
+                             _newer())
+        with self._idle(9999):
+            self.assertIsNone(update_agent.should_close_now(self.app_dir, captures_busy=True, sessions_open=True))
 
     def test_mandatory_update_keeps_the_daily_close_limit(self):
         self._stage(_newer(), mandatory=True)
