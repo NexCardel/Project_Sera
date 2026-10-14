@@ -1,16 +1,16 @@
-# SGT never-miss — report (2026-10-14 18:08)
+# SGT never-miss — report (2026-10-14 18:27)
 
 Deadline: 2026-10-17T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 4 |
+| Not started | 3 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 13 |
+| Done | 14 |
 | Blocked | 0 |
 
-Runs: 17   output tokens: 789188   API-equivalent cost: $58.21
+Runs: 18   output tokens: 868223   API-equivalent cost: $64.88
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -27,7 +27,7 @@ Runs: 17   output tokens: 789188   API-equivalent cost: $58.21
 | WP9 | Done | sonnet | d79a413 | Identity persistence | 4 h idle, 12 h parked identity on disk, resume by client, window_idle/window_gone, monotonic idle clock; narrow run green; owner check 17 |
 | WP10 | Done | opus | 8d62ece | Visible windows that are not in front | Visible windows not in front watched every 1 s (cap 3, front first, covered by union left out); C8/profile 3 background success green; 1296 passed; owner checks |
 | WP11 | Done | sonnet | f9135b1 | Recovery: the latest filing on list and status pages | Rows born on a list page are marked recovered; GST Track Return Status and ITR history specs ship disabled; owner check 20 asks for the labels. |
-| WP12 | Not started | sonnet |  | Fleet health view and the mandatory update path |  |
+| WP12 | Done | sonnet | 369f49e | Fleet health view and the mandatory update path | Fleet panel, sharing interval setting, daily digest, mandatory update path. Narrow runs green: test_sgt_* 877, test_vsdc_* 434, fleet and update tests. Full sui |
 | WP13 | Not started | sonnet |  | Live soak tool and pass/fail |  |
 | WP14 | Not started | haiku |  | Scenario sweep and documentation |  |
 | WPR | Not started | opus |  | Final review |  |
@@ -50,6 +50,10 @@ Runs: 17   output tokens: 789188   API-equivalent cost: $58.21
 - **WP10** How do background windows feed health and the unlisted-portal tripwire? → Health counts a background window in scope only on a fresh Document URL, never raises scope-lost for it, and each absorbed read names its window (HealthMonitor.reading); the tripwire looks only at the window in front; heartbeat front/page fields stay the front window's, plus bg=<count> (WP10 rule: blind only if its Document URL is in scope and not covered; read_result had no window and would land on whichever window was looked at last; the tripwire probes UI names of an unlisted page, so its reach is not widened)
 - **WP11** Where is a list-page row marked recovered? → In _merge: any slot born from a start-card record (Fix the kind: the same rule serves ITR cards, e-Verify picker and GST lists; a later whole-page UIA read keeps first_seen_as)
 - **WP11** Ship the GST Track Return Status spec enabled with guessed labels? → No: shipped disabled, goldens enable it by overlay (Labels are guesses until the owner pastes corpus lines; a wrong label would only miss, but unverified specs stay off)
+- **WP12** How does the capture thread hand a health record to the settings table? → A HealthWrite item on the capture queue, handled by the worker thread, never dead-lettered, skipped by quit-flush (queue.Queue is thread-safe so no Qt signal hop is needed, and the capture thread never touches the database)
+- **WP12** What does the daily digest text hold? → Fixed sentences with counts and PC names only, 7 lines always; saved in capture_digest_text, once a day, admin PC only (Privacy rule: no client data anywhere; the HUD pill and settings panel show the same text)
+- **WP12** How do the panel colours cope with a sharing interval of 1 to 60 minutes? → Fresh for sync_min + 3 minutes, silent after max(10, 2 x sync_min); the interval travels in each record (The old 3 minute green rule would turn every PC amber at the 15 minute default)
+- **WP12** How does the digest get yesterday's blind and stalled minutes and the row counters? → Records carry blind/stalled totals for yesterday (copied at day rollover); row counters are since each PC last started (A PC that restarts mid-day loses its counters, so the digest says 'counted since each PC last started' instead of claiming a day total)
 
 ## Checks waiting for you
 
@@ -73,3 +77,6 @@ Runs: 17   output tokens: 789188   API-equivalent cost: $58.21
 - #18 (WP10) D6 STOP: run Sera with SGT on for a full office day with two browser windows visible (second monitor or side by side). Task Manager: Sera's CPU stays under ~5% average with both visible (compare with one window); vsdc.log heartbeat shows bg=1 or 2 and uia lanes <= 3, uia_late stays 0 and no health state=blind for a window you were not looking at. Pass = all of that; if CPU is too high, the fix is BG_TICK_SEC (core/vsdc/vsdc_windows.py), not turning D6 off. — Not run
 - #19 (WP10) Second-monitor filing: file one real return (GST or ITR) in a browser window on the second monitor while working in another program (Excel/Tally) in front on the first monitor, and leave the success page there. Pass = the tracker row (with ARN/ack) appears within ~10 s without ever clicking the browser. Then repeat with the browser maximised BEHIND a maximised Excel on the same monitor: no row is expected there (covered windows are not watched) and health must not say blind. — Not run
 - #20 (WP11) OWNER, when you have a minute: run 'venv/Scripts/python.exe tools/sgt_replay.py show', open a corpus day that has a GST Track Return Status page (and, only if itr_dataset_cards cannot read it, an Income Tax View Filed Returns page), and paste ONE card's label lines (write <value> for values, no names/PAN/GSTIN/ARN) into docs/sgt-recovery-spec-notes.md under the matching heading. Then replace the guessed labels in gst_track_return_status (core/sgt/sgt_fields.json), delete its disabled line, and run 'venv/Scripts/python.exe tools/sgt_replay.py diff'. Pass = the diff adds only recovered rows under the right client with an ARN that was on the page, changes no existing row, and tests/test_sgt_replay.py stays green. — Not run
+- #21 (WP12) Owner: set mandatory to true in version.json for the next release that carries WP1 to WP5 (I never set it). Until then every update keeps the normal 3 minute idle rule. — Not run
+- #22 (WP12) Owner: confirm the 15 minute default sharing interval (D10) and the Capture health panel and digest wording in Settings > Tracker on a real PC; the panel was only built offscreen in tests, never looked at in a real window. — Not run
+- #23 (WP12) Owner: after the next release, confirm a staged update shows the 'Update ready' HUD event once and that the PC restarts itself when idle; the ps1 change (mandatory copied into pending.json) is untested outside the code review. — Not run
