@@ -28,7 +28,7 @@ from ui.components.kit import (
     EmptyState,
     LabelledAction,
     LogView,
-    Segmented,
+    Tabs,
     StatusStrip,
     ask_confirm,
     show_message,
@@ -182,7 +182,8 @@ class SeraSyncDialog(QDialog):
         left_col = QVBoxLayout(left)
         left_col.setContentsMargins(0, 0, 0, 0)
         left_col.setSpacing(TOKENS["s_3"])
-        self.tabs = Segmented(["Devices", "Office members", "Sync status"])
+        # underline tabs (the mockup .tabs2); owner decision 6
+        self.tabs = Tabs(["Devices", "Office members", "Sync status"])
         self.tabs.setVisible(office_mode)
         left_col.addWidget(self.tabs, 0, Qt.AlignLeft)
         self.tab_stack = QStackedWidget()
@@ -266,7 +267,7 @@ class SeraSyncDialog(QDialog):
         # One row per device with all seven facts (Username, Hostname, IP, Version, DB Modified,
         # Clients / Dumps, Mode / Status); the row tooltip repeats every fact, so a column that
         # is elided or hidden on a narrow window loses nothing.
-        card = Card("Discovered LAN devices")
+        card = Card("")   # the mockup has no title over the device list
         self.table = DarkListTable(0, len(_DEVICE_COLUMNS))
         self.table.setHorizontalHeaderLabels([c[0] for c in _DEVICE_COLUMNS])
         for col, (_, spec) in enumerate(_DEVICE_COLUMNS):
