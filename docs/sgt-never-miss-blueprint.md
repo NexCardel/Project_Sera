@@ -10,6 +10,9 @@ constants, pseudocode, edge cases, tests with names, done-criteria, dependencies
 and an owner STOP point. An agent needs this file, the WP it was given, and the code. It does not
 need the chat that produced this file.
 
+**Read section 10 ("Owner answers") and section 10a ("Review corrections") first.** They were
+added after review and override the design text where they differ.
+
 **How to read it.** Section 1 says what the code really does today (the report, checked).
 Section 2 is the answer to "can 100% be met". Section 3 is the design on one page. Sections 4 to
 7 are the design in detail. Section 8 is the test plan. Section 9 holds the work packages.
@@ -727,7 +730,8 @@ WP13 --> WP14
 WP15: NOT BUILT (owner rejected D9 on 2026-10-14)
 ```
 
-Owner answers to the decisions are in section 10, "Owner answers". Read them before starting any WP.
+Owner answers to the decisions are in section 10, "Owner answers", and the review corrections
+R1-R13 are in section 10a. Read both before starting any WP: they override the WP text.
 
 ### WP0. Probe pack: the measurements only a Windows PC can take
 
@@ -1368,6 +1372,28 @@ Every WP agent follows this table. Where it differs from the text elsewhere in t
 scenario ids D1-D15 in section 11 and the report's section 5D. For example, "D13 (address bar
 typed)" in WP6 is the scenario, not this decision.
 
+### 10a. Review corrections (2026-10-14): these override the text of sections 4 to 9
+
+This blueprint was reviewed against the code on Windows after it was written. The rules below
+**override** anything in sections 4 to 9 that says otherwise. Every WP agent reads them before
+starting. R1 to R7 change the design; R8 to R12 tune or correct it.
+
+| Id | Where | Rule |
+| :--- | :--- | :--- |
+| R1 | 4.6, 6.1, 6.3, WP5 | **A read whose URL changed mid-read is dropped, exactly like a tab change.** `torn == "url"` is never absorbed: the loop re-requests (`reason="torn-retry"`, within `TORN_RETRIES`). Delete the "absorbed for its page text only" rule and the test `test_torn_url_results_keep_page_text_but_not_link_hits`; add `test_torn_url_results_are_dropped_and_re_requested`. **The closed ring never takes a result across a boundary:** a result is absorbed into an ended session only if that session ended by idle or window-gone, and never if it ended by logout, a login page, or an identity contradiction. Replace `test_a_result_after_logout_still_writes_the_row_under_that_client` with `test_a_result_after_logout_is_dropped` and add `test_logout_then_next_client_in_the_same_tab_never_mixes`. Why: a read started on client A's last page can return client B's page after a logout and re-login in the same tab. A wrong-client row is worse than a re-read. |
+| R2 | 4.3, 4.8, WP3, WP4 | **The URL check never waits behind a page read.** Each lane has two workers: a **content worker** (page reads) and a **scope worker** (URL-only jobs: Document `Value`, `IsOffscreen`, tab id, address bar; no page content). Both are MTA and each has its own UIA objects. A URL-only job is never queued behind a content read. `URL_FRESH_SEC = 2.0` stays; while a heavy read runs, the scope worker keeps the URL fresh, so the scope gate stays open and the OCR flash trigger (5.1) can still fire. Add `test_scope_stays_fresh_while_a_5s_read_runs` and `test_flash_ocr_fires_during_a_heavy_read`. The wedge/abandon rules apply to each worker separately. |
+| R3 | 4.3, WP3 | **Coalescing never loses a page read.** `lane.queued` holds at most one content context. A newer content context replaces an older one; a URL-only context never replaces a content context (it goes to the scope worker, R2). Add `test_a_url_only_request_never_replaces_a_queued_page_read`. |
+| R4 | 4.1, 4.3, WP3, scenario A8 | **The SDIS recorder is switched off by the owner (2026-10-14).** It read every page a second time in raw view (`core/sdis/recorder.py`, `read_page_nodes_here`, no timeout), which doubled the browser's work on heavy pages; it shipped on by default in v2.12.7 (2026-10-09). No WP changes SDIS. If the owner switches it back on, it must first be changed so that it never reads while a lane's content worker is busy, never reads a page whose last Core read took over `SDIS_MAX_CORE_MS = 300`, and is guarded by a timeout like the lanes. Section 11's A8 becomes **Closed (SDIS off by owner; SGT-I gets nodes from the Core)**. |
+| R5 | 6.5, WP11, resolver | **Recovery takes only the latest filing on a list page (owner, 2026-10-14).** `latest_period_only` is **not** changed: a list page still yields only the latest period's card(s). That card is still recovered, marked `evidence_source="recovered"` when it creates a slot, and still upgrades an existing row (a missing ARN, a higher status). Delete `test_cards_with_their_own_arn_are_all_kept`; keep `test_cards_without_an_identifier_still_thin_to_the_latest_period`; the golden sessions `itr_filed_returns_history` and `gst_track_return_status` expect **one** row (the latest filing), not five. Section 8.2's "five cards, five rows" becomes "five cards, one row (the latest)". |
+| R6 | 5.2, WP5, D3 | **OCR may promote a status only together with an identifier.** Under `SOURCE_POLICY["ocr"]`, a slot may be created or its status raised only when the same OCR result also gives that dataset's ARN/ack, accepted by the existing identifier checks (label-anchored, checksum/shape, ITR ack carries its date). Wording or a tile alone never promotes, from OCR. This repeats no part of the 2026-10-06 bug (11 "Verified without ARN" rows from dashboard text). Add `test_ocr_status_wording_without_an_arn_never_promotes`. |
+| R7 | WP4 | **The crosshair engines keep their own URL read.** WP4 does not delete `VSDCRouter._init_uia`, `extract_browser_url` or `_cached_address_elements`. The crosshair/VSDC247 path keeps using them, unchanged, whenever it runs; the SGT path uses the capture loop's scope worker (R2). They are removed only in a later WP that retires the crosshair engines. Add `test_crosshair_path_reads_the_url_with_sgt_off`. |
+| R8 | 7.2, WP12, D10 | **How often a PC shares its health is an app setting (owner, 2026-10-14).** New setting `capture_health_sync_min` in Settings → Tracker, next to the "Capture health" panel: a spin box in minutes, default **15**, allowed 1 to 60. A record is also written at once on every state change. Replace `test_health_key_is_written_once_a_minute` with `test_health_key_is_written_on_change_and_every_n_minutes`. The local `vsdc.log` health line stays once a minute (it is not synced). |
+| R9 | 4.3, WP3, WP0 | **At most one heavy read per browser process at a time.** Lanes stop Sera's windows from blocking each other, but every window of one browser is answered by that browser's single UI thread. A content read whose last read of that page took over `HEAVY_READ_MS = 700` waits (stays queued) while another lane of the same browser process (same PID) has a content read in flight. WP0's `read-timing` adds a run with two windows of one browser read at once vs one at a time, to confirm. Add `test_two_heavy_reads_of_one_browser_never_run_at_once`. |
+| R10 | 5.3, D7 | **Do not count on 0.2 s yet.** The SGT blueprint measured screenshot + hash at about 50 ms (section 7 there), not the 2 ms assumed in 5.3. D7's fallback (0.35 s when a frame tick costs 15 ms or more) applies until WP0's `gate` probe measures it on an office PC. |
+| R11 | WP2 | The database connection already waits up to 5 s on a lock (the default timeout of the `sqlite3`-style `connect`), so `PRAGMA busy_timeout = 5000` changes nothing; leave it out. The retry and dead letter are still needed: they cover locks longer than 5 s and every other write failure. |
+| R12 | 11 | "The session waits (2 h idle)" reads 4 h (D13). |
+| R13 | 1, report W11 | The report said all-day PCs never update; section 1 corrected that (the update installs after 3 min without input, or after 8 h staged plus 30 s without input). Staff entering invoices rarely stop for 3 minutes, so a release waits the full 8 hours on exactly those PCs. That is why D12 (mandatory path) matters. |
+
 ---
 
 ## 11. Every scenario, and what closes it
@@ -1384,7 +1410,7 @@ with what remains), **Out** (by constraint, with the constraint), **Unobservable
 | A5 | Partial until measured | WP0 `read-timing --minutes 240`, WP13 soak drift check; MTA (D2) |
 | A6 | Closed | tab cache per lane; `test_a6_forty_tabs_tab_id_cache` |
 | A7 | Closed | tickets: a late read is absorbed; OCR flash; `test_a7_slow_browser_late_read_absorbed` |
-| A8 | Closed | SGT-I and SDIS read nothing on the Core's lanes after WP3; `test_a8_sgt_i_never_uses_a_lane` |
+| A8 | Closed (R4) | SDIS recording is switched off by the owner; SGT-I gets the Core's nodes after WP3; `test_a8_sgt_i_never_uses_a_lane` |
 | A9 | Partial | spacing and lanes bound CPU; WP13 soak on the slowest office PC decides |
 | A10 | Closed | cell gate; `test_a10_spinner_never_passes_the_gate` |
 | B1 | Closed | `test_tab_change_during_read_is_torn_tab`, `test_b1_tab_switch_mid_read` |
@@ -1406,7 +1432,7 @@ with what remains), **Out** (by constraint, with the constraint), **Unobservable
 | D4 | Closed | resume by client (WP9); `test_d4_tab_dragged_to_new_window_resumes_draft` |
 | D5 | Partial | GST header GSTIN names the session; ITR deep link without the profile page stays unattributed + alert + digest |
 | D6 | Closed | per-tab sessions; `test_d6_fifteen_restored_tabs` |
-| D7, D8 | Partial as today | out-of-scope pages are never read; the session waits (2 h idle) |
+| D7, D8 | Partial as today | out-of-scope pages are never read; the session waits (4 h idle, D13) |
 | D9 | Closed | short page read like any other; OCR net |
 | D10 | Closed (D6) | `test_d10_signing_dialog_in_front_still_reads_the_browser` |
 | D11 | Partial as today | focus leaves; session waits |
