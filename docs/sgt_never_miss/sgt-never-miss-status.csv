@@ -1,7 +1,7 @@
 WP,Phase,What,Status,Model,Attempts,Commit,Notes,Updated
 WB,0,Baseline: the test suite before any change,Done,claude-haiku-5-5,1,bd0570a,"Baseline: T=3078 F=2 S=1; failing: test_class_diff_render::test_output_paths_never_recorder_or_tracked_folders, test_sdis_tables::test_command_line_prints_no_values",2026-10-14 14:24
 WP0,0,Probe pack: the Windows measurements tool,Done,claude-sonnet-5-5,1,db317c5,tools/sgt_probe_pack.py + 7 tests (1089 sgt/vsdc tests pass); 6 owner checks added; no probe run,2026-10-14 14:36
-WP1,1,"Capture health: states, HUD event, phone alert, log",Not started,claude-sonnet-5-5,0,,,
+WP1,1,"Capture health: states, HUD event, phone alert, log",Done,claude-sonnet-5-5,1,0cc5e4a,"HealthMonitor (13 states), HUD event, phone alert, health log lines; 33 new tests, narrow run 1200 passed 1 skipped; owner check 7 added",2026-10-14 14:49
 WP2,1,Rows never lost: database retry and dead letter,Not started,claude-sonnet-5-5,0,,,
 WP3,2,"Reader v2: MTA lanes, cached read, tickets, torn detection, Document URL",Not started,claude-opus-5-5,0,,,
 WP4,2,CaptureLoop: the SGT path out of the router,Not started,claude-opus-5-5,0,,,
