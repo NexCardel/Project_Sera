@@ -1,16 +1,16 @@
-# SGT never-miss — report (2026-10-14 17:24)
+# SGT never-miss — report (2026-10-14 17:36)
 
 Deadline: 2026-10-17T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 7 |
+| Not started | 6 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 10 |
+| Done | 11 |
 | Blocked | 0 |
 
-Runs: 14   output tokens: 641879   API-equivalent cost: $45.62
+Runs: 15   output tokens: 689587   API-equivalent cost: $49.72
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -24,7 +24,7 @@ Runs: 14   output tokens: 641879   API-equivalent cost: $45.62
 | WP6 | Done | sonnet | 1a31b24 | Simulation harness and the six day profiles | Sim harness tests/sgt_sim, profiles 1-6 pass at full size, 37 scenario tests (5 strict xfails for WP7/WP9/WP10); fixed cross-tab absorb and wedged pending read; |
 | WP7 | Done | sonnet | c5e3c1c | Change gate v2 tuning and the flash OCR trigger | OCR lane plus flash/green/paused triggers; held until a read confirms the tab; R2 and C1-heavy xfails now green; owner check 15 for the D4 histogram |
 | WP8 | Done | sonnet | 6a5885f | Blind pages on every portal | Per-day ocr_only_rows in SpecStats + health row hook; GST plan note; blind-page switch already done by WP5/WP7. 1259 passed. |
-| WP9 | Not started | sonnet |  | Identity persistence |  |
+| WP9 | Done | sonnet | d79a413 | Identity persistence | 4 h idle, 12 h parked identity on disk, resume by client, window_idle/window_gone, monotonic idle clock; narrow run green; owner check 17 |
 | WP10 | Not started | opus |  | Visible windows that are not in front |  |
 | WP11 | Not started | sonnet |  | Recovery: the latest filing on list and status pages |  |
 | WP12 | Not started | sonnet |  | Fleet health view and the mandatory update path |  |
@@ -64,3 +64,4 @@ Runs: 14   output tokens: 641879   API-equivalent cost: $45.62
 - #14 (WP6) Run the real-sleep profile runs (about 18 min): set the environment variable SGT_SIM_REAL to 1, then run venv/Scripts/python.exe -m pytest -q -p no:cacheprovider tests/test_sgt_sim_profiles.py -k real_sleeps. Both tests must pass. — Not run
 - #15 (WP7) Confirm the D4 gate thresholds (GATE_MIN_CELLS=3, FLASH_MIN_CELLS=8, GATE_LEVEL_DELTA=2) against WP0's histogram. On an office PC with a real browser on the GST portal, run: venv/Scripts/python.exe tools/sgt_probe_pack.py gate --minutes 10 while filing normally (typing in a form, a toast, a page change). Pass: caret/typing frames fall in the 0-2 cell buckets, nearly all toast/banner frames in the 8+ buckets, and the tick cost stays low (D7). If many toasts land in 3-7 cells, report the histogram so FLASH_MIN_CELLS can be lowered; the defaults stay until then. — Not run
 - #16 (WP8) On the dev PC after a GST day: open ~/AmanAssociates_Sera/sgt_shadow/spec_stats.json and look at the ocr_rows key (counts per portal per day, no client data). Pass: it exists, ocr_rows for GST Portal is a small number (0 on a normal day), and a vsdc.log health line shows ocr_only_rows matching the day's count. Ask me if a GST row marked evidence_source=ocr appears that no UIA read ever confirmed. — Not run
+- #17 (WP9) Parked client identity (a PAN or GSTIN plus the draft in progress) is now kept on disk in sessions_state.json for up to 12 h so a restart or a new window can resume it. Default taken: yes, acceptable. Please confirm. — Not run
