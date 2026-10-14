@@ -224,7 +224,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QAbstractButton, QAbstractItemView, QBoxLayout, QButtonGroup, QCheckBox, QComboBox, QDialog, QFrame,
-    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
+    QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
     QSizePolicy, QStyle, QStyledItemDelegate, QTableWidget, QToolButton, QToolTip, QVBoxLayout,
     QWidget,
 )
@@ -556,6 +556,219 @@ class Segmented(QFrame):
             self.set_current(max(0, min(len(self.buttons) - 1, self._current + step)))
             return
         super().keyPressEvent(event)
+
+
+class _TabButton(QAbstractButton):
+    """One underline tab of Tabs: label, optional count badge, mint text and a 2 px mint underline when on."""
+
+    def __init__(self, text, parent=None):
+        super().__init__(parent)
+        self.setText(text)
+        self.setCheckable(True)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setCursor(Qt.PointingHandCursor)
+        self._count = None
+        self._amber = False
+
+    def set_count(self, count, amber=False):
+        self._count = count
+        self._amber = bool(amber)
+        self.updateGeometry()
+        self.update()
+
+    def _text_font(self):
+        return _px_font(self, K["f_tab"], QFont.DemiBold)
+
+    def _badge_font(self):
+        return _px_font(self, K["f_tab_badge"], QFont.DemiBold)
+
+    def sizeHint(self):
+        fm = QFontMetrics(self._text_font())
+        w = fm.horizontalAdvance(self.text()) + 2 * K["pad_tab_h"]
+        if self._count is not None:
+            bw = QFontMetrics(self._badge_font()).horizontalAdvance(str(self._count)) + 2 * K["pad_badge_h"]
+            w += K["gap_chip"] + bw
+        return QSize(w, fm.height() + 2 * K["pad_tab_v"])
+
+    def paintEvent(self, event):
+        h = self.height()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setFont(self._text_font())
+        tx = T["mint"] if self.isChecked() else (T["text"] if self.underMouse() else T["muted"])
+        p.setPen(QColor(tx))
+        fm = p.fontMetrics()
+        x = K["pad_tab_h"]
+        p.drawText(QRectF(x, 0, fm.horizontalAdvance(self.text()), h), Qt.AlignLeft | Qt.AlignVCenter, self.text())
+        x += fm.horizontalAdvance(self.text())
+        if self._count is not None:
+            x += K["gap_chip"]
+            p.setFont(self._badge_font())
+            bw = p.fontMetrics().horizontalAdvance(str(self._count)) + 2 * K["pad_badge_h"]
+            bh = K["h_badge"]
+            badge = QRectF(x, (h - bh) / 2, bw, bh)
+            bg, bt = (T["warndim"], T["warn"]) if self._amber else (K["tab_badge_bg"], K["tab_badge_tx"])
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(bg))
+            p.drawRoundedRect(badge, K["r_badge"], K["r_badge"])
+            p.setPen(QColor(bt))
+            p.drawText(badge, Qt.AlignCenter, str(self._count))
+        if self.isChecked():
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(T["mint"]))
+            p.drawRect(QRectF(0, h - 2, self.width(), 2))
+        p.end()
+
+
+class Tabs(QFrame):
+    """Underline tabs (the mockup's .tabs2): one focus stop, Left / Right move, currentChanged(int) on a
+    real change. set_count(i, n, amber=False) shows a count badge on a tab (amber when it needs action)."""
+
+    currentChanged = Signal(int)
+
+    def __init__(self, options, parent=None, current=0):
+        super().__init__(parent)
+        self.setObjectName("KitTabs")
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
+        self.tabs = []
+        for i, label in enumerate(options):
+            b = _TabButton(label, self)
+            self._group.addButton(b, i)
+            lay.addWidget(b)
+            self.tabs.append(b)
+        lay.addStretch(1)
+        self._current = -1
+        if self.tabs:
+            self.setFixedHeight(self.tabs[0].sizeHint().height())
+            self.set_current(current)
+        self._group.idClicked.connect(self._on_clicked)
+
+    def current_index(self):
+        return self._current
+
+    def set_current(self, index):
+        if not 0 <= index < len(self.tabs) or index == self._current:
+            return
+        self._current = index
+        self.tabs[index].setChecked(True)
+        self.currentChanged.emit(index)
+
+    def set_count(self, index, count, amber=False):
+        if 0 <= index < len(self.tabs):
+            self.tabs[index].set_count(count, amber)
+
+    def _on_clicked(self, index):
+        self.setFocus(Qt.MouseFocusReason)
+        self.set_current(index)
+
+    def keyPressEvent(self, event):
+        step = {Qt.Key_Left: -1, Qt.Key_Right: 1}.get(event.key())
+        if step and self.tabs:
+            self.set_current(max(0, min(len(self.tabs) - 1, self._current + step)))
+            return
+        super().keyPressEvent(event)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        p = QPainter(self)
+        p.fillRect(0, self.height() - 1, self.width(), 1, QColor(T["line"]))
+        p.end()
+
+
+class _KVCell(QWidget):
+    """One label-over-value cell of KeyValueGrid; paints the hairline under its row."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._rule = False
+
+    def set_rule(self, on):
+        self._rule = bool(on)
+        self.update()
+
+    def paintEvent(self, event):
+        if self._rule:
+            p = QPainter(self)
+            p.fillRect(0, self.height() - 1, self.width(), 1, QColor(K["row_line"]))
+            p.end()
+
+
+class KeyValueGrid(QWidget):
+    """Two columns of label over value (the mockup's .kv): mono values for IDs and numbers, ghost
+    24 px buttons (copy, eye) after a value, a hairline under each row, and one 'Not set:' line for the
+    fields left empty. add_field(label, value, *, mono=False, actions=()) with actions as
+    [(icon, tooltip, slot)]; set_not_set([labels])."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self._body = QWidget(self)
+        self._grid = QGridLayout(self._body)
+        self._grid.setContentsMargins(K["kv_pad_h"], K["kv_pad_top"], K["kv_pad_h"], 0)
+        self._grid.setHorizontalSpacing(K["gap_kv_col"])
+        self._grid.setVerticalSpacing(0)
+        outer.addWidget(self._body)
+        self._notset = QLabel(self)
+        self._notset.setTextFormat(Qt.RichText)
+        self._notset.setFont(_px_font(self, K["f_sub"]))
+        self._notset.setContentsMargins(K["kv_pad_h"], 0, K["kv_pad_h"], K["kv_pad_bot"])
+        self._notset.setVisible(False)
+        outer.addWidget(self._notset)
+        self._cells = []
+
+    def add_field(self, label, value, *, mono=False, actions=()):
+        cell = _KVCell(self._body)
+        lay = QVBoxLayout(cell)
+        lay.setContentsMargins(0, 0, 0, K["pad_kv_row"])
+        lay.setSpacing(1)
+        lab = QLabel(label, cell)
+        lab.setFont(_px_font(lab, K["f_kv_label"]))
+        lab.setStyleSheet(f"QLabel {{ color: {T['muted']}; background: transparent; }}")
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(T["s_1"])
+        val = _ElideLabel(str(value), cell)
+        font = _px_font(val, K["f_kv_mono"] if mono else K["f_kv_value"])
+        if mono:
+            font.setFamilies(["Consolas", "Cascadia Mono"])
+            font.setStyleHint(QFont.Monospace)
+        val.setFont(font)
+        row.addWidget(val, 1)
+        for icon, tip, slot in actions:
+            b = IconButton(icon, tip, cell, variant="plain", sm=True)
+            b.clicked.connect(slot)
+            row.addWidget(b)
+        lay.addWidget(lab)
+        lay.addLayout(row)
+        index = len(self._cells)
+        self._grid.addWidget(cell, index // 2, index % 2)
+        self._cells.append(cell)
+        self._refresh_rules()
+        return cell
+
+    def _refresh_rules(self):
+        rows = (len(self._cells) + 1) // 2
+        for i, cell in enumerate(self._cells):
+            cell.set_rule(i // 2 < rows - 1)
+
+    def set_not_set(self, labels):
+        labels = [str(x) for x in labels if x]
+        if not labels:
+            self._notset.setVisible(False)
+            return
+        from html import escape
+        self._notset.setText(
+            f"<span style=\"color:{K['notset_b']}; font-weight:600;\">Not set:</span> "
+            f"<span style=\"color:{K['notset_tx']};\">{escape(', '.join(labels))}</span>")
+        self._notset.setVisible(True)
 
 
 # ---------------------------------------------------------------- Key

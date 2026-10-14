@@ -73,6 +73,16 @@ def inputs_page():
     r = 0
     _row(grid, r, "FieldLabel", [kit.FieldLabel("Name of company"), kit.FieldLabel("PAN", required=True)])
     _row(grid, r, "Caption and Avatar", [kit.Caption("Sort"), kit.Avatar("ST"), kit.Avatar("+")])
+    tabs = kit.Tabs(["Sync status", "Devices", "Activity"], current=0)
+    tabs.set_count(0, 1, amber=True)
+    tabs.set_count(1, 4)
+    _row(grid, r, "Tabs", [tabs])
+    kv = kit.KeyValueGrid()
+    kv.add_field("PAN", "ABCDE1000F", mono=True, actions=[("mdi.content-copy", "Copy", lambda: None)])
+    kv.add_field("Phone", "98000 00001", actions=[("mdi.eye-outline", "Show", lambda: None)])
+    kv.add_field("Email", "sharma@example.com")
+    kv.set_not_set(["DOB", "TAN"])
+    _row(grid, r, "KeyValueGrid", [kv])
     r += 1
     long_in = fixed(kit.Input())
     long_in.setText("A very long client name that runs past the right edge of the field")
