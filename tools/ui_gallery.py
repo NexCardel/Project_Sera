@@ -72,6 +72,7 @@ def inputs_page():
 
     r = 0
     _row(grid, r, "FieldLabel", [kit.FieldLabel("Name of company"), kit.FieldLabel("PAN", required=True)])
+    _row(grid, r, "Caption and Avatar", [kit.Caption("Sort"), kit.Avatar("ST"), kit.Avatar("+")])
     r += 1
     long_in = fixed(kit.Input())
     long_in.setText("A very long client name that runs past the right edge of the field")
