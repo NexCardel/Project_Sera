@@ -103,11 +103,11 @@ HUD_TAGS = {MODE_SHADOW: "SGT (Shadow)", MODE_LIVE: "SGT (Live)"}
 CAPTURE_METHODS = {MODE_SHADOW: "SGT_shadow", MODE_LIVE: "SGT_live"}
 HUD_TAG = HUD_TAGS[MODE_SHADOW]
 CAPTURE_METHOD = CAPTURE_METHODS[MODE_SHADOW]
-IDLE_END_SEC = 2 * 3600
-IDLE_REASON = "idle 2 hr"
+IDLE_END_SEC = 4 * 3600         # owner D13: one client survives a whole workday of pauses
+IDLE_REASON = "idle 4 hr"
 CLIENT_LINK_SPEC = "client_db:user_id"       # the "spec" of a PAN / GSTIN taken from the saved client that owns the portal user ID
 IDENTITY_PROBLEM = "form and period are not known yet"      # why an ack-only row waits (see _queue)
-RESUME_WINDOW_SEC = 4 * 3600
+RESUME_WINDOW_SEC = 12 * 3600   # a parked client (also on disk, sessions_state.json) can be resumed this long
 # What a read may change, by where its text came from (SGT never-miss blueprint 5.2 with R6). OCR
 # is allowed on every portal but only ever ADDS: it never sets the client or any profile field,
 # fills a piece of the dataset in progress only where none exists (a canvas read loses label
@@ -241,8 +241,8 @@ def compose(values: Dict[str, str], rules: Any) -> Dict[str, str]:
 @dataclass
 class _Session:
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
-    started: float = field(default_factory=time.time)
-    last_seen: float = field(default_factory=time.time)
+    started: float = 0.0                # on SgtShadow's clock (set when the session is first seen)
+    last_seen: float = 0.0
     portal: str = ""
     profile: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     slots: List[_Slot] = field(default_factory=list)
@@ -298,7 +298,7 @@ class SgtShadow:
         read_nodes: Optional[Callable[[int], Dict[str, Any]]] = None,
         dispatched_ids: Optional[Callable[[], Iterable[str]]] = None,
         log_dir: Optional[Path] = None,
-        clock: Callable[[], float] = time.time,
+        clock: Optional[Callable[[], float]] = None,
         today: Callable[[], date] = date.today,
         echo: Callable[[str], None] = print,
         notify: Optional[Callable[[str, str, str, Dict[str, Any]], None]] = None,
@@ -372,7 +372,10 @@ class SgtShadow:
         self._read_nodes = read_nodes
         self._dispatched_ids = dispatched_ids or (lambda: ())
         self._log_dir = log_dir
-        self._clock = clock
+        # Idle and parking maths run on a monotonic clock (a wall-clock jump must not end or keep a
+        # session); wall time is only for log/row stamps and for a parked entry's age on disk.
+        self._monotonic = clock is None
+        self._clock = clock or time.monotonic
         self._today = today
         self._echo = echo
         self._sessions: Dict[int, _Session] = {}
@@ -402,6 +405,10 @@ class SgtShadow:
         self._url_changed = False                # the last observe_window moved its session to another page
         if self._state_path is not None:
             self._recover()
+
+    def _stamp(self, now: float) -> float:
+        """A reading of SgtShadow's clock as a wall-clock time, for the page corpus (replay sorts by it)."""
+        return now + (time.time() - time.monotonic()) if self._monotonic else now
 
     # ── Mode ─────────────────────────────────────────────────────────────────────
     def set_mode(self, mode: str) -> None:
@@ -499,11 +506,13 @@ class SgtShadow:
         except Exception:
             return False
 
-    def end_session(self, hwnd: int, reason: str) -> None:
+    def end_session(self, hwnd: int, reason: str, keep_parked: bool = False) -> None:
         """Ends EVERY session of this window - the one in view and the ones set aside. For a
         closed window, shutdown and switching SGT off; a login / logout page or the idle limit
-        end only the session they belong to (``_end_one``)."""
-        self._parked.pop(hwnd, None)
+        end only the session they belong to (``_end_one``). Sessions parked from this window are
+        forgotten too, unless keep_parked (shutdown: they resume after a restart)."""
+        if not keep_parked:
+            self._parked.pop(hwnd, None)
         s = self._sessions.pop(hwnd, None)
         aside = self._shelf.pop(hwnd, [])
         for x in ([s] if s is not None else []) + aside:
@@ -513,10 +522,28 @@ class SgtShadow:
         if self._stats is not None:
             self._stats.save()
 
+    def window_gone(self, hwnd: int) -> None:
+        """The window is really closed (IsWindow false): every session of it ends, none is parked."""
+        self.end_session(hwnd, "window closed")
+
+    def window_idle(self, hwnd: int) -> None:
+        """The window still exists but its sessions sat unseen too long (the user worked elsewhere): a
+        session with a client is parked - the same client, named again by any window, resumes its
+        draft - and the others end. Never raises."""
+        try:
+            now = self._clock()
+            sessions = ([self._sessions.pop(hwnd)] if hwnd in self._sessions else []) + self._shelf.pop(hwnd, [])
+            for s in sessions:
+                self._park(hwnd, s, now)
+            if sessions and self._stats is not None:
+                self._stats.save()
+        except Exception as e:
+            self._echo(f"[SGT] {self._tag} error, idle window skipped: {e}")
+
     def end_all(self, reason: str) -> None:
-        self._parked.clear()
         for hwnd in list(self._sessions) + [h for h in self._shelf if h not in self._sessions]:
-            self.end_session(hwnd, reason)
+            self.end_session(hwnd, reason, keep_parked=True)
+        self._save_state(force=True)            # parked clients stay on disk for the next start
 
     def _end_one(self, s: _Session, reason: str) -> None:
         """Ends one session; the window's other sessions carry on."""
@@ -751,8 +778,11 @@ class SgtShadow:
             picked = None
             cands = self._parked.get(hwnd) or []
             if cands:
+                # A snapshot read back from disk is never matched by window number: the number may now
+                # belong to another window. Only the client, named by a page, brings it back.
                 fit = [c for c in cands
-                       if (not portal or not c[1].get("portal") or portal == c[1].get("portal"))
+                       if not c[1].get(_RESTORED)
+                       and (not portal or not c[1].get("portal") or portal == c[1].get("portal"))
                        and (not tab or not c[1].get("tabs") or tab in c[1]["tabs"])]
                 rest = [c for c in cands if c not in fit]
                 if rest:
@@ -794,6 +824,8 @@ class SgtShadow:
         if not s.browser:
             s.browser = _browser_of(hwnd)
         s.last_seen = now
+        if not s.started:
+            s.started = now
         self._claim_tab(hwnd, s, tab)
 
         url_changed = url != s.last_url
@@ -868,7 +900,7 @@ class SgtShadow:
             if own_read:
                 nodes = self._nodes_for_recording(hwnd) if record_nodes else None
             self._recorder.record(session=s.session_id, portal=portal, url=url, title=title,
-                                  source=source, lines=lines, ts=now, today=today,
+                                  source=source, lines=lines, ts=self._stamp(now), today=today,
                                   nodes=nodes if record_nodes else None)
         sdis = self._sdis
         try:
@@ -957,6 +989,9 @@ class SgtShadow:
                         s = self._bring_back(hwnd, back, url, h, now)
                         self._claim_tab(hwnd, s, tab)
                         break
+        s.last_seen = now                   # a session made above was not stamped yet
+        if not s.started:
+            s.started = now
         s.unread_tabs.discard(tab)
         s.conflicts += len(res.conflicts)
         self._page_pans = {p for ln in lines for p in _PAN_TOKEN.findall(ln or "")}
@@ -1601,17 +1636,61 @@ class SgtShadow:
         if note.endswith("seen once") and (s.profile.get(fld) or {}).get("spec") == CLIENT_LINK_SPEC:
             note = "portal user ID matched a saved client"
         first = not s.confirmed
-        if not first and note == s.confirm_note:
+        if not first and (note == s.confirm_note or s.confirm_note.startswith(note + "; earlier session")):
             return
         s.confirmed, s.confirm_note = True, note
         self._event(s, "identity", change="client identified" if first else "identity strengthened", note=note)
         if not first:
             return
         self._echo(f"[SGT] {self._tag} client identified ({note})")
+        if (s.profile.get(fld) or {}).get("spec") != CLIENT_LINK_SPEC:     # named by a page, not a lookup
+            self._resume_by_client(s, fld, s.profile[fld]["value"], self._clock())
         self._queue_all(s)
         for slot in s.slots:
             if slot.held and slot.sent_key is None:
                 self._queue(s, slot)            # a card that was waiting for the client
+
+    def _resume_by_client(self, s: _Session, key: str, value: str, now: float) -> bool:
+        """`s` was just named by its first page (`key` = PAN or GSTIN `value`, read from the page). A
+        parked session of the same client and portal - from any window, idle less than
+        RESUME_WINDOW_SEC ago - hands over its dataset in progress, its timeline and its identity note.
+        Identity is never borrowed: `s` already has its client from its own page, and nothing else of
+        the parked profile or its rows is taken. The parked entry is used up."""
+        best: Optional[Tuple[int, Tuple[float, Dict[str, Any]]]] = None
+        for h, lst in self._parked.items():
+            for c in lst:
+                snap = c[1]
+                if _client_value(snap, key) != value:
+                    continue
+                if s.portal and snap.get("portal") and s.portal != snap.get("portal"):
+                    continue
+                if now - float(snap.get("last_seen") or c[0]) > RESUME_WINDOW_SEC:
+                    continue
+                if best is None or float(snap.get("last_seen") or c[0]) > float(best[1][1].get("last_seen") or best[1][0]):
+                    best = (h, c)
+        if best is None:
+            return False
+        h, c = best
+        self._parked[h].remove(c)
+        if not self._parked[h]:
+            self._parked.pop(h, None)
+        snap = c[1]
+        old = _session_from_json(snap)
+        # The dataset in progress carries on only if this page does not already show another one
+        # (a piece of the same name with another value): then it is a different filing and starts fresh.
+        if all(s.draft.pieces[f]["value"] == p["value"] for f, p in old.draft.pieces.items() if f in s.draft.pieces):
+            for f, piece in old.draft.pieces.items():
+                s.draft.pieces.setdefault(f, piece)
+            s.draft.claims = sorted(set(s.draft.claims) | set(old.draft.claims))
+        s.timeline = (old.timeline + [u for u in s.timeline if u not in old.timeline])[-TIMELINE_CAP:]
+        if old.confirm_note:
+            s.confirm_note = f"{s.confirm_note}; earlier session: {old.confirm_note}"
+        idle_sec = max(0.0, round(now - float(snap.get("last_seen") or c[0]), 1))
+        self._event(s, "session_resumed", from_session=snap.get("session_id"), idle_sec=idle_sec, by="client")
+        self._echo(f"[SGT] {self._tag} same client as a parked session: its dataset in progress carries on "
+                   f"(idled {int(idle_sec)}s)")
+        self._save_state(force=True)
+        return True
 
     @staticmethod
     def _other_pans_on_page(s: _Session, res: PageResult, lines: List[str]) -> Set[str]:
@@ -1993,9 +2072,6 @@ class SgtShadow:
         idle += [(hwnd, s, True) for hwnd, lst in self._shelf.items() for s in lst
                  if now - s.last_seen > IDLE_END_SEC]
         for hwnd, s, aside in idle:
-            snap = copy.deepcopy(_session_to_json(s))
-            has_content = s.has_content
-            gap = now - s.last_seen
             if aside:
                 lst = self._shelf.get(hwnd) or []
                 if s in lst:
@@ -2004,16 +2080,20 @@ class SgtShadow:
                     self._shelf.pop(hwnd, None)
             else:
                 self._sessions.pop(hwnd, None)
-            self._end_one(s, IDLE_REASON)
-            prof = snap.get("profile") or {}
-            pan_val = prof.get("pan")
-            if isinstance(pan_val, dict):
-                pan_val = pan_val.get("value")
-            gstin_val = prof.get("gstin")
-            if isinstance(gstin_val, dict):
-                gstin_val = gstin_val.get("value")
-            if has_content and (pan_val or gstin_val) and gap <= RESUME_WINDOW_SEC:
-                self._parked.setdefault(hwnd, []).append((now, snap))
+            self._park(hwnd, s, now)
+
+    def _park(self, hwnd: int, s: _Session, now: float) -> None:
+        """`s` (already off the window's lists) sat idle: it ends, and when it had a client (a PAN or
+        GSTIN) and content it is also kept in `_parked` - and on disk - to be resumed within
+        RESUME_WINDOW_SEC (same window and tab, or the same client named by any window)."""
+        snap = copy.deepcopy(_session_to_json(s))
+        has_content = s.has_content
+        gap = now - s.last_seen
+        self._end_one(s, IDLE_REASON)
+        if has_content and _client_value(snap) and gap <= RESUME_WINDOW_SEC:
+            self._parked.setdefault(hwnd, []).append((now, snap))
+            self._event(s, "session_parked", idle_sec=round(gap, 1))
+            self._save_state(force=True)
 
     def would_be_payload(self, s: _Session) -> Dict[str, Any]:
         dispatched: Set[str] = {str(x) for x in (self._dispatched_ids() or ())}
@@ -2122,14 +2202,21 @@ class SgtShadow:
         self._state_dirty = False
         try:
             live = [s for s in self._all_sessions() if s.has_content]
+            # Parked clients (6.4): their age is written as the wall-clock moment they were parked and
+            # the idle gap they had then, because this process's clock means nothing after a restart.
+            wall = time.time()
+            parked = [{"hwnd": h, "parked_wall": wall - (now - at), "gap": max(0.0, at - float(snap.get("last_seen") or at)),
+                       "snap": snap}
+                      for h, lst in self._parked.items() for at, snap in lst
+                      if now - at <= RESUME_WINDOW_SEC]
             prev = self._state_path.with_suffix(".prev")
-            if not live:
+            if not live and not parked:
                 for f in (self._state_path, prev):
                     if f.exists():
                         f.unlink()
                 return
             snap = {"saved": datetime.now().isoformat(timespec="seconds"),
-                    "sessions": [_session_to_json(s) for s in live]}
+                    "sessions": [_session_to_json(s) for s in live], "parked": parked}
             self._state_path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self._state_path.with_suffix(".tmp")
             with open(tmp, "w", encoding="utf-8") as f:
@@ -2174,13 +2261,37 @@ class SgtShadow:
             self._finish(s, "recovered - the app stopped without ending it")
             self._queue_all(s, every=True)
             n += 1
+        restored = self._restore_parked(snap.get("parked"))
         for f in (self._state_path, prev):
             try:
                 f.unlink()
             except OSError:
                 pass
+        if restored:
+            self._save_state(force=True)
         if n:
             self._echo(f"[SGT] {self._tag} recovered {n} session(s) the app did not end; their datasets are re-written")
+
+    def _restore_parked(self, raw: Any) -> int:
+        """Parked clients from the last run that are still inside RESUME_WINDOW_SEC (not finished: they
+        ended when they were parked). Their window is gone, so they are resumable only by client."""
+        n = 0
+        now, wall = self._clock(), time.time()
+        for e in raw if isinstance(raw, list) else []:
+            try:
+                snap = dict(e["snap"])
+                age = max(0.0, wall - float(e["parked_wall"]))
+                if age > RESUME_WINDOW_SEC or not _client_value(snap):
+                    continue
+                snap["last_seen"] = now - age - max(0.0, float(e.get("gap") or 0.0))
+                snap[_RESTORED] = True
+                self._parked.setdefault(int(e["hwnd"]), []).append((now - age, snap))
+                n += 1
+            except Exception as ex:
+                self._echo(f"[SGT] {self._tag} could not restore a parked session: {type(ex).__name__}")
+        if n:
+            self._echo(f"[SGT] {self._tag} {n} parked session(s) restored from the last run")
+        return n
 
     # ── Portal-change watch ──────────────────────────────────────────────────────
     def _daily_health_check(self) -> None:
@@ -2239,6 +2350,20 @@ def _absorbs_after(reason: str) -> bool:
     return any(r == x or r.startswith(x + " ") for x in ABSORB_AFTER_END)
 
 
+_RESTORED = "_restored"         # marks a parked snapshot read back from disk: its hwnd means nothing now
+
+
+def _client_value(snap: Dict[str, Any], key: Optional[str] = None) -> str:
+    """The client's PAN or GSTIN in a session snapshot (`key`: only that one), or ''."""
+    prof = snap.get("profile") or {}
+    for k in ((key,) if key else _CLIENT_KEYS):
+        v = prof.get(k)
+        v = v.get("value") if isinstance(v, dict) else v
+        if v:
+            return str(v)
+    return ""
+
+
 def _browser_of(hwnd: int) -> str:
     """'chrome' | 'msedge' | 'firefox' | ... for a window, '' when it cannot be read (a test's fake window)."""
     try:
@@ -2267,8 +2392,8 @@ def _session_to_json(s: _Session) -> Dict[str, Any]:
 
 
 def _session_from_json(raw: Dict[str, Any]) -> _Session:
-    s = _Session(session_id=str(raw["session_id"]), started=float(raw.get("started") or time.time()),
-                 last_seen=float(raw.get("last_seen") or time.time()), portal=str(raw.get("portal") or ""))
+    s = _Session(session_id=str(raw["session_id"]), started=float(raw.get("started") or 0.0),
+                 last_seen=float(raw.get("last_seen") or 0.0), portal=str(raw.get("portal") or ""))
     s.browser = str(raw.get("browser") or "")
     s.profile = dict(raw.get("profile") or {})
     s.timeline = list(raw.get("timeline") or [])

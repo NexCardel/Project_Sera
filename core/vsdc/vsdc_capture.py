@@ -530,4 +530,4 @@ class CaptureLoop:
         if self._ocr_lane is not None:
             self._ocr_lane.close_window(hwnd)
         if self._sgt is not None:
-            self._sgt.end_session(hwnd, "window closed")
+            self._sgt.window_gone(hwnd)

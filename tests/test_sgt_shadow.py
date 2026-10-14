@@ -505,7 +505,7 @@ class TestSessions:
         r = Rig(tmp_path)
         r.see(PROFILE_URL, PROFILE_PAGE)
         r.see(PROFILE_URL, PROFILE_PAGE, advance=IDLE_END_SEC + 1)
-        assert r.events("session_end")[0]["reason"] == "idle 2 hr"
+        assert r.events("session_end")[0]["reason"] == "idle 4 hr"
 
     def test_two_windows_are_two_sessions(self, tmp_path):
         r = Rig(tmp_path)
@@ -863,7 +863,7 @@ class TestIdleResume:
         assert resumed[0]["idle_sec"] == float(IDLE_END_SEC + 60)
         ends = r.events("session_end")
         assert len(ends) == 2
-        assert ends[0]["reason"] == "idle 2 hr"
+        assert ends[0]["reason"] == "idle 4 hr"
         payload = ends[1]["payload"]
         assert payload["client_known"] is True
         assert payload["client_profile"]["pan"] == "ABCPD1234E"
@@ -893,7 +893,7 @@ class TestIdleResume:
     def test_gap_exceeding_resume_window_does_not_resume(self, tmp_path):
         r = Rig(tmp_path)
         r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
-        # Gap > RESUME_WINDOW_SEC (4 hours + 1s)
+        # Gap > RESUME_WINDOW_SEC (12 hours + 1s)
         r.see(FILED_URL, filed_page()[1:], shade=100, advance=RESUME_WINDOW_SEC + 1)
         r.sgt.end_all("test")
         assert len(r.events("session_resumed")) == 0
@@ -979,9 +979,149 @@ class TestIdleResume:
         r.sgt._end_idle(r.clock[0])
         ends = r.events("session_end")
         assert len(ends) == 1
-        assert ends[0]["reason"] == "idle 2 hr"
+        assert ends[0]["reason"] == "idle 4 hr"
         assert r.sgt.pending() > 0
         dispatched = r.sgt.drain()
         assert len(dispatched) >= 1
         assert dispatched[0]["arn"] == "123456789150925"
         assert dispatched[0]["pan"] == "ABCPD1234E"
+
+    # ── Identity persistence (never-miss WP9) ────────────────────────────────────
+    @staticmethod
+    def _fake_time(monkeypatch, wall):
+        import time as real_time
+        from core.sgt import sgt_shadow
+
+        class FakeTime:
+            def time(self):
+                return wall[0]
+
+            def __getattr__(self, name):
+                return getattr(real_time, name)
+
+        monkeypatch.setattr(sgt_shadow, "time", FakeTime())
+
+    def _park_a_client(self, tmp_path, state):
+        r = Rig(tmp_path)
+        r.sgt._state_path = state
+        r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
+        r.see(WIZ_PI, ["Personal Information", "x", "y"], shade=100)
+        r.sgt.window_idle(1)
+        return r
+
+    def test_parked_sessions_survive_a_restart(self, tmp_path, monkeypatch):
+        wall = [5_000_000.0]
+        self._fake_time(monkeypatch, wall)
+        state = tmp_path / "sessions_state.json"
+        r = self._park_a_client(tmp_path, state)
+        saved = json.loads(state.read_text(encoding="utf-8"))
+        assert saved["sessions"] == [] and len(saved["parked"]) == 1
+        wall[0] += 3 * 3600                                  # the app is closed and opened again
+        before = len(r.events("session_end"))
+        r2 = Rig(tmp_path / "second")
+        r2.sgt._state_path = state
+        r2.sgt._recover()
+        assert len(r2.sgt._parked[1]) == 1                   # restored, not finished
+        assert len(r2.events("session_end")) == 0 and before == 1
+        # Its window is gone: only the same client, named by a page, picks it up again.
+        r2.see(PROFILE_URL, PROFILE_PAGE, shade=90, hwnd=7, advance=10)
+        ev = r2.events("session_resumed")
+        assert len(ev) == 1 and ev[0]["by"] == "client"
+        assert ev[0]["idle_sec"] >= 3 * 3600
+        r2.see(SUBMITTED.replace("fo-itr4-ay2026/fo-submit-success", "x/done"),
+               ["Return submission", "Acknowledgement Number :", "123456789150726", "OK"], shade=110, hwnd=7)
+        r2.sgt.end_all("test")
+        ds = r2.events("session_end")[-1]["payload"]["datasets"]
+        assert [(d["form"], d["arn"]) for d in ds] == [("ITR-4", "123456789150726")]
+
+    def test_a_restored_entry_is_not_resumed_by_a_recycled_window_handle(self, tmp_path, monkeypatch):
+        wall = [5_000_000.0]
+        self._fake_time(monkeypatch, wall)
+        state = tmp_path / "sessions_state.json"
+        self._park_a_client(tmp_path, state)
+        r2 = Rig(tmp_path / "second")
+        r2.sgt._state_path = state
+        r2.sgt._recover()
+        r2.see(LOGIN_URL, ["Login to e-Filing", "Enter User ID"], shade=100, hwnd=1, advance=60)
+        assert r2.events("session_resumed") == []
+        assert (r2.sgt._sessions[1].profile or {}) == {}
+
+    def test_expired_parked_sessions_are_not_restored(self, tmp_path, monkeypatch):
+        wall = [5_000_000.0]
+        self._fake_time(monkeypatch, wall)
+        state = tmp_path / "sessions_state.json"
+        self._park_a_client(tmp_path, state)
+        wall[0] += RESUME_WINDOW_SEC + 60
+        r2 = Rig(tmp_path / "second")
+        r2.sgt._state_path = state
+        r2.sgt._recover()
+        assert r2.sgt._parked == {}
+        r2.see(PROFILE_URL, PROFILE_PAGE, shade=90, hwnd=7)
+        assert r2.events("session_resumed") == []
+
+    def test_a_new_window_naming_the_same_client_resumes_its_draft(self, tmp_path):
+        r = Rig(tmp_path)
+        r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
+        r.see(WIZ_PI, ["Personal Information", "x", "y"], shade=100)
+        r.sgt.window_idle(1)
+        assert 1 in r.sgt._parked and 1 not in r.sgt._sessions
+        r.see(PROFILE_URL, PROFILE_PAGE, shade=90, hwnd=2, advance=600)
+        ev = r.events("session_resumed")
+        assert len(ev) == 1 and ev[0]["by"] == "client"
+        assert r.sgt._parked == {}                           # used up
+        r.see(SUBMITTED.replace("fo-itr4-ay2026/fo-submit-success", "x/done"),
+              ["Return submission", "Acknowledgement Number :", "123456789150726", "OK"], shade=110, hwnd=2)
+        r.sgt.end_all("test")
+        ds = r.events("session_end")[-1]["payload"]["datasets"]
+        assert [(d["form"], d["period"], d["arn"]) for d in ds] == [("ITR-4", "AY 2026-27", "123456789150726")]
+
+    def test_a_new_window_naming_another_client_never_resumes(self, tmp_path):
+        r = Rig(tmp_path)
+        r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
+        r.see(WIZ_PI, ["Personal Information", "x", "y"], shade=100)
+        r.sgt.window_idle(1)
+        other = ["MEERA DAS Individual", "Profile", "Name", "MEERA DAS", "PAN", "XYZAB9876C"]
+        r.see(PROFILE_URL, other, shade=90, hwnd=2, advance=600)
+        assert r.events("session_resumed") == []
+        s = r.sgt._sessions[2]
+        assert s.profile["pan"]["value"] == "XYZAB9876C" and s.draft.pieces == {}
+        assert len(r.sgt._parked[1]) == 1                    # the first client is still waiting for its own return
+
+    def test_a_closed_window_never_parks(self, tmp_path):
+        r = Rig(tmp_path)
+        r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
+        r.sgt.window_gone(1)
+        assert r.sgt._parked == {} and r.events("session_end")[0]["reason"] == "window closed"
+
+    def test_idle_maths_survive_a_wall_clock_jump(self, tmp_path, monkeypatch):
+        wall, mono = [5_000_000.0], [1_000.0]
+        self._fake_time(monkeypatch, wall)
+        from core.sgt import sgt_shadow
+        monkeypatch.setattr(sgt_shadow.time, "monotonic", lambda: mono[0], raising=False)
+        page = []
+        sgt = SgtShadow(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
+                        read_uia=lambda h: {"lines": list(page)}, dispatched_ids=lambda: [],
+                        log_dir=tmp_path / "shadow", today=lambda: date(2026, 7, 15), echo=lambda m: None)
+        assert sgt._monotonic and sgt._clock() == 1_000.0
+
+        def see(url, lines, shade, advance):
+            mono[0] += advance
+            page[:] = lines
+            sgt.observe(1, ITR, url, frame=frame(shade))
+
+        def ended():
+            out = []
+            for f in (tmp_path / "shadow").glob("*.jsonl"):
+                out += [json.loads(x) for x in f.read_text(encoding="utf-8").splitlines()]
+            return [e["reason"] for e in out if e["event"] == "session_end"]
+
+        see(PROFILE_URL, PROFILE_PAGE, 90, 0.35)
+        sid = sgt._sessions[1].session_id
+        wall[0] += 30 * 86400                                # the PC's date is set forward a month ...
+        see(FILED_URL, filed_page(), 100, 5)
+        assert ended() == [] and sgt._sessions[1].session_id == sid
+        wall[0] -= 60 * 86400                                # ... and back two months
+        see(FILED_URL, filed_page(), 110, IDLE_END_SEC - 60)
+        assert ended() == []                                 # 4 h less a minute of real time: still one session
+        see(FILED_URL, filed_page(), 120, IDLE_END_SEC + 60)
+        assert ended() == ["idle 4 hr"]

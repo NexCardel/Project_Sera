@@ -208,8 +208,9 @@ _STATIC_SCREEN_TIMEOUT_SEC = 30.0
 # closed browser window's state (and its assembler, with whatever it hadn't
 # yet flushed) doesn't linger forever. Generous on purpose - VSDC ticks fast
 # but a taxpayer can legitimately sit on one page for minutes while reading it.
-# Two hours, the same idle limit as SGT's sessions (core/sgt/sgt_shadow.py IDLE_END_SEC).
-_SESSION_IDLE_TIMEOUT_SEC = 2 * 3600
+# Four hours, as SGT's idle limit (core/sgt/sgt_shadow.py IDLE_END_SEC; owner D13). Never shorter:
+# the router must not end or park a session before SGT would.
+_SESSION_IDLE_TIMEOUT_SEC = 4 * 3600
 
 
 class VSDCRouter:
@@ -901,16 +902,21 @@ class VSDCRouter:
         """
         now = time.time()
         stale = [
-            hwnd for hwnd, s in self._window_sessions.items()
+            (hwnd, hwnd != current_hwnd and not user32.IsWindow(hwnd))
+            for hwnd, s in self._window_sessions.items()
             if (
                 (hwnd != current_hwnd and not user32.IsWindow(hwnd))
                 or (now - s.last_seen) > _SESSION_IDLE_TIMEOUT_SEC
             )
         ]
-        for hwnd in stale:
+        for hwnd, gone in stale:
             del self._window_sessions[hwnd]
             if self._sgt is not None:
-                self._sgt.end_session(hwnd, "window closed")
+                # A window that still exists only sat idle: its clients are parked (resumable), not lost.
+                if gone:
+                    self._sgt.window_gone(hwnd)
+                else:
+                    self._sgt.window_idle(hwnd)
 
     def end_all_active_sessions(self, reason: str) -> None:
         """

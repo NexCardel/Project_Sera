@@ -85,6 +85,9 @@ class FakeSgt:
     def end_session(self, hwnd, reason):
         self.ended.append((hwnd, reason))
 
+    def window_gone(self, hwnd):
+        self.ended.append((hwnd, "window closed"))
+
     def end_all(self, reason):
         self.ended.append(("all", reason))
 
