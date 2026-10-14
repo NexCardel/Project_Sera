@@ -1644,6 +1644,8 @@ class SeraApp:
         self.tracker_dump_win = TrackerDumpWindow(self.db, defer_first_load=True)   # hidden page: fill when shown
         memory_mark("  window: tracker dump")
         self.shell.add_page(self.search_win)          # Index 0
+        self.shell.slide_panel.opened.connect(lambda: self.search_win.set_panel_open(True))
+        self.shell.slide_panel.closed.connect(lambda: self.search_win.set_panel_open(False))
         self.shell.add_page(self.admin_win)           # Index 1
         self.shell.add_page(self.tracker_dump_win)    # Index 2
         

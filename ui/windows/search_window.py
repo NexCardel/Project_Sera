@@ -74,17 +74,19 @@ def _column_spec(col):
     if words & {"password", "pass", "pwd", "pin"}:
         return dict(kind="mono", width=104, minimum=96, priority=3)
     if words & {"gst", "gstin"}:
-        return dict(kind="mono", width=140, minimum=110, compact_hidden=True)
+        return dict(kind="mono", width=140, minimum=110, compact_hidden=True, priority=1)
     if words & {"pan", "tan"}:
-        return dict(kind="mono", width=104, minimum=96)
+        return dict(kind="mono", width=104, minimum=96, priority=2)
     if words & {"ph", "phone", "mobile", "contact"}:
-        return dict(kind="num", width=104, minimum=90, compact_hidden=True)
+        return dict(kind="num", width=104, minimum=90, compact_hidden=True, priority=1)
     if any(k in key for k in ("company", "trade", "firm", "business")):
         return dict(kind="strong", stretch=3, minimum=130, max_share=0.34)
     if any(k in key for k in ("name", "client", "proprietor")):
         return dict(kind="text", stretch=2, minimum=110, max_share=0.28)
     if "email" in key:
         return dict(kind="text", stretch=2, minimum=120, priority=2)
+    if "service" in key:
+        return dict(kind="text", stretch=2, minimum=150, priority=2)
     return dict(kind="text", stretch=1, minimum=90, priority=1)
 
 
@@ -139,8 +141,21 @@ class SearchWindow(WidthAware, QWidget):
         if getattr(self, "_page_layout", None) is not None:
             set_page_margins(self._page_layout, mode is WidthMode.COMPACT)
             # the margins took width from the grid: fit its columns to what is left now
-            if getattr(self, "results_table", None) is not None and self.results_table.columnCount():
-                self.results_table.fit_columns()
+            self._fit_grid()
+
+    def set_panel_open(self, on):
+        """The client panel slides over the right of the page: the grid fits what is left of it."""
+        self._panel_open = bool(on)
+        self._fit_grid()
+
+    def _fit_grid(self):
+        t = getattr(self, "results_table", None)
+        if t is None or not t.columnCount():
+            return
+        if getattr(self, "_panel_open", False):
+            t.fit_columns(available=max(0, t.viewport().width() - KIT["w_panel"]))
+        else:
+            t.fit_columns()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
@@ -673,7 +688,7 @@ class SearchWindow(WidthAware, QWidget):
             self._drawn_grid = (state_at_start, time.monotonic()) if not text else None
 
             self._current_mcl_cols = mcl_cols
-            self.results_table.fit_columns()
+            self._fit_grid()
             self._update_counts(len(clients), text, svc_val)
             self._update_selection_bar()
 
