@@ -8,6 +8,7 @@ import threading
 
 from PySide6.QtCore import Qt, QTimer, QSize, Signal
 from PySide6.QtGui import QIcon, QKeySequence, QShortcut
+from PySide6.QtWidgets import QMenu
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -26,7 +27,7 @@ except Exception:
 from automation import _AutofillBridge
 from ui.components.kit import MessageBox, Card, EmptyState, Key, LabelledAction, Pill, SettingRow, TextArea
 from ui.utils.masking import mask_password
-from ui.utils.tokens import TOKENS as T
+from ui.utils.tokens import KIT as K, TOKENS as T
 
 
 def _get_service_icon(name: str) -> str:
@@ -78,6 +79,11 @@ class ClientDetailWindow(QWidget):
     back_requested = Signal()
     toast_requested = Signal(str, int)
     action_alert_requested = Signal(str, str)
+    # the header's Edit and ⋯ menu: the main window runs the same actions the All Clients grid runs
+    edit_requested = Signal(int)
+    manage_services_requested = Signal(int)
+    archive_requested = Signal(int)
+    delete_requested = Signal(int)
     MANUAL_POPUP_DELAY_MS = 3000
 
     def __init__(self, db, actor: str = "Staff"):
@@ -89,6 +95,7 @@ class ClientDetailWindow(QWidget):
         self._bridge.failed.connect(self._on_autofill_failed)
         self._service_shortcuts = []
         self._is_navigating_back = False
+        self._admin = False
         self._build_ui()
 
         self.back_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
@@ -96,12 +103,13 @@ class ClientDetailWindow(QWidget):
 
     def _build_ui(self):
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(24, 14, 24, 14)
-        outer.setSpacing(8)
+        # the mockup's body: 14 / 18 / 20 with a 12 px gap
+        outer.setContentsMargins(K["pad_dlg_h"], K["pad_panel_top"], K["pad_dlg_h"], T["s_5"])
+        outer.setSpacing(T["s_2"])
 
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 2)
-        header.setSpacing(12)
+        header.setSpacing(T["s_3"])
 
         self.back_btn = LabelledAction(variant="ghost", icon="mdi.arrow-left", sm=True, tooltip="Back (Esc)")
         self.back_btn.set_icon_only(True)
@@ -112,9 +120,20 @@ class ClientDetailWindow(QWidget):
         title_vbox.setContentsMargins(0, 0, 0, 0)
         title_vbox.setSpacing(1)
 
+        # the name with the client ID chip right after it (the mockup's .p-top)
+        name_row = QHBoxLayout()
+        name_row.setContentsMargins(0, 0, 0, 0)
+        name_row.setSpacing(T["s_2"])
         self.primary_name_lbl = QLabel()
         self.primary_name_lbl.setProperty("class", "ClientName")
-        title_vbox.addWidget(self.primary_name_lbl)
+        name_row.addWidget(self.primary_name_lbl)
+
+        self._token = ""
+        self.token_badge = LabelledAction(variant="soft", sm=True)
+        self.token_badge.clicked.connect(self._on_token_clicked)
+        name_row.addWidget(self.token_badge, 0, Qt.AlignVCenter)
+        name_row.addStretch(1)
+        title_vbox.addLayout(name_row)
 
         self.secondary_name_lbl = QLabel()
         self.secondary_name_lbl.setProperty("class", "EditorSub")
@@ -122,10 +141,29 @@ class ClientDetailWindow(QWidget):
 
         header.addLayout(title_vbox, stretch=1)
 
-        self._token = ""
-        self.token_badge = LabelledAction(variant="soft", sm=True)
-        self.token_badge.clicked.connect(self._on_token_clicked)
-        header.addWidget(self.token_badge, 0, Qt.AlignVCenter)
+        # the recent-activity pill (the mockup's "Autofilled today" pill)
+        self.activity_pill = Pill("", "emerald")
+        self.activity_pill.hide()
+        header.addWidget(self.activity_pill, 0, Qt.AlignVCenter)
+
+        self.edit_btn = LabelledAction("Edit", variant="soft", sm=True, icon="mdi.pencil-outline",
+                                       tooltip="Edit this client")
+        self.edit_btn.clicked.connect(self._on_edit_clicked)
+        header.addWidget(self.edit_btn, 0, Qt.AlignVCenter)
+
+        self.more_btn = LabelledAction(variant="secondary", sm=True, icon="mdi.dots-horizontal",
+                                       tooltip="More actions")
+        self.more_btn.set_icon_only(True)
+        self._more_menu = QMenu(self.more_btn)
+        self.act_services = self._more_menu.addAction("Services…")
+        self.act_archive = self._more_menu.addAction("Archive client")
+        self.act_delete = self._more_menu.addAction("Delete client…")
+        self.act_services.triggered.connect(self._on_services_clicked)
+        self.act_archive.triggered.connect(self._on_archive_clicked)
+        self.act_delete.triggered.connect(self._on_delete_clicked)
+        self.more_btn.setMenu(self._more_menu)
+        header.addWidget(self.more_btn, 0, Qt.AlignVCenter)
+        self.set_admin_mode(False)
         outer.addLayout(header)
 
         scroll = QScrollArea()
@@ -133,10 +171,51 @@ class ClientDetailWindow(QWidget):
         scroll.setFrameShape(QFrame.NoFrame)
         self.scroll_widget = QWidget()
         self.scroll_layout = QVBoxLayout(self.scroll_widget)
-        self.scroll_layout.setContentsMargins(4, 8, 4, 12)
-        self.scroll_layout.setSpacing(12)
+        self.scroll_layout.setContentsMargins(0, 0, 0, 0)
+        self.scroll_layout.setSpacing(K["gap_main"])
         scroll.setWidget(self.scroll_widget)
         outer.addWidget(scroll, stretch=1)
+
+    def set_admin_mode(self, active):
+        """Archive and delete are admin actions: they appear in the ⋯ menu only in admin mode."""
+        self._admin = bool(active)
+        self.act_archive.setVisible(self._admin)
+        self.act_delete.setVisible(self._admin)
+
+    def _current_client_id(self):
+        return self.client.get("id") if self.client else None
+
+    def _on_edit_clicked(self):
+        cid = self._current_client_id()
+        if cid is not None:
+            self.edit_requested.emit(int(cid))
+
+    def _on_services_clicked(self):
+        cid = self._current_client_id()
+        if cid is not None:
+            self.manage_services_requested.emit(int(cid))
+
+    def _on_archive_clicked(self):
+        cid = self._current_client_id()
+        if cid is not None:
+            self.archive_requested.emit(int(cid))
+
+    def _on_delete_clicked(self):
+        cid = self._current_client_id()
+        if cid is not None:
+            self.delete_requested.emit(int(cid))
+
+    def _show_activity(self, client_id):
+        """The latest recent action on this client as the pill, when there is one in the last day."""
+        acts = self.db.get_recent_client_activities(max_age_seconds=86400).get(client_id, [])
+        if not acts:
+            self.activity_pill.hide()
+            return
+        top = acts[0]
+        age = top["age_seconds"]
+        rel = "just now" if age < 60 else (f"{age // 60}m ago" if age < 3600 else f"{age // 3600}h ago")
+        self.activity_pill.set_text(f"{top['action_type']} • {rel}")
+        self.activity_pill.show()
 
     def _on_token_clicked(self):
         self._copy_token_to_clipboard(self._token)
@@ -217,6 +296,7 @@ class ClientDetailWindow(QWidget):
         self._token = token
         self.token_badge.setText(f"CLI-{token.zfill(5)}" if token.isdigit() else f"ID: {token}")
         self.token_badge.setToolTip(f"Client ID: {token}\nClick to copy to clipboard")
+        self._show_activity(int(self.client.get("id") or client_id))
 
         settings = self.db.get_all_settings()    # one connection, not four
         mask_mode = settings.get("mask_mode", "last_n")

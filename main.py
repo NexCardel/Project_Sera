@@ -1664,6 +1664,11 @@ class SeraApp:
         self.search_win.toggle_sidebar_requested.connect(self.shell.toggle_sidebar)
         
         self.detail_win.back_requested.connect(self._show_search_from_detail)
+        # the panel's Edit and ⋯ menu run the same handlers as the All Clients grid
+        self.detail_win.edit_requested.connect(self._open_client_editor)
+        self.detail_win.manage_services_requested.connect(self._manage_client_services_from_search)
+        self.detail_win.archive_requested.connect(self._archive_client_from_search)
+        self.detail_win.delete_requested.connect(self._delete_client_from_search)
         self.detail_win.toast_requested.connect(self.shell.show_toast)
         self.detail_win.action_alert_requested.connect(self.shell.show_action_alert)
         self.tracker_dump_win.service_action_requested.connect(self.detail_win.run_service_action)
@@ -2152,6 +2157,7 @@ class SeraApp:
             self.shell.sidebar.set_admin_mode(True)
             self.shell.sidebar.set_active_navigation(self.shell.sidebar.btn_manage_clients)
             self.search_win.set_admin_mode(True)
+            self.detail_win.set_admin_mode(True)
             self.admin_win.refresh()
             self.shell.set_current_page(1)
             self.shell.slide_panel.slide_out()
@@ -2162,6 +2168,7 @@ class SeraApp:
         self.shell.dismiss_detail_on_outside = False
         self.shell.sidebar.set_admin_mode(False)
         self.search_win.set_admin_mode(False)
+        self.detail_win.set_admin_mode(False)
         self.shell.set_current_page(0)
         self.shell.slide_panel.slide_out()
 
