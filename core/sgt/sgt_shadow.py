@@ -645,6 +645,8 @@ class SgtShadow:
                     s, why = None, f"its session ended ({ended})"
             if s is None and not why:
                 why = "its session is gone"
+            elif s is not None and not why and r.tab_before and s.tabs and r.tab_before not in s.tabs:
+                why = "the page read is another tab's"       # asked for one tab, the other was in front
         from core.vsdc import vsdc_scope
         url = vsdc_scope.sanitize_page_url(r.url) if r.url else ""
         if not why and _LOGOUT.search(url):

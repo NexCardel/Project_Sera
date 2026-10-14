@@ -32,7 +32,8 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
 from . import vsdc_gate, vsdc_scope, vsdc_windows
-from .vsdc_reader import REASON_SCOPE, RESULT_MAX_AGE_SEC, URL_FRESH_SEC, PageReader, ReadContext, ReadResult
+from .vsdc_reader import (REASON_SCOPE, RESULT_MAX_AGE_SEC, URL_FRESH_SEC, WEDGE_SEC, PageReader, ReadContext,
+                          ReadResult)
 from .vsdc_windows import WindowInfo
 
 FRAME_TICK_SEC = 0.35         # R10 / D7: the fallback until WP0's gate probe measures a tick under 15 ms
@@ -342,6 +343,8 @@ class CaptureLoop:
 
         if ws.pending_seq and now - ws.pending_at > RESULT_MAX_AGE_SEC:
             ws.pending_seq, ws.pending_at = 0, 0.0      # the reader dropped it as too old
+        elif ws.pending_seq and now - ws.pending_at > WEDGE_SEC and self._reader.inflight(w.hwnd) is None:
+            ws.pending_seq, ws.pending_at = 0, 0.0      # its worker was abandoned: the answer may never come
         reason = self._read_reason(w, ws, sig, now)
         if not reason:
             return
