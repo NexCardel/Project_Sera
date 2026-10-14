@@ -84,7 +84,7 @@ def test_window_layout_and_defaults(world):
     db, ids, make = world
     win = make(all_time=False)
     assert [win.table.horizontalHeaderItem(i).text() for i in range(7)] == [
-        "ID", "Date & Time (Local)", "Actor", "Action", "Client (Name / Token)", "Service", "Detail"]
+        "ID", "When", "Actor", "Action", "Client", "Service", "Detail"]
     assert win.cmb_date_preset.currentText() == "Last 30 Days"
     assert [win.cmb_date_preset.itemText(i) for i in range(win.cmb_date_preset.count())] == [
         "All Time", "Today", "Yesterday", "Last 7 Days", "Last 30 Days", "Custom Date Range"]
@@ -223,7 +223,8 @@ def test_cells_show_name_service_and_detail_text(world):
     assert win.table.item(row, 4).toolTip() == f"Client: Alpha Traders Pvt Ltd (ID: {ids['A']})"
     assert win.table.item(row, 5).text() == "1"                          # the service id, not its name
     assert win.table.item(row, 6).text() == "detail for autofill"
-    assert re.fullmatch(r"\d\d-[A-Z][a-z]{2}-2026 \d\d:\d\d:\d\d [AP]M", win.table.item(row, 1).text())
+    # the grid shows the readable time (Today / Yesterday / 30 Sep 16:40); the tooltip keeps the UTC stamp
+    assert re.fullmatch(r"(Today|Yesterday) \d\d:\d\d|\d{1,2} [A-Z][a-z]{2} \d\d:\d\d", win.table.item(row, 1).text())
     assert "UTC: 2026-03-02T10:03:00" in win.table.item(row, 1).toolTip()
     row19 = _ids(win).index(19)
     assert win.table.item(row19, 6).text() == "Viewed client profile"    # empty detail on a view row

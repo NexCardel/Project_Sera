@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 from ui.components.kit import (
     MessageBox,
     Card,
+    KeyValueGrid,
     ChipBar,
     DarkListTable,
     DataGrid,
@@ -86,6 +87,27 @@ def _format_to_local_time(iso_str: str) -> tuple[str, str]:
         return local_str, raw_clean
     except Exception:
         return clean[:19].replace("T", " "), clean
+
+
+def _format_when(iso_str: str) -> tuple[str, str]:
+    """The grid's readable time (the mockup): 'Today 12:49', 'Yesterday 18:20', '30 Sep 16:40'.
+    Returns (display, raw_utc). The CSV export keeps _format_to_local_time."""
+    local_str, raw_clean = _format_to_local_time(iso_str)
+    try:
+        dt = datetime.datetime.fromisoformat(raw_clean.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        local = dt.astimezone()
+        day = local.date()
+        today = datetime.datetime.now().astimezone().date()
+        hm = local.strftime("%H:%M")
+        if day == today:
+            return f"Today {hm}", raw_clean
+        if day == today - datetime.timedelta(days=1):
+            return f"Yesterday {hm}", raw_clean
+        return f"{local.day} {local.strftime('%b')} {hm}", raw_clean
+    except Exception:
+        return local_str, raw_clean
 
 
 def _get_action_badge(action: str) -> tuple[str, str, str]:
@@ -268,7 +290,7 @@ class AuditLogDialog(WidthAware, QDialog):
         # Wide Table (7 Columns)
         self.table = DataGrid(0, 7)
         self.table.setHorizontalHeaderLabels([
-            "ID", "Date & Time (Local)", "Actor", "Action", "Client (Name / Token)", "Service", "Detail"
+            "ID", "When", "Actor", "Action", "Client", "Service", "Detail"
         ])
         self.table.set_column(0, kind="num", width=52)
         self.table.set_column(1, kind="num", width=200, minimum=170)
@@ -290,9 +312,12 @@ class AuditLogDialog(WidthAware, QDialog):
         self.entry_pill.hide()
         self._entry_card.add_widget(self.entry_pill)
 
-        self.inspector_box = TextArea(rows=9, placeholder="Pick a row to see the full entry: time, actor, client, service and detail.")
+        # the entry as labelled fields (the mockup); the plain-text copy of it stays in inspector_box
+        self.entry_grid = KeyValueGrid()
+        self._entry_card.add_widget(self.entry_grid)
+        self.inspector_box = TextArea(rows=9, placeholder="Pick a row to see the full entry: time, actor, client, service and detail.", parent=self)
         self.inspector_box.setReadOnly(True)
-        self._entry_card.add_widget(self.inspector_box)
+        self.inspector_box.hide()
 
         self.btn_copy_insp = LabelledAction("Copy details", variant="secondary", icon="mdi.content-copy", sm=True,
                                             tooltip="Copy the full entry to the clipboard")
@@ -510,7 +535,7 @@ class AuditLogDialog(WidthAware, QDialog):
                 self.table.setItem(row, 0, QTableWidgetItem(str(log["id"])))
 
                 # 1. Date & Time (Local IST Conversion)
-                local_ts, raw_utc = _format_to_local_time(log["ts"])
+                local_ts, raw_utc = _format_when(log["ts"])
                 ts_item = QTableWidgetItem(local_ts)
                 ts_item.setToolTip(f"Local Time: {local_ts}\nUTC: {raw_utc}")
                 self.table.setItem(row, 1, ts_item)
@@ -550,6 +575,7 @@ class AuditLogDialog(WidthAware, QDialog):
         row = self.table.currentRow()
         if row < 0 or not self.table.selectedItems():
             self.inspector_box.clear()
+            self.entry_grid.clear()
             self._entry_card.set_title("Entry")
             self.entry_pill.hide()
             return
@@ -571,8 +597,15 @@ class AuditLogDialog(WidthAware, QDialog):
             f"📝 Detail Payload: {det_val}"
         )
         self.inspector_box.setPlainText(detail_text)
-        self._entry_card.set_title(f"Entry #{log.get('id')}")
+        self.entry_grid.clear()
+        when, _raw = _format_when(log.get("ts", ""))
         _label, pill_text, pill_tone = _get_action_badge(log.get("action"))
+        self.entry_grid.add_field("When", when)
+        self.entry_grid.add_field("Staff · workstation", f"{log.get('actor', 'System')} · {self.selected_host}")
+        self.entry_grid.add_field("Client", f"{log.get('client_name', '—')} (Token: {log.get('client_token', 'N/A')} | ID: {log.get('client_id', 'N/A')})")
+        self.entry_grid.add_field("Service", srv_name)
+        self.entry_grid.add_field("Detail", det_val)
+        self._entry_card.set_title(f"Entry #{log.get('id')}")
         self.entry_pill.set_text(pill_text)
         self.entry_pill.set_tone("emerald" if pill_tone == "green" else pill_tone)
         self.entry_pill.show()

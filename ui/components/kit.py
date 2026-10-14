@@ -754,6 +754,14 @@ class KeyValueGrid(QWidget):
         self._refresh_rules()
         return cell
 
+    def clear(self):
+        """Removes every field and the Not set line."""
+        for cell in self._cells:
+            self._grid.removeWidget(cell)
+            cell.deleteLater()
+        self._cells = []
+        self._notset.setVisible(False)
+
     def _refresh_rules(self):
         rows = (len(self._cells) + 1) // 2
         for i, cell in enumerate(self._cells):
