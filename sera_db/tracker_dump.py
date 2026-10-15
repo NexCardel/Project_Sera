@@ -9,7 +9,7 @@ import json
 import time
 from core.dataset_key import NOT_CARRIER_SQL, compute_dataset_key as _compute_dataset_key
 
-from sera_db.common import SKELETON_NAME_REGEX
+from sera_db.common import SKELETON_NAME_REGEX, is_sgt_capture, payload_device_name
 
 
 RECOVERED_NAME_MARK = "/-"      # follows the client name of a row the ARN fixer corrected
@@ -134,8 +134,12 @@ class TrackerDumpMixin:
         # Never for SGT: a row it sends without a PAN is one whose client it has NOT identified,
         # and "whoever was captured on this portal in the last 15 minutes" is how a filing lands
         # on the previous client. SGT re-sends the row under its client once it reads the PAN.
-        if not candidates and portal and not str(capture_method or "").startswith("SGT"):
-            prox_cand = self._resolve_session_proximity_candidate(portal, now, max_seconds=900, session_id=session_id)
+        # Only from a capture of THIS PC (see re_resolve_all_tracker_dumps): another PC's screen says
+        # nothing about who this one was on.
+        device = payload_device_name(raw_payload_json)
+        if not candidates and portal and device and not is_sgt_capture(capture_method):
+            prox_cand = self._resolve_session_proximity_candidate(portal, now, max_seconds=900, session_id=session_id,
+                                                                  device=device)
             if prox_cand:
                 candidates = [prox_cand]
 
@@ -749,15 +753,23 @@ class TrackerDumpMixin:
 
         from datetime import datetime
 
-        # 1. Proximity matching for wizard submissions with empty candidates
+        # 1. Proximity matching for wizard submissions with empty candidates.
+        # Never for SGT (as in insert_tracker_dump): a row it sends without a PAN/GSTIN is one whose
+        # client it has NOT identified, and it re-sends the row under its client once it reads it.
+        # This loop used to give such a row the client of whatever row came before it on the
+        # portal - from ANY PC, since the tracker is office-wide - so a filing done on one PC sat on
+        # the client open on another PC until SGT re-sent it (2026-10-13), and for good when the
+        # session ended without the client. For the other engines: only a row of the SAME PC.
         resolved_dumps = []
         for i, d in enumerate(dumps):
             cands = self._extract_identity_candidates_from_payload(arn_number=d["arn_number"], raw_payload_json=d["raw_payload_json"])
-            if not cands and d.get("created_at"):
+            device = payload_device_name(d.get("raw_payload_json"))
+            if not cands and d.get("created_at") and device and not is_sgt_capture(d.get("capture_method")):
                 try:
                     t0 = datetime.fromisoformat(d["created_at"])
                     for nearby in (reversed(dumps[:i]) if i > 0 else []):
-                        if nearby.get("portal") == d.get("portal") and nearby.get("created_at"):
+                        if nearby.get("portal") == d.get("portal") and nearby.get("created_at") \
+                                and payload_device_name(nearby.get("raw_payload_json")) == device:
                             tn = datetime.fromisoformat(nearby["created_at"])
                             if abs((t0 - tn).total_seconds()) <= 900:
                                 nb_cands = self._extract_identity_candidates_from_payload(arn_number=nearby["arn_number"], raw_payload_json=nearby["raw_payload_json"])

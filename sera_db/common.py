@@ -2,6 +2,7 @@
 sera_db/common.py - names shared by database.py and its mixins.
 """
 
+import json
 import re
 
 DB_FILENAME = "master.db"
@@ -17,6 +18,25 @@ SKELETON_NAME_REGEX = re.compile(
     r')[\s\-:*]*$',
     re.I
 )
+
+
+def is_sgt_capture(capture_method) -> bool:
+    """A row SGT wrote (SGT_live / SGT_shadow / SGT_sdis_info). SGT names a row's client only from what
+    its own session read; a row it sends without a PAN/GSTIN must never borrow one from another row."""
+    return str(capture_method or "").startswith("SGT")
+
+
+def payload_device_name(raw_payload_json) -> str:
+    """The PC a capture came from (core/vsdc/vsdc_alerts.stamp_device_name puts it at the payload's top
+    level and inside raw_payload), or "" when the payload does not say."""
+    try:
+        p = json.loads(raw_payload_json) if isinstance(raw_payload_json, str) else raw_payload_json
+    except (TypeError, ValueError):
+        return ""
+    if not isinstance(p, dict):
+        return ""
+    raw = p.get("raw_payload") if isinstance(p.get("raw_payload"), dict) else {}
+    return str(p.get("device_name") or raw.get("device_name") or "").strip()
 
 
 class DatabaseError(Exception):

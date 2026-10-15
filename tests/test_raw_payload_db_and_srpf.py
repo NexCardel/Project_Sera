@@ -374,7 +374,8 @@ class TestRawPayloadDbAndSRPF(unittest.TestCase):
             arn_number="PROFILE-AXTPT8591P",
             period_label="Profile Info",
             capture_method="Extension_Capture",
-            raw_payload_json=json.dumps({"entityNum": "AXTPT8591P", "firstName": "Anita", "lastName": "Tewari"})
+            raw_payload_json=json.dumps({"entityNum": "AXTPT8591P", "firstName": "Anita", "lastName": "Tewari",
+                                         "device_name": "FRONT-DESK"})
         )
 
         # Step 2: User files ITR return (wizard submit has no PAN, extension sends stale client_id: cid_gst)
@@ -384,7 +385,8 @@ class TestRawPayloadDbAndSRPF(unittest.TestCase):
             arn_number="ITR000883707378",
             period_label="",
             capture_method="Extension_Capture",
-            raw_payload_json=json.dumps({"arnNumber": "680429730230826", "httpStatus": "ACCEPTED", "transactionNo": "ITR000883707378"})
+            raw_payload_json=json.dumps({"arnNumber": "680429730230826", "httpStatus": "ACCEPTED", "transactionNo": "ITR000883707378",
+                                         "device_name": "FRONT-DESK"})   # proximity only within one PC
         )
 
         # Step 3: Run re-resolution

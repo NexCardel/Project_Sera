@@ -10,6 +10,8 @@ import re
 from functools import lru_cache
 from typing import Optional
 
+from sera_db.common import payload_device_name
+
 
 @lru_cache(maxsize=8)
 def _profile_of_json(raw_payload_json: str) -> dict:
@@ -753,9 +755,12 @@ class SrpfMixin:
                 )
         return True
 
-    def _resolve_session_proximity_candidate(self, portal: str, timestamp_str: str, max_seconds: int = 900, session_id: str = None) -> Optional[str]:
-        """Resolves PAN/GSTIN candidate from the immediate most recent session capture (registered or unregistered)."""
-        if not portal or not timestamp_str:
+    def _resolve_session_proximity_candidate(self, portal: str, timestamp_str: str, max_seconds: int = 900, session_id: str = None,
+                                             device: str = None) -> Optional[str]:
+        """Resolves PAN/GSTIN candidate from the immediate most recent session capture (registered or unregistered)
+        made on the same PC (`device`, the payload's device_name). No device = no candidate: the tracker is
+        office-wide, and a row from another PC names whoever was open THERE (2026-10-13)."""
+        if not portal or not timestamp_str or not device:
             return None
             
         base_portal = portal.split(" (")[0].strip().lower()
@@ -775,6 +780,8 @@ class SrpfMixin:
                         (f'%"{session_id}"%',)
                     )
                     for arn_num, unassigned_id, raw_json, c_at, cid in cur.fetchall():
+                        if payload_device_name(raw_json) != device:
+                            continue
                         if unassigned_id and re.match(r"^[A-Z]{5}[0-9]{4}[A-Z]$", str(unassigned_id).strip().upper()):
                             return str(unassigned_id).strip().upper()
                         cands = self._extract_identity_candidates_from_payload(arn_number=arn_num, raw_payload_json=raw_json)
@@ -802,6 +809,8 @@ class SrpfMixin:
                         continue
                         
                     if p_name.split(" (")[0].strip().lower() != base_portal:
+                        continue
+                    if payload_device_name(raw_json) != device:
                         continue
                         
                     try:
