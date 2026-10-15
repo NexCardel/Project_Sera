@@ -643,7 +643,8 @@ class SchemaMixin:
                 conn.execute("""
                     UPDATE mcl_columns SET is_internal_pk = 1 
                     WHERE UPPER(TRIM(label)) = 'PAN' 
-                       OR (LOWER(label) LIKE '%pan%' AND LOWER(label) NOT LIKE '%pass%')
+                       OR (' ' || REPLACE(REPLACE(LOWER(label), '_', ' '), '-', ' ') || ' ' LIKE '% pan %'
+                           AND LOWER(label) NOT LIKE '%pass%')
                 """)
 
             import sync_tables
