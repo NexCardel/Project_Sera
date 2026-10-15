@@ -11,6 +11,11 @@ AlertSender with an explicit config and a fake transport.
 
 import os
 
+# Many test modules create the QApplication at import time, and the first one imported fixes the Qt
+# platform for the whole run. Pick offscreen here, before any of them is imported, so pixel tests
+# (tests/test_ui_kit.py, test_ui_sidebar.py) never depend on which module happens to load first.
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 import pytest
 
 

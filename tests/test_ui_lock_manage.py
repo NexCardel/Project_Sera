@@ -227,7 +227,7 @@ def test_selecting_a_client_fills_the_form_header_and_services(world):
     assert win.editor_title.text() == "Alpha Traders Pvt Ltd — Asha Verma"
     assert win.editor_avatar.text() == "AT"
     sub = win.editor_sub.text()
-    assert sub.startswith(f"Client #{ids['A']}") and "Alpha Traders Pvt Ltd" in sub and "Updated " in sub
+    assert sub.startswith(f"Client #{ids['A']}") and "ABCDE1001F" in sub and "Updated " in sub
     assert win.f_notes.toPlainText() == "Alpha notes"
     sv = S.services_by_name(db)
     assert {sid for sid, cb in win._service_cbs.items() if cb.isChecked()} == {sv["GST"], sv["Income Tax"]}

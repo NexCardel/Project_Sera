@@ -517,6 +517,8 @@ class TestRawPayloadDbAndSRPF(unittest.TestCase):
     def test_user_mapping_fills_column_auto_mapping_missed(self):
         pan = "CIQPM7599L"
         cid = self._make_client(pan)
+        if not any(c["label"].upper() == "TAN" for c in self.db.get_mcl_columns()):
+            self.db.create_mcl_column("TAN", "text")      # the default seed has none; a developer's settings.ini does
         tan_col = self._col("TAN")["id"]
         self.db.save_capture_mcl_mappings([{"source": "deductorref", "column_id": tan_col}])
         self.assertEqual(self.db.get_capture_mcl_mappings(), [{"source": "deductorref", "column_id": tan_col}])

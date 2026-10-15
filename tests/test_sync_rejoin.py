@@ -56,6 +56,9 @@ def _cols(db: SeraDatabase) -> dict:
 
 def _service_ids(db: SeraDatabase) -> dict:
     with db._connect() as conn:
+        # The default seed has no EPFO (a developer's settings.ini does); the tests use it by name.
+        if not conn.execute("SELECT 1 FROM services WHERE name = 'EPFO'").fetchone():
+            conn.execute("INSERT INTO services (name) VALUES ('EPFO')")
         return {name: sid for sid, name in conn.execute("SELECT id, name FROM services")}
 
 
