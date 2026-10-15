@@ -326,7 +326,39 @@ def _group_els(raw, nodes, ox, oy):
     return boxes, marks, len(groups)
 
 
-def _section(k, raw, comp_view, groups=False):
+def _arrange_els(raw, nodes, ox, oy):
+    """WP5 (--arrange): every member of every arrangement group boxed (the union of its leaves' boxes; nested
+    members too), and the texts of the name slot and of distinct slots marked, as --groups does. A group's
+    kind is its arrangement kind. Label-to-value arrows are not drawn yet (design section 4, WP5)."""
+    import arrange as arr
+    import cards
+    flat, _ = cards.load_flat({"docs": [raw]})
+    a = arr.arrange(flat)
+    boxes, marks = [], {}
+    for g in a.groups:
+        for (lo, hi) in g.members:
+            leaves = [a.leaves[i] for i in range(lo, hi)]
+            x0 = min(l.box[0] for l in leaves)
+            y0 = min(l.box[1] for l in leaves)
+            x1 = max(l.box[0] + l.box[2] for l in leaves)
+            y1 = max(l.box[1] + l.box[3] for l in leaves)
+            k = leaves[0].node
+            boxes.append({"k": k, "t": "ArrangeMember", "kind": "box", "x": x0 - ox, "y": y0 - oy,
+                          "w": x1 - x0, "h": y1 - y0, "muted": False, "dis": False, "att": False, "req": False,
+                          "combo": False, "tab": False, "gm": g.kind})
+        name = arr.name_slot(g, {}, arr.NAME_CUT)
+        for slot, idx in g.slots.items():
+            for i in idx:
+                if i is None:
+                    continue
+                if slot == name:
+                    marks[a.leaves[i].node] = "gname"
+                elif g.roles.get(slot) == "distinct":
+                    marks.setdefault(a.leaves[i].node, "gd")
+    return boxes, marks, len(a.groups)
+
+
+def _section(k, raw, comp_view, groups=False, arrange=False):
     nodes = _norm(raw)
     _decide(nodes, comp_view)
     view = [n for n in nodes if n["in_view"] and _pos(n["rect"])]
@@ -339,6 +371,13 @@ def _section(k, raw, comp_view, groups=False):
     n_groups = 0
     if groups:
         boxes, marks, n_groups = _group_els(raw, nodes, ox, oy)
+        for e in els:
+            if e["kind"] == "text" and e["k"] in marks:
+                e[marks[e["k"]]] = True
+        els = boxes + els
+    n_arrange = 0
+    if arrange:
+        boxes, marks, n_arrange = _arrange_els(raw, nodes, ox, oy)
         for e in els:
             if e["kind"] == "text" and e["k"] in marks:
                 e[marks[e["k"]]] = True
@@ -364,6 +403,8 @@ def _section(k, raw, comp_view, groups=False):
              "line_h": lh, "skipped": dict(sorted(skipped.items()))}
     if groups:
         stats["groups"] = n_groups
+    if arrange:
+        stats["arrange_groups"] = n_arrange
     return {"k": k, "label": f"doc {k}: {len(nodes)} nodes", "n": len(nodes), "W": W, "H": H,
             "lineH": lh, "els": els, "nodes": rows, "stats": stats}
 
@@ -381,10 +422,10 @@ def _pick_docs(docs, doc):
     return [int(doc)]
 
 
-def build(docs, meta, doc="auto", comp_view="present", groups=False):
+def build(docs, meta, doc="auto", comp_view="present", groups=False, arrange=False):
     """(html, summary). The summary has counts only: the caller may print it. groups=True draws the
     repeating groups of cards.py on top (plan docs/cards_rows/plan.md section 7)."""
-    sections = [_section(k, docs[k], comp_view, groups) for k in _pick_docs(docs, doc)]
+    sections = [_section(k, docs[k], comp_view, groups, arrange) for k in _pick_docs(docs, doc)]
     data = {"title": meta.get("title", ""), "page": meta.get("page", ""), "browser": meta.get("browser", ""),
             "source": meta.get("source", ""), "index": meta.get("label", ""), "comp_view": comp_view,
             "anchor": meta.get("anchor", ""), "docs": sections}
@@ -437,6 +478,8 @@ def main(argv=None):
     ap.add_argument("--comp-view", default="present", choices=["present", "all"])
     ap.add_argument("--out", help="output path (default: beside the input, see default_out)")
     ap.add_argument("--open", action="store_true", help="open the page in the default browser")
+    ap.add_argument("--arrange", action="store_true",
+                    help="draw the arrangement's groups (arrange.py, design section 3): member boxes, name and distinct slots; writes *_arrange.html")
     ap.add_argument("--groups", action="store_true",
                     help="draw the repeating groups (cards.py): members boxed, distinct slots marked; writes *_groups.html")
     a = ap.parse_args(argv)
@@ -460,14 +503,17 @@ def main(argv=None):
         out = Path(a.out) if a.out else default_out(src, meta)
         if a.groups and not a.out:
             out = out.with_name(out.stem + "_groups" + out.suffix)
+        if a.arrange and not a.out:
+            out = out.with_name(out.stem + "_arrange" + out.suffix)
         check_out(out)
-        html, summary = build(docs, meta, doc=doc, comp_view=a.comp_view, groups=a.groups)
+        html, summary = build(docs, meta, doc=doc, comp_view=a.comp_view, groups=a.groups, arrange=a.arrange)
     except ValueError as e:
         raise SystemExit(str(e))
     write_html(out, html)
     for s in summary["sections"]:
         print(f"{s['label']}: {s['nodes']} nodes, {s['texts']} texts, {s['boxes']} boxes, {s['overlaps']} overlapping texts"
-              + (f", {s['groups']} groups" if "groups" in s else ""))
+              + (f", {s['groups']} groups" if "groups" in s else "")
+              + (f", {s['arrange_groups']} arrangement groups" if "arrange_groups" in s else ""))
     print(f"-> {out}")
     if a.open:
         webbrowser.open(out.resolve().as_uri())
