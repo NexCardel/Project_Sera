@@ -172,5 +172,5 @@ All of it is counting turned into percentages, on salted hashes (no client value
   venv\Scripts\python.exe tools\pre_dev\class_diff\compare.py                          # latest client vs previous different client
   venv\Scripts\python.exe tools\pre_dev\class_diff\compare.py --view sgt --align off   # the old behaviour, for comparison
   venv\Scripts\python.exe tools\pre_dev\class_diff\key_probe.py --timing               # raw vs control view cost
-  venv\Scripts\python.exe tools\pre_dev\class_diff\memory.py                            # page memory over every client (N = 2), both orders
+  venv\Scripts\python.exe tools\pre_dev\class_diff\archive\memory.py                           # page memory over every client (N = 2), both orders
   ```

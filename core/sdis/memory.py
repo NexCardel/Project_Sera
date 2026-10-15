@@ -39,7 +39,7 @@ Each node gets a verdict from the counts only (PageMemory.verdict; the first tha
     differs between clients     data
 Only clients whose pairing was sure vote (Part E): an unsure look-alike's texts are never counted.
 
-    python tools/pre_dev/class_diff/memory.py            # N = 2; both client orders
+    python tools/pre_dev/class_diff/archive/memory.py         # N = 2; both client orders
 
 Console: counts only. output/memory_<page>.csv holds the nodes and their texts (client data,
 git-ignored, keep on this PC).
