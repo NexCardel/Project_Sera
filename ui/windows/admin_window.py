@@ -413,9 +413,9 @@ class AdminWindow(WidthAware, QWidget):
 
         left_host = QWidget()
         left_host.setLayout(left_layout)
-        left_host.setMinimumWidth(390)
-        left_host.setMaximumWidth(460)
-        body.addWidget(left_host, stretch=2)
+        self._left_host = left_host
+        left_host.setFixedWidth(K["w_mc_list"])
+        body.addWidget(left_host)
 
         # ---- Right: editor header + sectioned form ----
         right_layout = QVBoxLayout()
@@ -482,7 +482,7 @@ class AdminWindow(WidthAware, QWidget):
 
         self._build_dynamic_form()
 
-        body.addLayout(right_layout, stretch=3)
+        body.addLayout(right_layout, stretch=1)
         layout.addLayout(body, stretch=1)
 
         self._active_mode_btns = [self.new_btn, self.save_btn, self.act_archive, self.bulk_archive_btn]
@@ -505,6 +505,7 @@ class AdminWindow(WidthAware, QWidget):
             set_page_margins(self._page_layout, compact)
         self.new_btn.set_icon_only(compact)
         self.more_btn.set_icon_only(compact)
+        self._left_host.setFixedWidth(K["w_mc_list_c"] if compact else K["w_mc_list"])
 
     def _on_search_changed(self):
         self._search_timer.start()
@@ -752,7 +753,7 @@ class AdminWindow(WidthAware, QWidget):
         if not self._cards:
             return
         viewport_w = self._form_scroll.viewport().width()
-        cols = 2 if viewport_w >= 760 else 1
+        cols = 2 if viewport_w >= 700 else 1     # 726 px at 1366 wide, as the mockup's .cards2
         self._layout_service_chips(viewport_w // cols)
         if cols == self._card_cols:
             return

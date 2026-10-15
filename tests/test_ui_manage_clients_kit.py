@@ -110,3 +110,43 @@ def test_editor_header_text_is_available_as_a_tooltip_when_squeezed(world):
     S.pump()
     assert win.editor_title.toolTip() == win.editor_title.text()
     assert win.editor_sub.toolTip() == win.editor_sub.text()
+
+def test_list_column_is_360_wide_and_300_in_compact(world):
+    from ui.utils.tokens import KIT
+    db, ids, win = world
+    assert win._left_host.width() == KIT["w_mc_list"] == 360
+    win.apply_width_mode("compact")
+    S.pump()
+    assert win._left_host.width() == KIT["w_mc_list_c"] == 300
+    win.apply_width_mode("wide")
+    S.pump()
+    assert win._left_host.width() == 360
+
+
+def test_cards_are_two_columns_at_1366_and_one_when_narrow(world):
+    db, ids, win = world
+    win.resize(1366 - 212, 700)          # the page next to the 212 px sidebar
+    S.pump()
+    assert win._form_scroll.viewport().width() >= 700 and win._card_cols == 2
+    win.resize(1024 - 212, 700)
+    S.pump()
+    assert win._card_cols == 1
+    win.resize(1366 - 212, 700)
+    S.pump()
+    assert win._card_cols == 2
+
+
+def test_form_fields_are_kit_inputs_and_selects(world):
+    from PySide6.QtWidgets import QComboBox, QLineEdit
+    from ui.components.kit import Input, Select
+    db, ids, win = world
+    seen = set()
+    for col, widget in win._input_widgets.values():
+        ft = col.get("field_type", "text")
+        if ft == "date":
+            continue
+        seen.add(ft)
+        want = Select if ft == "dropdown" else Input
+        assert isinstance(widget, want), (col["label"], type(widget))
+    assert isinstance(next(iter(win._input_widgets.values()))[1], (QLineEdit, QComboBox))
+    assert {"password", "text"} <= seen

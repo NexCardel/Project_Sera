@@ -8,10 +8,10 @@ from PySide6.QtCore import QDate, QRegularExpression, Qt
 from PySide6.QtGui import QRegularExpressionValidator
 from ui.utils.tokens import TOKENS
 from PySide6.QtWidgets import (
-    QComboBox,
     QDateEdit,
     QLineEdit,
 )
+from ui.components.kit import Input, Select, _field_qss
 
 DATE_FORMAT = "yyyy-MM-dd"
 
@@ -30,6 +30,8 @@ class OptionalDateEdit(QDateEdit):
         self.setMinimumDate(_EMPTY_DATE)
         self.setSpecialValueText("Not set")
         self.setDate(_EMPTY_DATE)
+        self.setFixedHeight(TOKENS["h_inp"])        # the kit has no date field: same frame as Input
+        self.setStyleSheet(_field_qss("QDateEdit"))
 
     def is_empty(self) -> bool:
         return self.date() == self.minimumDate()
@@ -49,7 +51,8 @@ def make_input_widget(field: dict, value: str = "", mask_password: bool = True):
     field_type = field.get("field_type", "text")
 
     if field_type == "id":
-        widget = QLineEdit(value or "(Auto-Generated)")
+        widget = Input()
+        widget.setText(value or "(Auto-Generated)")
         widget.setReadOnly(True)
         widget.setFocusPolicy(Qt.NoFocus)
         widget.setStyleSheet(f"background-color: {TOKENS['panel']}; color: {TOKENS['mint']}; font-weight: 700;"
@@ -57,7 +60,8 @@ def make_input_widget(field: dict, value: str = "", mask_password: bool = True):
         return widget
 
     if field_type == "password":
-        widget = QLineEdit(value or "")
+        widget = Input()
+        widget.setText(value or "")
         if mask_password:
             widget.setEchoMode(QLineEdit.Password)
         else:
@@ -65,14 +69,16 @@ def make_input_widget(field: dict, value: str = "", mask_password: bool = True):
         return widget
         
     if field_type == "number":
-        widget = QLineEdit(value or "")
+        widget = Input()
+        widget.setText(value or "")
         regex = QRegularExpression(r"^[0-9]*\.?[0-9]*$")
         validator = QRegularExpressionValidator(regex)
         widget.setValidator(validator)
         return widget
 
     if field_type == "alphanumeric":
-        widget = QLineEdit(value or "")
+        widget = Input()
+        widget.setText(value or "")
         regex = QRegularExpression(r"^[A-Za-z0-9]*$")
         validator = QRegularExpressionValidator(regex)
         widget.setValidator(validator)
@@ -81,7 +87,7 @@ def make_input_widget(field: dict, value: str = "", mask_password: bool = True):
         return widget
 
     if field_type == "dropdown":
-        widget = QComboBox()
+        widget = Select()
         widget.addItem("", "")
         for option in field.get("dropdown_options") or []:
             widget.addItem(option, option)
@@ -94,7 +100,9 @@ def make_input_widget(field: dict, value: str = "", mask_password: bool = True):
         widget.set_value(value)
         return widget
 
-    return QLineEdit(value or "")
+    widget = Input()
+    widget.setText(value or "")
+    return widget
 
 def read_input_widget(field: dict, widget) -> str:
     """Extracts a plain string value back out of a widget."""
