@@ -96,6 +96,43 @@ Counts and pixel numbers only in this note. No page value appears here.
 - The GST page shows four runs (periods 2, 4, 3, 2) and none is confirmed against the page. The design says the
   four unrelated boxes must not form a run; that needs the owner's look.
 
+## Run on the new captures (2026-10-16)
+
+Captures: GST returns dashboard in Chrome (`005456`) and Firefox (`005952`), a third ITR client in Chrome
+(`011303`), plus the earlier ITR pair and the GSTR-1 summary page.
+
+**Comp page order fixed** (`snapshot_diff.py`, `AnchorPage`). In all three new captures the anchor page was
+fixed at +0.0s: the first read already showed text and the next 5 to 9 polls saw no change, so the rule
+("fixed after one quiet poll") is working as written. The 6th ITR card and the GST tile contents loaded later
+(+9 s, +11 s, +25 s). Until now those attached nodes went to the END of the comp page, which split them from
+their siblings: 15, 7 and 4 subtrees were not contiguous. Now a new node goes after the node before it in its
+snapshot, and the comp page is walked as a tree (`_tree_order`), so a subtree is never split, even when
+alignment pairs one inner node with an older node elsewhere (it did: one button of the 6th card). Result: 0
+split subtrees on every comp page. Tests: `tests/test_class_diff_comp_order.py`. The settle rule itself is
+unchanged.
+
+**Both methods, after the fix** (top-level groups; counts only):
+
+| Capture | Tree method (cards.py) | Arrangement |
+|---|---|---|
+| ITR `121513` (Edge) | 5 cards × 27 | 5 cards × 27, 10 nested |
+| ITR `121834` (Edge) | 4 cards (27/28/27/27) | 4 cards (27/28/27/27), 8 nested |
+| ITR `011303` (Chrome) | 6 cards × 27 | 6 cards × 27, 12 nested (was 5 before the fix) |
+| GST dashboard Chrome | tiles split in two groups: 3 (GSTR-1A, 2B, 3B) + 2 (one with GSTR-1) | **no tile group** (biggest: 3 × 3 leaves) |
+| GST dashboard Firefox | 4 tiles in one group (GSTR-1, 3B, 2B, 2A) + a 3-member group | **no tile group** (biggest: 3 × 4 leaves) |
+
+**The GST tiles are a limit of the method, not of the comp page.** The tiles hold different contents (8 to
+13 texts each; in leaf tokens member 1 is 8 edits from member 0, member 2 is 21), so the leaf string has no
+tandem repeat and no edit allowance from the measured E (0.14 per token) covers it. The same holds on the
+plain last snapshot of each capture, so the order fix cannot help here. The tree finds them because the
+tiles are sibling subtrees, whatever they hold. Open design question (for the consultant): how to find
+repeating units whose contents differ.
+
+**Cut-offs on the wider corpus:** the empty bands narrowed. Overlap: (0, 5) (was (0, 8)); dx: (1, 6) (was
+(1, 10)). OVL = 4 and TOLX = 5 still lie inside, so `--steps` passes, but they are no longer the middles
+(2.5 and 3.5). Owner decision: re-measure and move them to the middles, or wait for more captures.
+EDITS_PER_TOKEN = 0.14 still lies in its gap (0.037, 0.250).
+
 ## Tests
 
 - `tests/test_class_diff_arrange.py`: 35 tests (WP1 to WP5), fictional fixtures built in the file, plus the
