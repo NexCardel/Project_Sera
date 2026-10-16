@@ -1,6 +1,6 @@
 # SDIS rework experiments: progress and open problems
 
-Last updated: 2026-10-15. This file is written to be read **on its own**: it does not assume access to the
+Last updated: 2026-10-16 (experiment 3 built and run on new real captures: section 6.6). This file is written to be read **on its own**: it does not assume access to the
 repository. File names are given only so that the owner can find things; a reader does not need to open
 them. It holds no client values (counts, shapes and pixel numbers only).
 
@@ -58,7 +58,7 @@ the snapshots of one visit to one page. In experiment 1 the snapshots of a captu
 | 1 | **Comp page** | All snapshots of one capture are merged into one page. An anchor page is fixed once the loaded page sits still for a poll. Nodes that appear later are attached at the end, and nodes that leave keep `present = false`. Every node keeps the list of values it showed (`values`). | Built, committed (2026-10-07) |
 | – | **UIA renderer** | Draws a raw UIA read as an HTML page from the screen boxes only, so a person can see what the engine sees. Pre-dev tool only. | Built |
 | 2 | **Cards and rows, tree method** | In the UIA tree, siblings are grouped by likeness: Jaccard similarity of their element-type signatures ≥ θ. Each group is cut into slots, cards are paired across clients by a name slot, and lists are compared by template. | Built, reviewed and fixed 2026-10-11 |
-| 3 | **Arrangement ("packing pattern")** | Ignores the tree. The leaf elements and the direction from each leaf to the next form a string, and repeats in that string are the cards. | **Designed and prototyped 2026-10-12/15. Not built.** See section 6. |
+| 3 | **Arrangement ("packing pattern")** | Ignores the tree. The leaf elements and the direction from each leaf to the next form a string, and repeats in that string are the cards. | Designed and prototyped 2026-10-12/15. **Built 2026-10-16** (WP1–WP5, pre-dev). Works on the ITR cards; **finds no tiles on the real GST dashboard**. See section 6.6. |
 
 Pre-dev tests: 71 pass (cards 29, render 16, align 26). One cards test fails for an unrelated reason
 (P-X1, section 7).
@@ -80,6 +80,11 @@ UIA fields (`rect` = screen box, automation `id`, `role`, `aria`, and so on).
   - same-column |dx|: empty band 1 to 10 px, cut-off **5 px**;
   - edits per period token between card members: true members ≤ 0.037, nearest false candidate 0.333,
     cut-off **0.185**.
+- Experiment 3 as built, re-measured 2026-10-16 on six captures (three ITR, two GST dashboards, one GSTR-1
+  summary page):
+  - edits per token: gap 0.037 to 0.250, cut-off **0.14**;
+  - the empty bands narrowed to overlap (0, 5) px and dx (1, 6) px. The 4 px and 5 px cut-offs still lie
+    inside but are no longer the middles (2.5 and 3.5). Re-measuring them is an open owner decision.
 
 ## 5. Problems (bugs) from the cards and rows work
 
@@ -94,12 +99,12 @@ real captures · ❌ open.
 | 4 | Table cells were grouped as fake cards | GSTR-1 B2B | ✅ a Table is handled by a separate table extractor |
 | 5 | Two unrelated groups shared one "identity" and blocked each other | GST dashboard | ✅ each group is paired once |
 | 6 | Client labels were guessed by hand, and the same client's values were counted as names | ρ measuring | ✅ client identity (PAN/GSTIN) read from the page |
-| 7 | Firefox: the GSTR-1 tile has no wrapper element, so its parts lie loose and the tree method misses it | GST dashboard, Firefox | 🟡 exp. 3 ignores wrappers. On a Firefox-shaped fixture, tree method 3 of 5 tiles, arrangement 5 of 5. **No real Firefox capture yet.** |
-| 8 | Firefox: the GSTR-1A tile has an extra inner Group, so its likeness drops below θ and it is missed | GST dashboard, Firefox | 🟡 same as 7 |
-| 9 | Four unrelated single-text boxes were grouped as cards by type likeness | GST dashboard | 🟡 a one-leaf period is never a group. Confirmed on a fixture only. |
+| 7 | Firefox: the GSTR-1 tile has no wrapper element, so its parts lie loose and the tree method misses it | GST dashboard, Firefox | 🟡 exp. 3 ignores wrappers. On a Firefox-shaped fixture, tree method 3 of 5 tiles, arrangement 5 of 5. ❌ **Real Firefox dashboard (2026-10-16): the arrangement finds no tile at all** (section 6.6). The tree finds 4 tiles in one group and 3 more elsewhere. |
+| 8 | Firefox: the GSTR-1A tile has an extra inner Group, so its likeness drops below θ and it is missed | GST dashboard, Firefox | ❌ same as 7: solved on the fixture, not on the real page |
+| 9 | Four unrelated single-text boxes were grouped as cards by type likeness | GST dashboard | 🟡 a one-leaf period is never a group. On the real dashboards the arrangement forms only small 2- to 4-leaf groups; whether those are real has not been checked by eye. |
 | 10 | Field rows inside a card were paired with another card's field rows, and every value was reported twice. Of 8 inner-group pairs, **7 joined rows of different cards.** | ITR filed returns, Edge | 🟡 nested groups are compared only inside their paired card. Prototype on the real pair: 4 card pairs, 80 fixed + 28 variable slots, each value once. |
 | 11 | Label vs value is guessed from shape (`variable_alignment`): 5 false alarms on the ITR pair, all short status words | since 10-07 | 🟡 **inside groups only.** A value's label is the nearest constant ("label") slot before it in the card. The direction is recorded: right of the label for field rows, below it for the status column and the timeline. **Outside groups: still open.** |
-| 12 | Chrome and Firefox trees differ, so comparing across browsers breaks | Firefox vs Chrome | 🟡 the leaf token strings are identical across Edge, Chrome and Firefox on a fixture (0 edits), while boxes move by up to 12 px. A text that wraps in one browser and not the other is still a risk. |
+| 12 | Chrome and Firefox trees differ, so comparing across browsers breaks | Firefox vs Chrome | 🟡 the leaf token strings are identical across Edge, Chrome and Firefox on a fixture (0 edits), while boxes move by up to 12 px. A text that wraps in one browser and not the other is still a risk. Not testable on the real dashboard while no tiles are found there. |
 | 13 | ρ cannot be chosen, and r drops when one client has fewer cards | ρ measuring | ❌ **reframed.** r is replaced by a corpus-wide recurrence R per slot (section 6.4). Its cut-off needs ≥ 3 captures per link (clients × periods), which we do not have. Until then cards are compared as lists. |
 | 14 | A tie between two name-slot candidates (description vs code) was broken by sort order | GST dashboard | 🟡 the earliest position in the card wins |
 | 15 | Hover-opened menus and popups get into reads | GST dashboard render | ❌ nodes that came and left are dropped, but a popup open for the whole capture still gets in. Needs a visibility signal in the read. |
@@ -191,6 +196,61 @@ link exist. Until then the name slot is `unknown` and cards are compared as a li
   the DOM). Runs still form, but "nearest label before the value" can point at the wrong label.
 - All cut-offs (OVL 4 px, TOLX 5 px, E 0.185) come from **two pages of one portal in one browser.**
 
+### 6.6 Built, and run on new real captures (2026-10-16)
+
+The method was built as a pre-dev tool (`arrange.py`, with `compare.py --arrange` and `render.py --arrange`)
+and run on six real captures: three ITR "View Filed Returns" pages (two in Edge, a third client in Chrome),
+the GST returns dashboard in Chrome and in Firefox, and one GSTR-1 summary page.
+
+**Results, both methods** (top-level repeating groups, counts only):
+
+| Capture | Tree method (experiment 2) | Arrangement (experiment 3) |
+|---|---|---|
+| ITR, client 1, Edge | 5 cards | 5 cards, 10 nested groups |
+| ITR, client 2, Edge | 4 cards (one with an extra link) | 4 cards, 8 nested |
+| ITR, client 3, Chrome | 6 cards | 6 cards, 12 nested (5 before the comp page fix below) |
+| GST dashboard, Chrome | tiles found but split in two groups (3 + 2) | **no tile group** |
+| GST dashboard, Firefox | 4 tiles in one group, plus a 3-member group | **no tile group** |
+
+**Why the arrangement finds no GST tiles.** The method looks for a layout that repeats. The real tiles
+do not share one layout: each return form shows its own set of parts.
+- GSTR-1: a description, the code, the frequency, a status and 2 buttons.
+- GSTR-1A: a description, the code and 1 button.
+- GSTR-3B: a description, the code, the frequency, a due date and 2 buttons.
+- GSTR-2A: a description, the code and 2 buttons.
+
+In leaf tokens the tiles differ by 8 to 21 positions out of about 25. The method allows about 0.14 edits
+per position, measured on the ITR cards, which really are identical. This holds on the plain last snapshot
+as well, so it is the method, not the comp page. The tree method finds the tiles because they are sibling
+subtrees, whatever they hold.
+
+**Why the design report said it worked.** The report had only the two ITR captures, and on those its
+numbers were reproduced exactly. For the GST dashboard and the Firefox bugs (7, 8, 9, 12) it had no
+capture, and said so (its section 2.3 and question 1). It tested them on a fictional dashboard built by the
+same AI. In that fixture every tile holds the same five parts (a link, the code, "Status-", a status word,
+a View button); only the texts differ. So the fixture repeated perfectly and the real page does not. This
+is exactly problem P21 (fixtures designed by the method's author).
+
+**A comp page bug found and fixed on the way.** In all three new captures the anchor page was fixed at
++0.0 s: the first read already showed text and the next 5 to 9 polls saw no change, so the settle rule
+worked as written. Content that loaded later (the 6th ITR card at +9 s, GST tile parts at +11 s and +25 s)
+was then appended at the END of the comp page, away from its siblings. Now a new node goes where its
+snapshot showed it, and the comp page is walked as a tree, so a subtree is never split. That brought the
+third ITR client from 5 to 6 cards. It does not change the GST result.
+
+**A compare bug found and fixed in review.** With no name cut-off measured, two pages with the same number
+of tiles were paired by position, so IFF was paired with GSTR-1 (bug 1 back). Now a group that may hold a
+name is compared by template until the name cut-off exists.
+
+**Where this leaves the choice.** On pages with identical cards (ITR), the arrangement is as good as the
+tree and better at nesting. On pages whose repeating units hold different contents (GST tiles), only the
+tree method finds anything. Neither method is enough on its own. Two directions are open (question J in
+section 9):
+1. a different notion of "repeating unit": things that sit side by side and play the same role, even when
+   their contents differ;
+2. a hybrid: the tree proposes sibling groups (it finds the tiles), and the arrangement checks and repairs
+   them with leaves and boxes (it handles missing or extra wrappers, bugs 7 and 8).
+
 ## 7. Other open SDIS problems (outside the cards work)
 
 | # | Problem | Notes |
@@ -201,6 +261,7 @@ link exist. Until then the name slot is `unknown` and cards are compared as a li
 | P21 | The fictional tests were designed by the same AI that designed the method | The real proof is a real-portal page with different list lengths. |
 | `variable_alignment` outside groups | Label vs value for page-level fields (not in a repeating group) | The design says "a page-level field block is a fields group of one member" and applies the same nearest-label rule. Not designed in detail. |
 | Corpus mining | Staff PCs send their capture files to the admin PC, but the miner never reads the received files, and same-named day files from two PCs collide | Engineering, not method. |
+| P-X3 | Comp page order: content that loaded after the anchor page was fixed went to the end of the page | **Fixed 2026-10-16** (section 6.6). The settle rule ("fixed after one quiet poll") is unchanged. Pages that pause while loading still get fixed early, which is harmless now that order is kept. |
 | P-X1 | One pre-dev test fails because of an unrelated missing `Any` import in another module | Engineering. Queued separately. |
 | P-X2 | Keep snapshots, or build the comp page during capture and drop them? | The owner leans to dropping them. The decision waits for the experiments. |
 
@@ -217,8 +278,9 @@ It needs about 5 or more clients per page.
 
 | Have | Missing |
 |---|---|
-| ITR "View Filed Returns", Edge, 2 clients, 1 period | GST returns dashboard in Chrome **and** Firefox (bugs 7, 8, 9, 12 on real data) |
-| Earlier GST dashboard captures (experiment 2, Chrome and Edge) | A third client of the ITR page; one client in two periods (needed for the R cut-off) |
+| ITR "View Filed Returns": 3 clients (2 in Edge, 1 in Chrome), 1 period | GST dashboard from a **second client** in each browser (the name cut-off needs ≥ 3 captures from ≥ 2 clients) |
+| GST returns dashboard: Chrome and Firefox (2026-10-16), one client each; GSTR-1 summary page (Chrome) | One client in two periods (needed for the R cut-off) |
+| Earlier GST dashboard captures (experiment 2, Chrome and Edge) | |
 | Fictional fixtures: one page read live in Edge, Chrome and Firefox; a tables page in 3 browsers | A page with a real list inside a card (list vs fields); a div-row list page; a page with no repetition; a real hover popup |
 
 ## 9. Open questions (what we want a second opinion on)
@@ -252,3 +314,14 @@ It needs about 5 or more clients per page.
 - H. Which risk in section 6.5 would you test first, and with what kind of real page?
 - I. Prior art we should know beyond RoadRunner, MDR/DEPTA, VIPS and ViNTs/ViPER (all HTML-based)?
   Anything on accessibility trees or UIA?
+- **J. (Most important, added 2026-10-16.) Repeating units whose contents differ.** The real GST dashboard
+  tiles do not share one layout (section 6.6): GSTR-1 has a status and 2 buttons, GSTR-1A has 1 button,
+  GSTR-3B has a due date. The arrangement finds no tiles; the tree method finds them because they are
+  sibling subtrees, but splits them across groups. How should a method find "units that sit side by side
+  and play the same role" when their contents differ, within the rules in section 2 (no AI, measured
+  cut-offs, nothing known about a portal or browser)? Is the hybrid sound (the tree proposes sibling
+  groups, the arrangement checks and repairs them with leaves and boxes)? Or is there a better single
+  formulation, for example one built on what tiles always share (a code or title in the same place, a
+  similar box size, a grid of equal positions)?
+- K. Fixtures written by the method's author passed while the real page failed (P21). How would you test
+  such a method so this cannot happen again, given that only a few real captures exist per page?
