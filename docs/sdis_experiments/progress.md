@@ -1,6 +1,7 @@
 # SDIS rework experiments: progress and open problems
 
-Last updated: 2026-10-16 (experiment 3 built and run on new real captures: section 6.6). This file is written to be read **on its own**: it does not assume access to the
+Last updated: 2026-10-17 (experiment 4, container shapes over the whole page, plus the table and geometry
+measurements: section 6.7). This file is written to be read **on its own**: it does not assume access to the
 repository. File names are given only so that the owner can find things; a reader does not need to open
 them. It holds no client values (counts, shapes and pixel numbers only).
 
@@ -251,6 +252,99 @@ section 9):
 2. a hybrid: the tree proposes sibling groups (it finds the tiles), and the arrangement checks and repairs
    them with leaves and boxes (it handles missing or extra wrappers, bugs 7 and 8).
 
+### 6.7 Experiment 4: container shapes over the whole page (2026-10-17)
+
+**The idea (owner's).** Outline every container of the page, not only those with a look, and see which
+containers have the same shape. A container's **shape** is its key without the `[n]` sibling counters
+(element types, stable ids, cleaned classes, from the document root down). Its **loose shape** keeps only
+the types. Unlike the tree method of experiment 2, the grouping is over the **whole page**, not only among
+siblings under one parent.
+
+**Tools built (pre-dev, committed `9589a55`).**
+- `render.py --outline`: every container outlined, coloured by depth. Hovering a container highlights
+  every container of the same shape (strict or loose) with a count; `[` and `]` walk to the parent and
+  child; a click pins the highlight. A toggle hides wrappers that hold fewer than 2 texts.
+- `shape_map.py`: a wireframe map (text boxes as grey bars, never their text) and these inference rules:
+  - **record set:** a shape with 2+ instances that do not contain each other and each hold 2+ texts. The
+    members must be **alike** (fewest texts ≥ `LIKE` × most texts), and the set must not sit inside
+    another record set. `LIKE = 0.5` is **provisional, not measured**. It stops a generic layout wrapper
+    (a Bootstrap `row` of 3 texts beside one of 23) from swallowing the real records inside it.
+  - **layout:** column, row, grid or scattered, with the gaps between neighbours and the size spread.
+  - **parts and nested lists:** repeated shapes inside the members, counted per member. 1 per member is a
+    part, k per member is a nested list, anything else "varies" (optional or a list). They are nested as
+    a tree.
+  - **lift:** when the instances' ancestors stay one per instance, disjoint and of one loose shape, the
+    record is probably that ancestor (the tile around the part found).
+  - **loose merge:** 2+ strict shapes that share one loose shape, are disjoint and line up (the same
+    record with a class that differs).
+- `views_ui.py` + `views.bat`: one window to pick a capture and make any of the six HTML views (render,
+  groups, arrangement, outline, shape map, tables), or start a new capture.
+
+**Results on real captures** (top-level record sets, counts only):
+
+| Page | Shape map | Tree method (exp. 2) | Arrangement (exp. 3) |
+|---|---|---|---|
+| ITR "View Filed Returns", 2 clients | ✅ 6 and 4 cards (27-28 texts, gap 23 px every time). Inside each card: 1 details block, 1 stepper → **list of 3 steps** → a date line that varies, 1 side block, 1 button area | ✅ | ✅ |
+| GST returns dashboard, capture 005952 | ✅ **4 tiles** in one set (360×238, size spread 0, 4-8 texts) | 🟡 3 + 2 | ❌ none |
+| GST returns dashboard, capture 005456 | 🟡 4 links found inside the tiles, **lifted** 1 level up to the tiles (2-12 texts: check by eye) | 🟡 | ❌ |
+| ITR "My Bank Account" (17 Oct) | ✅ **4 bank cards** (`mat-mdc-card`, same size, 2-column grid, 8-10 texts) + the 10-item profile menu | ✅ the same 4 containers | ❌ 2 of 4: only the two cards with identical contents (17 leaves); the other two hold 8 and 9 texts |
+| ITR-4 Personal Information (a form) | ✅ no records among the fields (each field has its own id, so no two share a shape). Small widget repeats only: 2 radio questions (5 and 4 options), 2 toggles | — | — |
+| GSTR-1 summary | nothing useful: the rows are a real table (`tables.py`'s job) | — | — |
+
+**Reading.** For **finding** records, the shape method was right on every page type tried. It is the only
+method that found both the identical ITR cards and the GST tiles and bank cards whose contents differ, so
+it partly answers question J. The arrangement is only reliable when the members are identical inside. Its
+value is lining up the **slots inside** records already found, not finding them. Noise: small real
+repeats that are not records (a page header twice, 3 status circles). In the picker the user would ignore
+them.
+
+**Geometry alone, measured the same day.** Two box-only signals, no tree:
+- **Translation votes:** pairs of texts of the same type and height, counted by shift. On ITR the top
+  shift is the card step (dy = 368 = 366 px card + 2 px), but cards of different height split the votes
+  (368 against 388).
+- **Same-size containers in a line:** this catches the GST tiles (3 of 360×238 in a row) but misses the ITR
+  cards (heights 366 against 386).
+
+Each geometry signal fails where the other works. Neither beats shapes, so geometry is kept only as a
+possible check.
+
+**Tables (measured over the whole corpus on this PC: 22,473 reads, 42 page links).** 4,900+ tables
+appear on 9 links, all GST except one Google page.
+- No grid holes and no rows out of page order on any GST table.
+- Column headers are the same across clients and sessions (B2B summary: 3 sessions, row counts 4, 8 and 11,
+  always the same 6 columns; GSTR-3B: 10 of 11 sessions).
+- No ITR page has a single table: dashboard, itrStatus, profile, file ITR and my-CA list are all cards or
+  forms.
+
+So tables are the solved part. Three gaps remain, none of them method problems:
+1. `role=rowheader` cells are ignored, so the `fowelcome` matrix (1,721 tables) gets no header.
+2. Full-width section rows (the GSTR-1 summary: 109 × 8, with 35 section titles) are not yet used as the
+   key of the rows under them.
+3. `cards.py` drops table groups on comp pages, because it gets no raw docs there.
+
+**Also measured: anchor-relative Y in the look-alike score** (`exp_anchor_y.py`, `anchor-y-results.md`,
+commit `f6223a3`). On 8 comp-page comparisons the ambiguous flags fell from 14 to 2 at W ≥ 1, but no pair
+changed. The term makes the pairing more confident, not more correct. It needs list pages with an extra row
+to show a real gain.
+
+**Picker direction (discussed, not designed).** A catalog of a portal's rendered pages where the user
+clicks the values to capture.
+- Repeated records: the click **seeds** the record finder (shape first). The user confirms or corrects it,
+  marks a **key slot** (period, ARN, form name) and optionally a **filter** ("only the card where Form =
+  GSTR-3B"). The rule is checked against the whole corpus before it is saved.
+- Capture reads the field from **every** card, one instance per key, never by position.
+- Tables: pick a column and a key column.
+- Prior art for this workflow: Lixto (visual wrapper generation) and FlashExtract (extraction by
+  examples, program synthesis, no ML).
+- This is to be written up as a blueprint Part before any build.
+
+**Next.**
+- Run `--outline` and the shape map on pages not seen yet: list pages of short rows, Firefox captures, the
+  bank page from a second client.
+- Measure `LIKE` from the gap in the members' text ratios.
+- Fix the three table gaps.
+- Draft the picker Part.
+
 ## 7. Other open SDIS problems (outside the cards work)
 
 | # | Problem | Notes |
@@ -281,6 +375,7 @@ It needs about 5 or more clients per page.
 | ITR "View Filed Returns": 3 clients (2 in Edge, 1 in Chrome), 1 period | GST dashboard from a **second client** in each browser (the name cut-off needs ≥ 3 captures from ≥ 2 clients) |
 | GST returns dashboard: Chrome and Firefox (2026-10-16), one client each; GSTR-1 summary page (Chrome) | One client in two periods (needed for the R cut-off) |
 | Earlier GST dashboard captures (experiment 2, Chrome and Edge) | |
+| 2026-10-17: GSTR-1 summary (sectioned table, 109 × 8), ITR-4 Personal Information and Schedules Summary (forms), ITR My Bank Account (4 cards) | The bank page from a second client; the ITR-4 form with Bank Details expanded; a list page of short rows |
 | Fictional fixtures: one page read live in Edge, Chrome and Firefox; a tables page in 3 browsers | A page with a real list inside a card (list vs fields); a div-row list page; a page with no repetition; a real hover popup |
 
 ## 9. Open questions (what we want a second opinion on)
