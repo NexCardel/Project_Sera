@@ -276,3 +276,37 @@ def test_default_output_name_and_folder(tmp_path):
         render.PRE_DEV_OUT / "render_sdis_2026-10-11_line384.html"
     recorder_file = tmp_path / "sdis_capture" / "comp_x.json"
     assert render.default_out(recorder_file, {"kind": "comp"}).parent == render.PRE_DEV_OUT
+
+
+# two cards of the same shape under one list, each a Group holding a label and a value; a third
+# container of another class holds one text only (a wrapper)
+CARDS = [[
+    {"parent": -1, "type_name": "List", "rect": [0, 0, 400, 300], "cls": "cards"},
+    {"parent": 0, "type_name": "Group", "rect": [10, 10, 380, 80], "cls": "card"},
+    {"parent": 1, "type_name": "Text", "rect": [20, 20, 100, 20], "name": "Period"},
+    {"parent": 1, "type_name": "Text", "rect": [20, 50, 100, 20], "name": "Apr 2026"},
+    {"parent": 0, "type_name": "Group", "rect": [10, 110, 380, 80], "cls": "card"},
+    {"parent": 4, "type_name": "Text", "rect": [20, 120, 100, 20], "name": "Period"},
+    {"parent": 4, "type_name": "Text", "rect": [20, 150, 100, 20], "name": "May 2026"},
+    {"parent": 0, "type_name": "Group", "rect": [10, 210, 380, 40], "cls": "note"},
+    {"parent": 7, "type_name": "Text", "rect": [20, 220, 100, 20], "name": "Last updated"},
+]]
+
+
+def test_outline_containers_depth_texts_and_shapes():
+    _, plain = _page(CARDS)
+    assert not any(e["kind"] == "ol" for e in plain["docs"][0]["els"]), "no outlines without outline=True"
+    html, data = _page(CARDS, outline=True)
+    sec = data["docs"][0]
+    ols = {e["k"]: e for e in sec["els"] if e["kind"] == "ol"}
+    assert sorted(ols) == [0, 1, 4, 7], "every node with children and a box is outlined, leaves are not"
+    assert [ols[k]["dep"] for k in (0, 1, 4, 7)] == [0, 1, 1, 1]
+    assert [ols[k]["nt"] for k in (0, 1, 4, 7)] == [5, 2, 2, 1]
+    assert ols[1]["sh"] == ols[4]["sh"] != ols[7]["sh"], "the two cards share a shape, the note does not"
+    assert ols[1]["lo"] == ols[4]["lo"] == ols[7]["lo"], "loose shape: types only, the note joins them"
+    assert "card" in sec["shapes"][ols[1]["sh"]] and "[" not in sec["shapes"][ols[1]["sh"]]
+    order = [e["k"] for e in sec["els"] if e["kind"] == "ol"]
+    assert order[0] == 0, "painted big to small: the innermost container is on top"
+    assert sec["stats"]["outlines"] == 4 and sec["stats"]["outlines_2plus_texts"] == 3
+    assert sec["stats"]["shapes_repeated"] == 1
+    assert data["outline"] is True and _page(CARDS, outline=True)[0] == html, "same input, same bytes"

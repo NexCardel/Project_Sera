@@ -9,6 +9,7 @@ Python decides what is drawn and where. The page's script only measures text to 
 
 usage: python tools/pre_dev/class_diff/render.py <file> [--snapshot N] [--doc N|all] [--record N|list]
                                                   [--comp-view present|all] [--out PATH] [--open]
+                                                  [--groups] [--arrange] [--outline]
 """
 
 import argparse
@@ -358,7 +359,44 @@ def _arrange_els(raw, nodes, ox, oy):
     return boxes, marks, len(a.groups)
 
 
-def _section(k, raw, comp_view, groups=False, arrange=False):
+_COUNTER = re.compile(r"\[\d+\]")
+
+
+def _outline_els(raw, nodes, ox, oy):
+    """--outline: every container (a node with children and a box, in the view) outlined. Each carries
+    its depth, how many drawn texts it holds, and two shape ids: its key without the [n] counters
+    (types, ids, classes) and its loose key without counters (types only). The page highlights every
+    container of the same shape. Returns (outline elements, shape strings, loose strings), painted big
+    to small so the innermost container is on top."""
+    import cards
+    flat, _ = cards.load_flat({"docs": [raw]})
+    kids = {}
+    for n in nodes:
+        if n["p"] >= 0:
+            kids.setdefault(n["p"], []).append(n["i"])
+    texts = {}
+
+    def held(i):
+        # drawn texts at or below node i
+        if i not in texts:
+            texts[i] = int(nodes[i]["text_drawn"]) + sum(held(c) for c in kids.get(i, ()))
+        return texts[i]
+
+    conts = [n for n in nodes if n["i"] in kids and n["in_view"] and _pos(n["rect"])]
+    shapes, loose = {}, {}
+    els = []
+    for n in sorted(conts, key=lambda n: (-n["rect"][2] * n["rect"][3], n["i"])):
+        f = flat[n["i"]] if n["i"] < len(flat) else {"key": "", "loose": "", "depth": 0}
+        sh = _COUNTER.sub("", f["key"])
+        lo = _COUNTER.sub("", f["loose"])
+        x, y, w, h = n["rect"]
+        els.append({"k": n["i"], "t": n["type"], "kind": "ol", "x": x - ox, "y": y - oy, "w": w, "h": h,
+                    "dep": f["depth"], "nt": held(n["i"]),
+                    "sh": shapes.setdefault(sh, len(shapes)), "lo": loose.setdefault(lo, len(loose))})
+    return els, list(shapes), list(loose)
+
+
+def _section(k, raw, comp_view, groups=False, arrange=False, outline=False):
     nodes = _norm(raw)
     _decide(nodes, comp_view)
     view = [n for n in nodes if n["in_view"] and _pos(n["rect"])]
@@ -382,6 +420,10 @@ def _section(k, raw, comp_view, groups=False, arrange=False):
             if e["kind"] == "text" and e["k"] in marks:
                 e[marks[e["k"]]] = True
         els = boxes + els
+    ol_shapes = ol_loose = None
+    if outline:
+        ols, ol_shapes, ol_loose = _outline_els(raw, nodes, ox, oy)
+        els = els + ols
 
     rows = []
     skipped = {}
@@ -405,8 +447,19 @@ def _section(k, raw, comp_view, groups=False, arrange=False):
         stats["groups"] = n_groups
     if arrange:
         stats["arrange_groups"] = n_arrange
-    return {"k": k, "label": f"doc {k}: {len(nodes)} nodes", "n": len(nodes), "W": W, "H": H,
-            "lineH": lh, "els": els, "nodes": rows, "stats": stats}
+    sec = {"k": k, "label": f"doc {k}: {len(nodes)} nodes", "n": len(nodes), "W": W, "H": H,
+           "lineH": lh, "els": els, "nodes": rows, "stats": stats}
+    if outline:
+        ols = [e for e in els if e["kind"] == "ol"]
+        per = {}
+        for e in ols:
+            per[e["sh"]] = per.get(e["sh"], 0) + 1
+        stats["outlines"] = len(ols)
+        stats["outlines_2plus_texts"] = sum(1 for e in ols if e["nt"] >= 2)
+        stats["shapes"] = len(per)
+        stats["shapes_repeated"] = sum(1 for c in per.values() if c >= 2)
+        sec["shapes"], sec["loose"] = ol_shapes, ol_loose
+    return sec
 
 
 def _pick_docs(docs, doc):
@@ -422,13 +475,14 @@ def _pick_docs(docs, doc):
     return [int(doc)]
 
 
-def build(docs, meta, doc="auto", comp_view="present", groups=False, arrange=False):
+def build(docs, meta, doc="auto", comp_view="present", groups=False, arrange=False, outline=False):
     """(html, summary). The summary has counts only: the caller may print it. groups=True draws the
-    repeating groups of cards.py on top (plan docs/cards_rows/plan.md section 7)."""
-    sections = [_section(k, docs[k], comp_view, groups, arrange) for k in _pick_docs(docs, doc)]
+    repeating groups of cards.py on top (plan docs/cards_rows/plan.md section 7); outline=True outlines
+    every container and highlights same-shape containers on hover."""
+    sections = [_section(k, docs[k], comp_view, groups, arrange, outline) for k in _pick_docs(docs, doc)]
     data = {"title": meta.get("title", ""), "page": meta.get("page", ""), "browser": meta.get("browser", ""),
             "source": meta.get("source", ""), "index": meta.get("label", ""), "comp_view": comp_view,
-            "anchor": meta.get("anchor", ""), "docs": sections}
+            "anchor": meta.get("anchor", ""), "outline": bool(outline), "docs": sections}
     blob = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":")).replace("</", "<\\/")
     summary = {"sections": [{"label": s["label"], **s["stats"]} for s in sections]}
     return TEMPLATE.replace("/*DATA*/null", blob), summary
@@ -482,6 +536,8 @@ def main(argv=None):
                     help="draw the arrangement's groups (arrange.py, design section 3): member boxes, name and distinct slots; writes *_arrange.html")
     ap.add_argument("--groups", action="store_true",
                     help="draw the repeating groups (cards.py): members boxed, distinct slots marked; writes *_groups.html")
+    ap.add_argument("--outline", action="store_true",
+                    help="outline every container (colour by depth); hover highlights every same-shape container; writes *_outline.html")
     a = ap.parse_args(argv)
     src = Path(a.src)
     if not src.exists():
@@ -505,15 +561,20 @@ def main(argv=None):
             out = out.with_name(out.stem + "_groups" + out.suffix)
         if a.arrange and not a.out:
             out = out.with_name(out.stem + "_arrange" + out.suffix)
+        if a.outline and not a.out:
+            out = out.with_name(out.stem + "_outline" + out.suffix)
         check_out(out)
-        html, summary = build(docs, meta, doc=doc, comp_view=a.comp_view, groups=a.groups, arrange=a.arrange)
+        html, summary = build(docs, meta, doc=doc, comp_view=a.comp_view, groups=a.groups, arrange=a.arrange,
+                              outline=a.outline)
     except ValueError as e:
         raise SystemExit(str(e))
     write_html(out, html)
     for s in summary["sections"]:
         print(f"{s['label']}: {s['nodes']} nodes, {s['texts']} texts, {s['boxes']} boxes, {s['overlaps']} overlapping texts"
               + (f", {s['groups']} groups" if "groups" in s else "")
-              + (f", {s['arrange_groups']} arrangement groups" if "arrange_groups" in s else ""))
+              + (f", {s['arrange_groups']} arrangement groups" if "arrange_groups" in s else "")
+              + (f", {s['outlines']} containers ({s['outlines_2plus_texts']} with 2+ texts), {s['shapes']} shapes"
+                 f" ({s['shapes_repeated']} repeated)" if "outlines" in s else ""))
     print(f"-> {out}")
     if a.open:
         webbrowser.open(out.resolve().as_uri())
@@ -576,6 +637,14 @@ TEMPLATE = r"""<!doctype html>
   th, td { border:1px solid var(--line); padding:2px 6px; text-align:left; vertical-align:top; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   tr[data-k] { cursor:pointer; }
   tr[data-k]:hover { background:rgba(255,176,0,.15); }
+  .n.ol { display:none; pointer-events:none; border:1px solid; }
+  body.ol-on .n.ol { display:block; }
+  body.ol-on.ol-few .n.ol.few { display:none; }
+  body.ol-on .n.ol.same { display:block; background:rgba(255,176,0,.10); outline:2px solid var(--hl); z-index:4; }
+  body.ol-on .n.ol.cur { display:block; background:rgba(255,176,0,.22); outline:3px solid #e8590c; z-index:6; }
+  .olc { display:none; }
+  body.has-ol .olc { display:flex; }
+  #olpin { color:#e8590c; }
   #tip { position:fixed; z-index:20; pointer-events:none; background:#222; color:#fff; font:12px/1.4 ui-monospace,Consolas,monospace;
          padding:6px 8px; border-radius:4px; max-width:520px; display:none; white-space:pre-wrap; }
 </style>
@@ -586,6 +655,10 @@ TEMPLATE = r"""<!doctype html>
   <span class="meta" id="meta"></span>
   <label><input type="checkbox" id="boxes"> show every UIA box</label>
   <label><input type="checkbox" id="idx"> show node index</label>
+  <label class="olc"><input type="checkbox" id="olon" checked> outline containers</label>
+  <label class="olc"><input type="checkbox" id="olfew" checked> hide wrappers with &lt; 2 texts</label>
+  <label class="olc">same shape by <select id="olby"><option value="sh">shape (types, ids, classes)</option><option value="lo">loose (types only)</option></select></label>
+  <span class="meta olc">hover a container · [ ] parent / child · click pins · Esc clears <span id="olpin"></span></span>
   <span class="meta" id="sum"></span>
 </header>
 <main id="docs"></main>
@@ -595,6 +668,54 @@ const D = /*DATA*/null;
 const FIT_MIN = 7;
 const body = document.body;
 const tip = document.getElementById('tip');
+const OLS = [];   // one per section with outlines: {d, ols, chain, level, pinned}
+
+// --outline: the containers under the point, innermost first (hidden wrappers skipped)
+function olChain(o, x, y) {
+  const few = body.classList.contains('ol-few');
+  const inner = o.chain[0];
+  o.chain = o.ols.filter(e => (!few || e.nt >= 2) && x >= e.x && x < e.x + e.w && y >= e.y && y < e.y + e.h)
+                 .sort((a, b) => a.w * a.h - b.w * b.h || b.dep - a.dep);
+  if (o.chain[0] !== inner) o.level = 0;          // a new innermost container: start at it again
+  o.level = Math.min(o.level, Math.max(0, o.chain.length - 1));
+  olMark(o);
+}
+function olBy() { return document.getElementById('olby').value; }
+function olMark(o) {
+  for (const e of o.ols) e.div.classList.remove('same', 'cur');
+  const cur = o.chain[o.level];
+  if (!cur) return;
+  const by = olBy();
+  for (const e of o.ols) if (e[by] === cur[by]) e.div.classList.add('same');
+  cur.div.classList.add('cur');
+}
+function olInfo(o) {
+  const cur = o.chain[o.level];
+  if (!cur) return '';
+  const n = o.d.nodes[cur.k];
+  const sh = o.ols.filter(e => e.sh === cur.sh).length, lo = o.ols.filter(e => e.lo === cur.lo).length;
+  const cls = n.cls ? '  .' + n.cls.split(/\s+/).filter(Boolean).join('.') : '';
+  return [
+    'CONTAINER ' + n.t + (n.id ? '  #' + n.id : '') + cls,
+    'index ' + n.i + '  depth ' + cur.dep + '  texts ' + cur.nt + '  box ' + cur.w + 'x' + cur.h,
+    sh + ' like this by shape · ' + lo + ' by loose shape' + (olBy() === 'lo' ? '  (highlighting loose)' : '  (highlighting shape)'),
+    'shape ' + o.d.shapes[cur.sh],
+    'loose ' + o.d.loose[cur.lo],
+    'level ' + (o.level + 1) + ' of ' + o.chain.length + '  ([ parent, ] child)' + (o.pinned ? '  PINNED' : ''),
+  ].join('\n');
+}
+function olRefresh() { for (const o of OLS) olMark(o); }
+document.addEventListener('keydown', ev => {
+  for (const o of OLS) {
+    if (!o.chain.length) continue;
+    if (ev.key === '[') o.level = Math.min(o.level + 1, o.chain.length - 1);
+    else if (ev.key === ']') o.level = Math.max(o.level - 1, 0);
+    else if (ev.key === 'Escape') { o.pinned = false; o.chain = []; o.level = 0; document.getElementById('olpin').textContent = ''; }
+    else continue;
+    olMark(o);
+    if (tip.style.display === 'block') tip.textContent = olInfo(o) || tip.textContent;
+  }
+});
 
 function mk(tag, cls, text) {
   const e = document.createElement(tag);
@@ -699,16 +820,48 @@ function drawSection(d) {
     g.dataset.info = infoOf(n);
     page.appendChild(g);
   }
-  for (const e of d.els) page.appendChild(drawEl(e, d));
+  const ols = [];
+  for (const e of d.els) {
+    if (e.kind === 'ol') {
+      const div = mk('div', 'n ol' + (e.nt < 2 ? ' few' : ''));
+      place(div, [e.x, e.y, e.w, e.h]);
+      div.style.borderColor = 'hsl(' + ((e.dep * 53) % 360) + ',70%,45%)';
+      div.dataset.k = e.k;
+      e.div = div;
+      ols.push(e);
+      page.appendChild(div);
+    } else {
+      page.appendChild(drawEl(e, d));
+    }
+  }
+  const OL = {d, ols, chain: [], level: 0, pinned: false};
   page.addEventListener('mousemove', ev => {
+    let info = '';
+    if (ols.length && body.classList.contains('ol-on')) {
+      if (!OL.pinned) {
+        const r = page.getBoundingClientRect();
+        olChain(OL, ev.clientX - r.left, ev.clientY - r.top);
+      }
+      info = olInfo(OL);
+    }
     const t = ev.target.closest('.n');
-    if (!t || !t.dataset.info) { tip.style.display = 'none'; return; }
-    tip.textContent = t.dataset.info;
+    if (t && t.dataset.info) info = info ? info + '\n\n- node under the mouse -\n' + t.dataset.info : t.dataset.info;
+    if (!info) { tip.style.display = 'none'; return; }
+    tip.textContent = info;
     tip.style.display = 'block';
     tip.style.left = Math.min(ev.clientX + 14, innerWidth - 540) + 'px';
-    tip.style.top = (ev.clientY + 14) + 'px';
+    tip.style.top = Math.min(ev.clientY + 14, innerHeight - tip.offsetHeight - 4) + 'px';
   });
-  page.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+  page.addEventListener('mouseleave', () => {
+    tip.style.display = 'none';
+    if (!OL.pinned) { OL.chain = []; olMark(OL); }
+  });
+  page.addEventListener('click', () => {
+    if (!ols.length || !OL.chain.length) return;
+    OL.pinned = !OL.pinned;
+    document.getElementById('olpin').textContent = OL.pinned ? '· pinned' : '';
+  });
+  OLS.push(OL);
   wrap.appendChild(page);
   sec.appendChild(wrap);
   sec.appendChild(nodeTable(d, page));
@@ -732,6 +885,12 @@ function fit(sec, d) {
 }
 document.getElementById('boxes').addEventListener('change', e => body.classList.toggle('boxes', e.target.checked));
 document.getElementById('idx').addEventListener('change', e => body.classList.toggle('idx', e.target.checked));
+if (D.outline) {
+  body.classList.add('has-ol', 'ol-on', 'ol-few');
+  document.getElementById('olon').addEventListener('change', e => body.classList.toggle('ol-on', e.target.checked));
+  document.getElementById('olfew').addEventListener('change', e => body.classList.toggle('ol-few', e.target.checked));
+  document.getElementById('olby').addEventListener('change', olRefresh);
+}
 
 const root = document.getElementById('docs');
 const fits = [];
