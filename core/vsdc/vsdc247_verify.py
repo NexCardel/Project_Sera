@@ -224,7 +224,8 @@ class Verifier:
                 user = read_login_username(lines)
                 linked = self._links.read_login(hwnd, user, now)
                 return {"status": "login_linked" if linked else ("login_seen" if user else "login_empty"),
-                        "page_kind": spec.kind}
+                        "page_kind": spec.kind,
+                        "username": user}
             self._links.touch(hwnd, now)
             return self._observe_filing(hwnd, url, lines, spec, now, today, green_boxes, words)
 

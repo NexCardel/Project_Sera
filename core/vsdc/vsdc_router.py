@@ -698,6 +698,19 @@ class VSDCRouter:
             )
             if obs.get("page_kind") == "gst_login":
                 self._verifier_stats["logins"] += 1
+                if obs.get("status") == "login_linked":
+                    user = obs.get("username") or (self._verifier.client_for_window(hwnd) if self._verifier else "") or ""
+                    key = f"verifier_login:{hwnd}:{user}"
+                    if key not in self._prompted_ids:
+                        self._prompted_ids[key] = now
+                        self.notify_activity("identity", f"GST User: {user}", "Window linked • SGT Verifier")
+                        print(f"[VSDC247-V] Linked window {hwnd} to GST user '{user}'")
+                elif obs.get("status") == "login_seen":
+                    cand_user = obs.get("username") or ""
+                    key = f"verifier_login_seen:{hwnd}:{cand_user}"
+                    if key not in self._prompted_ids:
+                        self._prompted_ids[key] = now
+                        print(f"[VSDC247-V] GST login username '{cand_user}' seen on window {hwnd} (awaiting second frame)")
             if obs.get("status") == "saved":
                 self._verifier_stats["arns_seen"] += 1
 
