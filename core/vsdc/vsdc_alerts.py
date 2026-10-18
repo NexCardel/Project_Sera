@@ -238,6 +238,45 @@ class AlertSender:
         self._dispatch(f"Sera: capture problem on {pc}", body)
         return True
 
+    def notify_sgt_missed(self, form: Optional[str], page_url: Optional[str],
+                          when: Optional[datetime] = None) -> bool:
+        """SGT missed an ARN observed by OCR on the GST portal (VSDC247-V, plan 6.5)."""
+        if not self._admit("SGT missed a GST submission"):
+            return False
+        when = when or datetime.now()
+        page = redact_identifiers(page_url or "") or "(address bar not readable)"
+        body = "\n".join((
+            f"PC: {self._machine()}",
+            f"Form: {redact_identifiers(form or 'GST Return')}",
+            f"Seen: {when.strftime('%d-%b %H:%M')}",
+            f"Page: {page}",
+            "",
+            "VSDC247-V: SGT missed this filing on the GST portal. An independent flagged row has been recorded.",
+        ))
+        print(f"[VSDC Alert] SGT missed GST filing - alerting ({self._machine()})")
+        self._dispatch("Sera: SGT missed GST submission", body)
+        return True
+
+    def notify_client_conflict(self, form: Optional[str], page_url: Optional[str],
+                               when: Optional[datetime] = None) -> bool:
+        """SGT and OCR disagree on the client for an ARN (VSDC247-V, plan 6.3)."""
+        if not self._admit("client mismatch on GST submission"):
+            return False
+        when = when or datetime.now()
+        page = redact_identifiers(page_url or "") or "(address bar not readable)"
+        body = "\n".join((
+            f"PC: {self._machine()}",
+            f"Form: {redact_identifiers(form or 'GST Return')}",
+            f"Seen: {when.strftime('%d-%b %H:%M')}",
+            f"Page: {page}",
+            "",
+            "VSDC247-V: SGT and OCR captured the same ARN under different clients. Please review in Tracker.",
+        ))
+        print(f"[VSDC Alert] GST filing client mismatch - alerting ({self._machine()})")
+        self._dispatch("Sera: GST filing client mismatch", body)
+        return True
+
+
     def _admit(self, what: str) -> bool:
         """Configured, and under the hourly limit? (Reloads a config that appeared after start-up.)"""
         now = time.time()

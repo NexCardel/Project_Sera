@@ -1,0 +1,20 @@
+{
+ "synthetic": true,
+ "note": "Shape of the owner's GSTR-3B 'Filing Successful' popup (URL return.gst.gov.in/returns/auth/gstr3b/filing). The period is written 'for the period Jul-Sep - 2026'. GSTIN and ARN are placeholders of the same shape.",
+ "page_kind": "gstr3b_submit",
+ "portal": "GST Portal",
+ "url": "return.gst.gov.in/returns/auth/gstr3b/filing",
+ "source": "ocr",
+ "lines": [
+  "Filing Successful",
+  "GSTR-3B of GSTIN 00AAAAA0000A1Z0 for the period Jul-Sep - 2026 has been",
+  "successfully filed on 17/10/2026 at 21:16.",
+  "The Acknowledgment Reference Number: is AB0000000000000.",
+  "The GSTR-3B can be viewed on your Dashboard Login=>Taxpayer",
+  "Dashboard=>Returns=>View e-filed return.",
+  "This message is sent to your registered Email ID and Mobile Number.",
+  "OK",
+  "DOWNLOAD FILED GSTR-9B",
+  "FILE GSTR-3B WITH EVC"
+ ]
+}

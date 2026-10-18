@@ -1,0 +1,20 @@
+{
+ "synthetic": true,
+ "note": "Shape of the owner's login screenshot with the username field EMPTY (placeholder 'Enter Username' showing). Expect no username. Placeholders only.",
+ "page_kind": "gst_login",
+ "portal": "GST Portal",
+ "url": "services.gst.gov.in/services/login",
+ "source": "ocr",
+ "lines": [
+  "Login",
+  "indicates mandatory fields",
+  "Username*",
+  "Enter Username",
+  "Password*",
+  "Enter Password",
+  "LOGIN",
+  "Forgot Username",
+  "Forgot Password",
+  "First time login: If you are logging in for the first time, click here to log in."
+ ]
+}

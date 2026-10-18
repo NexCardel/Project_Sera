@@ -1,0 +1,20 @@
+{
+ "synthetic": true,
+ "note": "Shape of the owner's GSTR-3B verification page BEFORE filing (URL .../gstr3b/filing). Declaration and buttons, no ARN, so no reading. Placeholders only.",
+ "page_kind": "gstr3b_submit",
+ "portal": "GST Portal",
+ "url": "return.gst.gov.in/returns/auth/gstr3b/filing",
+ "source": "ocr",
+ "lines": [
+  "Verification",
+  "I/We hereby solemnly affirm and declare that the information given herein above is true and correct (in respect of Form GSTR-3B) to the best of my",
+  "knowledge and belief and nothing has been concealed therefrom.",
+  "Authorised Signatory*",
+  "EXAMPLE SIGNATORY",
+  "BACK",
+  "TAX LIABILITY BREAKUP, AS APPLICABLE",
+  "PREVIEW DRAFT GSTR-3B",
+  "FILE GSTR-3B WITH EVC",
+  "FILE GSTR-3B WITH DSC"
+ ]
+}

@@ -52,6 +52,90 @@ class TrackerDumpMixin:
                 "DELETE FROM tracker_dump WHERE dataset_key = ? AND capture_method LIKE 'SGT%'", (dataset_key,))
             return cur.rowcount or 0
 
+    def annotate_vsdc247(self, arn: str, block: dict) -> int:
+        """Annotates SGT's row(s) for arn with the vsdc247 verification block (plan 6.4).
+        Idempotent: merges raw_payload["vsdc247"], leaves all other keys and columns unchanged.
+        Never goes through insert_tracker_dump. Returns count of updated rows."""
+        clean_arn = (arn or "").strip().upper()
+        if not clean_arn or not isinstance(block, dict):
+            return 0
+        updated = 0
+        with self._connect_raw() as r_conn:
+            rows = r_conn.execute(
+                "SELECT id, raw_payload_json FROM tracker_dump "
+                "WHERE capture_method LIKE 'SGT%' AND UPPER(TRIM(arn_number)) = ?",
+                (clean_arn,),
+            ).fetchall()
+            for r_id, r_json in rows:
+                try:
+                    payload = json.loads(r_json) if r_json else {}
+                except Exception:
+                    payload = {}
+                if not isinstance(payload, dict):
+                    payload = {}
+                if "raw_payload" in payload and isinstance(payload["raw_payload"], dict):
+                    payload["raw_payload"]["vsdc247"] = dict(block)
+                payload["vsdc247"] = dict(block)
+                new_json = json.dumps(payload, ensure_ascii=False)
+                r_conn.execute(
+                    "UPDATE tracker_dump SET raw_payload_json = ? WHERE id = ?",
+                    (new_json, r_id),
+                )
+                updated += 1
+        return updated
+
+    def insert_vsdc247_flagged_row(self, row_dict: dict) -> int:
+        """Inserts or updates an independent flagged row for an ARN missed by SGT (plan 6.5).
+        capture_method = 'VSDC247_verify'
+        dataset_key = 'V247:GST:<ARN>'"""
+        arn = (row_dict.get("arn") or "").strip().upper()
+        if not arn:
+            return 0
+        d_key = row_dict.get("dataset_key") or f"V247:GST:{arn}"
+        portal = row_dict.get("portal") or "GST Portal"
+        period = row_dict.get("period_label") or ""
+        status = row_dict.get("status") or "Submitted"
+        client_name = row_dict.get("client_name") or f"Pending_{arn}"
+        unassigned_id = f"Pending_{arn}"
+        capture_method = "VSDC247_verify"
+        raw_payload = row_dict.get("raw_payload") or {}
+        raw_json = json.dumps(raw_payload, ensure_ascii=False) if isinstance(raw_payload, dict) else str(raw_payload)
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        with self._connect_raw() as r_conn:
+            existing = r_conn.execute(
+                "SELECT id FROM tracker_dump WHERE dataset_key = ? AND capture_method = 'VSDC247_verify'",
+                (d_key,),
+            ).fetchone()
+            if existing:
+                r_conn.execute(
+                    "UPDATE tracker_dump SET raw_payload_json = ?, status = ?, period_label = ? WHERE id = ?",
+                    (raw_json, status, period, existing[0]),
+                )
+                return existing[0]
+
+            cur = r_conn.execute(
+                """INSERT INTO tracker_dump
+                   (client_id, unassigned_identity, service_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, created_at, dataset_key)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (None, unassigned_id, None, portal, period, arn, capture_method, status, raw_json, "VSDC247-V", now, d_key),
+            )
+            return cur.lastrowid
+
+    def remove_vsdc247_flagged_row(self, arn: str) -> int:
+        """Removes the independent flagged row when SGT later delivers the ARN (plan 6.5)."""
+        clean_arn = (arn or "").strip().upper()
+        if not clean_arn:
+            return 0
+        d_key = f"V247:GST:{clean_arn}"
+        with self._connect_raw() as r_conn:
+            cur = r_conn.execute(
+                "DELETE FROM tracker_dump WHERE capture_method = 'VSDC247_verify' AND (arn_number = ? OR dataset_key = ?)",
+                (clean_arn, d_key),
+            )
+            return cur.rowcount or 0
+
+
     @staticmethod
     def _convert_sgt_shadow_rows(conn) -> int:
         """

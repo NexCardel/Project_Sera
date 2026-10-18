@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from datetime import datetime, timezone
 from PySide6.QtCore import Qt, Signal, QTimer, QSize, QThread, QSettings
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QClipboard, QPixmap, QImage, QKeySequence, QShortcut
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QClipboard, QPixmap, QImage, QKeySequence, QShortcut, QBrush
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
@@ -3172,6 +3172,24 @@ class TrackerDumpWindow(QWidget):
             # Actions - reused; the buttons read this row's item when clicked
             self._set_action_cell(row_idx, r, is_grouped=True)
             self._finish_client_tooltip(c_item, row_idx)
+
+            # VSDC247_verify flagged row visual highlight & tooltip
+            is_vsdc_verify = (str(method_val).startswith("VSDC247_") or
+                              any(str(h.get("capture_method") or "").startswith("VSDC247_")
+                                  for h in (r.get("filing_history") or [])))
+            if is_vsdc_verify:
+                verify_bg = QBrush(QColor("#241633"))
+                verify_tip = "Seen only by OCR — SGT missed it"
+                for col in range(self.COLUMN_COUNT):
+                    it = self.table.item(row_idx, col)
+                    if it is not None:
+                        it.setBackground(verify_bg)
+                        existing_tip = it.toolTip()
+                        if existing_tip:
+                            if verify_tip not in existing_tip:
+                                it.setToolTip(f"{existing_tip}\n[{verify_tip}]")
+                        else:
+                            it.setToolTip(verify_tip)
         self._elide_status_labels()
 
     def _populate_raw_table(self, records: list[dict]):
@@ -3240,6 +3258,21 @@ class TrackerDumpWindow(QWidget):
             # Actions Column - reused; the buttons read this row's item when clicked
             self._set_action_cell(row_idx, r, is_grouped=False)
             self._finish_client_tooltip(c_item, row_idx)
+
+            # VSDC247_verify flagged row visual highlight & tooltip
+            if str(method).startswith("VSDC247_"):
+                verify_bg = QBrush(QColor("#241633"))
+                verify_tip = "Seen only by OCR — SGT missed it"
+                for col in range(self.COLUMN_COUNT):
+                    it = self.table.item(row_idx, col)
+                    if it is not None:
+                        it.setBackground(verify_bg)
+                        existing_tip = it.toolTip()
+                        if existing_tip:
+                            if verify_tip not in existing_tip:
+                                it.setToolTip(f"{existing_tip}\n[{verify_tip}]")
+                        else:
+                            it.setToolTip(verify_tip)
         self._elide_status_labels()
 
     def _full_container(self, item: dict) -> dict:

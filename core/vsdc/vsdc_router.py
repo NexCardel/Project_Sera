@@ -20,7 +20,7 @@ from . import vsdc_uia_text
 from . import vsdc_diag
 from .vsdc_scope import (
     is_in_scope_url, portal_for_url, is_government_registry_host, portal_logo_cue, TRIPWIRE_TOP_LINES, extract_host,
-    sanitize_page_url, registered_domain,
+    sanitize_page_url, registered_domain, local_test_pages_allowed, is_local_reference,
 )
 from .vsdc_alerts import AlertSender, stamp_device_name
 from .vsdc_health import HealthMonitor
@@ -381,6 +381,19 @@ class VSDCRouter:
         self.capture_backend = None
         self.capture_clock = None
         self.diag_tick: Dict[str, Any] = {}        # this tick, for the heartbeat (vsdc_diag)
+
+        # VSDC247-V - SGT Verifier (plan section 7)
+        env_v = os.environ.get("VSDC247_VERIFY")
+        self._verifier_enabled: bool = (env_v.strip().lower() in ("1", "true", "yes", "on")) if env_v is not None else False
+        self._verifier = None
+        self._verifier_outbox: List[Dict[str, Any]] = []
+        if self._verifier_enabled:
+            self._apply_verifier()
+        self._verifier_stats: Dict[str, Any] = {
+            "ticks": 0, "gst_frames": 0, "logins": 0, "arns_seen": 0,
+            "matched": 0, "missed": 0, "last_heartbeat": 0.0,
+        }
+
         if self._sgt_mode != SGT_OFF:
             print(f"[SGT] mode = {self._sgt_mode.upper()} (from SGT_MODE)")
 
@@ -391,7 +404,7 @@ class VSDCRouter:
 
     def apply_engine_settings(self, vsdc: bool, vsdc_x: bool, vsdc247: bool, sgt: str = "off",
                               sgt_record: bool = True, sgt_i: bool = False, scc_detect: bool = False,
-                              sdis_record: bool = True) -> None:
+                              sdis_record: bool = True, vsdc247_verify: bool = False) -> None:
         """
         Applies the three Settings -> Tracker switches, live (no restart):
 
@@ -413,6 +426,8 @@ class VSDCRouter:
         engines', so it can run beside them. SGT_MODE overrides it. SGT-I (sgt_i) is SGT's
         Intelligence half: it only watches what SGT reads and never changes a capture. SCC-U
         (scc_detect) likewise only watches SGT's reads, for Income Tax logins.
+
+        VSDC247-V (vsdc247_verify) is the independent SGT verifier (plan section 7).
         """
         wanted = str(sgt).strip().lower()
         sgt_mode = self._env_sgt_mode() or (wanted if wanted in (SGT_SHADOW, SGT_LIVE) else SGT_OFF)
@@ -452,13 +467,24 @@ class VSDCRouter:
             self._mode_247 = MODE_LIVE if vsdc247 else MODE_OFF
         self._247_only = self._env_247_only or (bool(vsdc247) and not vsdc and not vsdc_x)
         self._engines_off = not (vsdc or vsdc_x or vsdc247 or sgt_on) and not self._env_247_only
+
+        # VSDC247-V verifier engine switch (env override for tests only)
+        env_verify = os.environ.get("VSDC247_VERIFY")
+        if env_verify is not None:
+            self._verifier_enabled = env_verify.strip().lower() in ("1", "true", "yes", "on")
+        else:
+            self._verifier_enabled = bool(vsdc247_verify)
+        self._apply_verifier()
+
         engines = (f"engines: VSDC={'on' if vsdc else 'off'} | VSDC-X={'on' if vsdc_x else 'off'} | "
                    f"VSDC247={self._mode_247.upper()}"
                    f"{' (works alone)' if self._247_only else ''} | SGT={self._sgt_mode.upper()}"
-                   f"{' (works alone)' if self._sgt_alone else ''} | SGT-I={'on' if sgt_i else 'off'}"
+                   f"{' (works alone)' if self._sgt_alone else ''} | SGT-I={'on' if sgt_i else 'off'} | "
+                   f"VSDC247-V={'on' if self._verifier_enabled else 'off'}"
                    f"{' - ALL OFF' if self._engines_off else ''}")
         print(f"[VSDC] {engines}")
         vsdc_diag.note(engines)
+
 
     def _apply_sgt_i(self) -> None:
         """Attaches SGT-I to SGT when switched on. One host per run: one that switched itself
@@ -514,7 +540,49 @@ class VSDCRouter:
             host.set_enabled(on)
             self._sgt.set_scc(host if on else None)
 
+    def _apply_verifier(self) -> None:
+        """Configures or clears VSDC247-V verifier lane."""
+        if not self._verifier_enabled:
+            self._verifier = None
+            self._verifier_outbox.clear()
+            return
+        if self._verifier is None:
+            try:
+                from .vsdc247_reconciler import Reconciler
+                from .vsdc247_verify import Verifier
+                reconciler = Reconciler(
+                    sgt_router=self._sgt,
+                    db=getattr(self, "db", None),
+                    client_lookup=getattr(self, "_client_lookup", None),
+                    on_alert=self._on_verifier_alert,
+                )
+                self._verifier = Verifier(
+                    client_lookup=getattr(self, "_client_lookup", None),
+                    reconciler=reconciler,
+                )
+                print("[VSDC247-V] SGT verifier lane active")
+            except Exception as e:
+                print(f"[VSDC247-V] could not initialize verifier: {e}")
+
+    def _on_verifier_alert(self, kind: str, data: Dict[str, Any]) -> None:
+        """Dispatches ntfy alert and HUD notification for verifier events."""
+        try:
+            block = data.get("block") or {}
+            form = block.get("form") or "GST Return"
+            url = block.get("page_url") or ""
+            if kind == "client_differs":
+                if hasattr(self.alerts, "notify_client_conflict"):
+                    self.alerts.notify_client_conflict(form=form, page_url=url)
+                self._health_hud("SGT Verifier", "Client mismatch on GST submission")
+            elif kind == "sgt_missed":
+                if hasattr(self.alerts, "notify_sgt_missed"):
+                    self.alerts.notify_sgt_missed(form=form, page_url=url)
+                self._health_hud("SGT Verifier", "Seen only by OCR — SGT missed it")
+        except Exception as e:
+            print(f"[VSDC247-V] alert error: {e}")
+
     def _ensure_sgt(self) -> None:
+
         """Builds SGT on first use. Its tracker rows leave through its own outbox (evaluate_tick
         hands them out one per tick), never through a tick's result."""
         if self._sgt is None:
@@ -566,6 +634,87 @@ class VSDCRouter:
         if loop is not None:
             vsdc_diag.register_reader(None)
             loop.close()
+
+    def _run_verifier(self) -> None:
+        """VSDC247-V lane: passive OCR verifier for the GST portal (plan section 7).
+        Runs on every tick when enabled, in every SGT mode, wrapped so it never
+        stops SGT's tick or the crosshair engines."""
+        if self._verifier is None:
+            self._apply_verifier()
+        if self._verifier is None:
+            return
+        try:
+            self._verifier_stats["ticks"] += 1
+            now = time.time()
+
+            # 1. Tick reconciler (handles grace timeouts, late arrivals)
+            resolved = self._verifier.reconcile_tick(now)
+            for res in resolved:
+                if res.flagged_row:
+                    self._verifier_outbox.append(res.flagged_row)
+                    self._verifier_stats["missed"] += 1
+                elif res.outcome == "matched":
+                    self._verifier_stats["matched"] += 1
+
+            # 2. Check foreground window
+            hwnd, title, proc_name = self.get_foreground_info()
+            if not hwnd or not title:
+                return
+            t_low = title.lower()
+            is_gst_title = "gst" in t_low or "goods and services" in t_low
+            is_browser = any(b in (proc_name or "").lower() for b in BROWSER_EXE_NAMES)
+            if not (is_browser or is_gst_title):
+                return
+
+            # Read active URL with fallback to window title (Section 4 independence rule)
+            url = self.extract_browser_url(hwnd) or ""
+            if not url and is_gst_title:
+                url = "services.gst.gov.in"
+
+            if url:
+                host = url.split("/")[0].lower() if "/" in url else url.lower()
+                is_local = local_test_pages_allowed() and is_local_reference(url)
+                if not is_local and not any(h in host for h in ("gst.gov.in", "services.gst", "return.gst")):
+                    if not is_gst_title:
+                        return
+
+            # Capture window screenshot and run OCR
+            img = self.ocr.capture_window_image(hwnd)
+            if img is None:
+                return
+            scan = self.ocr.scan_image(img) if hasattr(self.ocr, "scan_image") else {}
+            lines = scan.get("lines") or []
+            if not lines:
+                return
+
+            from .vsdc247 import find_green_boxes
+            green_boxes = find_green_boxes(img) if img else ()
+
+            self._verifier_stats["gst_frames"] += 1
+            obs = self._verifier.observe_frame(
+                hwnd, url, lines,
+                words=scan.get("words") or (),
+                green_boxes=green_boxes,
+            )
+            if obs.get("page_kind") == "gst_login":
+                self._verifier_stats["logins"] += 1
+            if obs.get("status") == "saved":
+                self._verifier_stats["arns_seen"] += 1
+
+            # Periodic heartbeat log (every 60s)
+            if now - self._verifier_stats["last_heartbeat"] >= 60.0:
+                self._verifier_stats["last_heartbeat"] = now
+                vsdc_diag.note(
+                    f"[Verifier Heartbeat] ticks={self._verifier_stats['ticks']} "
+                    f"gst_frames={self._verifier_stats['gst_frames']} "
+                    f"logins={self._verifier_stats['logins']} "
+                    f"arns={self._verifier_stats['arns_seen']} "
+                    f"matched={self._verifier_stats['matched']} "
+                    f"missed={self._verifier_stats['missed']}"
+                )
+        except Exception as e:
+            vsdc_diag.tick_error(e)
+
 
     _TRIPWIRE_MAX_PROBES = 3
     _TRIPWIRE_RETRY_SEC = 5.0
@@ -1060,6 +1209,13 @@ class VSDCRouter:
 
     def _evaluate_tick(self) -> Optional[Dict[str, Any]]:
         # SGT tracker rows waiting to be saved go out first, one per tick - even when the
+        # VSDC247-V flagged rows waiting to be saved go out first (plan section 7)
+        if self._verifier_outbox:
+            flagged = self._verifier_outbox.pop(0)
+            stamp_device_name(flagged)
+            return flagged
+
+        # SGT tracker rows waiting to be saved go out first, one per tick - even when the
         # engines were just switched off (switching SGT off queues its last rows) and whatever
         # window is in front. They are SGT's own rows: never recorded in _dispatched_ids, so
         # they can never stop VSDC247 from saving its own capture of the same filing.
@@ -1070,6 +1226,8 @@ class VSDCRouter:
                 return sgt_row
         if self._engines_off:
             self.diag_tick = {"engines": "all off"}
+            if self._verifier_enabled:
+                self._run_verifier()
             return None
         # SGT runs in its own capture loop, after the crosshair engines (when they are on at all);
         # it cannot change their result: its rows go out through its outbox, at the top of a tick.
@@ -1081,6 +1239,9 @@ class VSDCRouter:
         finally:
             if self._sgt_mode != SGT_OFF:
                 self._run_capture()
+            if self._verifier_enabled:
+                self._run_verifier()
+
 
     def _crosshair_tick(self) -> Optional[Dict[str, Any]]:
         """The crosshair engines and VSDC247: the window in front, with this router's own
