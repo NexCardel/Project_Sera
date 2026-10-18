@@ -1290,30 +1290,28 @@ class VSDCRouter:
         return sgt_row
 
     def _evaluate_tick(self) -> Optional[Dict[str, Any]]:
-        # SGT tracker rows waiting to be saved go out first, one per tick - even when the
-        # engines were just switched off (switching SGT off queues its last rows) and whatever
-        # window is in front. They are SGT's own rows: never recorded in _dispatched_ids, so
-        # they can never stop VSDC247 from saving its own capture of the same filing.
-        if self._sgt is not None and self._sgt.pending():
-            sgt_row = self._sgt.pop_dispatch()
-            if sgt_row:
-                self._enrich_sgt_row_with_verifier(sgt_row)
-                stamp_device_name(sgt_row)
-                return sgt_row
-        if self._engines_off:
-            self.diag_tick = {"engines": "all off"}
-            if self._verifier_enabled:
-                self._run_verifier()
-            return None
-        # SGT runs in its own capture loop, after the crosshair engines (when they are on at all);
-        # it cannot change their result: its rows go out through its outbox, at the top of a tick.
         try:
+            # SGT tracker rows waiting to be saved go out first, one per tick - even when the
+            # engines were just switched off (switching SGT off queues its last rows) and whatever
+            # window is in front. They are SGT's own rows: never recorded in _dispatched_ids, so
+            # they can never stop VSDC247 from saving its own capture of the same filing.
+            if self._sgt is not None and self._sgt.pending():
+                sgt_row = self._sgt.pop_dispatch()
+                if sgt_row:
+                    self._enrich_sgt_row_with_verifier(sgt_row)
+                    stamp_device_name(sgt_row)
+                    return sgt_row
+            if self._engines_off:
+                self.diag_tick = {"engines": "all off"}
+                return None
+            # SGT runs in its own capture loop, after the crosshair engines (when they are on at all);
+            # it cannot change their result: its rows go out through its outbox, at the top of a tick.
             if self._sgt_alone:
                 self.diag_tick = {}
                 return None
             return self._crosshair_tick()
         finally:
-            if self._sgt_mode != SGT_OFF:
+            if self._sgt_mode != SGT_OFF and not self._engines_off:
                 self._run_capture()
             if self._verifier_enabled:
                 self._run_verifier()

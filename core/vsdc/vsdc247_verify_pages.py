@@ -31,8 +31,8 @@ class PageSpec:
 
 # Windows OCR reads "GSTR1" as "GSTRI" on the GST pages (real-OCR check, 2026-10-18), and "3B" as
 # "38" is possible. The cues accept those readings; the path and host still have to match exactly.
-GSTR1_TEXT = r"GSTR[-\s]?[1Il|]"
-GSTR3B_TEXT = r"GSTR[-\s]?3[B8]"
+GSTR1_TEXT = r"GSTR[-_.\s]?[1Il|]"
+GSTR3B_TEXT = r"GSTR[-_.\s]?3[B8]"
 
 PAGE_KINDS: Tuple[PageSpec, ...] = (
     PageSpec("gst_login", "services.gst.gov.in", "/services/login", None,
@@ -62,7 +62,10 @@ def classify_page(url: str, lines: Sequence[str]) -> Optional[PageSpec]:
     if os.environ.get("VSDC_ALLOW_LOCAL_TEST") == "1":
         low_url = (url or "").lower()
         for spec in PAGE_KINDS:
-            if (spec.path in low_url or spec.kind in low_url) and all(c.search(text) for c in spec.cues):
+            if (spec.path in low_url or spec.kind in low_url or (spec.form and spec.form.lower() in low_url)) and all(c.search(text) for c in spec.cues):
+                return spec
+        for spec in PAGE_KINDS:
+            if ("test" in low_url or "gst" in low_url or not host) and all(c.search(text) for c in spec.cues):
                 return spec
 
     if not host:

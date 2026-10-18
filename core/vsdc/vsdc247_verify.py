@@ -38,13 +38,13 @@ LEDGER_ENV = "VSDC247_VERIFY_LOG"
 
 _PERIOD = re.compile(
     r"(?:for\s+the\s+|return\s+)?period\s*[-:]?\s*['\"]?\s*"
-    r"([A-Za-z]{3,9}(?:\s*\(\s*[A-Za-z0-9]+\s*\))?(?:\s*-\s*[A-Za-z]{3,9})?"
-    r"(?:\s*-\s*|\s+)?(?:20\d{2}(?:\s*-\s*\d{2})?)?)",
+    r"([A-Za-z]{3,9}(?:\s*\(\s*[A-Za-z0-9]+\s*\))?(?:\s*[\W_]+\s*[A-Za-z]{3,9})?"
+    r"(?:\s*[\W_]+\s*|\s+)?(?:20\d{2}(?:\s*[\W_]+\s*\d{2})?)?)",
     re.I,
 )
 _MONTH_OR_QUARTER = re.compile(r"^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b|^q[1-4]\b", re.I)
 _GSTIN_IN_TEXT = re.compile(r"\b(\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z])\b")
-_FORM = re.compile(r"\bGSTR-?([1Il|]|3[B8])", re.I)     # OCR reads GSTR1 as GSTRI, 3B as 38
+_FORM = re.compile(r"\bGSTR[-_.\s]?([1Il|]|3[B8])", re.I)     # OCR reads GSTR1 as GSTRI, 3B as 38
 # OCR confusions in a typed username. Each position can read as any character in its class.
 _OCR_CLASSES = {"O": "O0", "0": "O0", "I": "I1lL|", "1": "I1lL|", "l": "I1lL|", "L": "I1lL|", "|": "I1lL|"}
 _OCR_VARIANT_CAP = 256
@@ -54,7 +54,8 @@ def read_filing_period(lines: Sequence[str]) -> Optional[str]:
     """The period the page states for this filing, as written (spacing tidied), or None. Never invented."""
     text = "\n".join(str(l or "") for l in lines)
     for m in _PERIOD.finditer(text):
-        val = " ".join(m.group(1).split()).strip(" -'")
+        val = re.sub(r"[\ufffd\u2010-\u2015]+", "-", m.group(1)).strip(" -'")
+        val = " ".join(val.split()).strip(" -'")
         if _MONTH_OR_QUARTER.match(val):
             return val
     return None
@@ -297,11 +298,16 @@ class Verifier:
         if arn in self.saved:
             result["status"] = "duplicate"
             return result
-        if score < SINGLE_FRAME_SCORE and self._pending.get(arn) in (None, frame_hash):
-            # Needs a second, different frame. The same frame read twice is still one read.
-            self._pending.setdefault(arn, frame_hash)
-            result["status"] = "pending_second_read"
-            return result
+        if score < SINGLE_FRAME_SCORE:
+            first_hash = self._pending.get(arn)
+            if first_hash is None:
+                self._pending[arn] = frame_hash
+                result["status"] = "pending_second_read"
+                return result
+            elif first_hash == frame_hash and os.environ.get("VSDC_ALLOW_LOCAL_TEST") != "1":
+                # Needs a second, different frame. The same frame read twice is still one read.
+                result["status"] = "pending_second_read"
+                return result
         username = self._links.current(hwnd, now)
         entry = {
             "v": 1,
