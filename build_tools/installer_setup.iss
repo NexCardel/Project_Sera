@@ -2,7 +2,7 @@
 ; Project Sera - Amas Sera Application Installer Setup Script
 
 #define MyAppName "Amas Sera"
-#define MyAppVersion "2.13.0"
+#define MyAppVersion "2.13.1"
 #define MyAppPublisher "Aman Associates"
 #define MyAppExeName "Amas_Sera.exe"
 #define ShortcutName "CompanyInfo1"
@@ -16,7 +16,7 @@ DefaultDirName={autopf}\{#MyAppPublisher}\{#MyAppName}
 DefaultGroupName={#MyAppPublisher}
 DisableProgramGroupPage=yes
 OutputDir=..\installer_output
-OutputBaseFilename=Amas_Sera_Setup_v{#MyAppVersion}
+OutputBaseFilename=Amas_Sera_Setup_v{#MyAppVersion}_vsdc247
 SetupIconFile=..\assets\logo\icon_here.ico
 Compression=lzma
 SolidCompression=yes
