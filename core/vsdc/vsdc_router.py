@@ -656,14 +656,32 @@ class VSDCRouter:
                 elif res.outcome == "matched":
                     self._verifier_stats["matched"] += 1
 
-            # 2. Check foreground window
+            # 2. Check target window (foreground first, or visible background browser window)
             hwnd, title, proc_name = self.get_foreground_info()
-            if not hwnd or not title:
-                return
-            t_low = title.lower()
+            t_low = (title or "").lower()
             is_gst_title = "gst" in t_low or "goods and services" in t_low
             is_browser = any(b in (proc_name or "").lower() for b in BROWSER_EXE_NAMES)
+
             if not (is_browser or is_gst_title):
+                # Foreground is non-browser (e.g. terminal or Sera window);
+                # inspect top visible browser window so verifier tracks in background like SGT.
+                from . import vsdc_windows
+                try:
+                    candidates = vsdc_windows.browser_windows(hwnd or 0)
+                    for cand in candidates:
+                        c_low = (cand.title or "").lower()
+                        c_gst = "gst" in c_low or "goods and services" in c_low
+                        c_browser = any(b in (cand.proc_name or "").lower() for b in BROWSER_EXE_NAMES)
+                        if c_gst or c_browser:
+                            hwnd, title, proc_name = cand.hwnd, cand.title, cand.proc_name
+                            t_low = c_low
+                            is_gst_title = c_gst
+                            is_browser = c_browser
+                            break
+                except Exception:
+                    pass
+
+            if not hwnd or not (is_browser or is_gst_title):
                 return
 
             # Read active URL with fallback to window title (Section 4 independence rule)

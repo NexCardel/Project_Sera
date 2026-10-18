@@ -122,27 +122,45 @@ class WindowLinks:
             self._candidate.pop(hwnd, None)
             self._linked.pop(hwnd, None)
             return False
-        if self._candidate.get(hwnd) == username:
+        cand = self._candidate.get(hwnd)
+        cand_user = cand[0] if isinstance(cand, tuple) else cand
+        if cand_user == username:
             self._linked[hwnd] = (username, now)     # a second frame agrees: the field is stable
             return True
-        self._candidate[hwnd] = username
+        self._candidate[hwnd] = (username, now)
         return False
+
+    def promote_candidate(self, hwnd: Any, username: str, now: float) -> None:
+        """Promote a candidate username to linked status immediately (e.g. matched in client DB)."""
+        self._candidate[hwnd] = (username, now)
+        self._linked[hwnd] = (username, now)
 
     def current(self, hwnd: Any, now: float) -> Optional[str]:
         """The linked username if the window is not idle past the limit; an expired link is dropped."""
         link = self._linked.get(hwnd)
-        if not link:
-            return None
-        username, last = link
-        if now - last > LINK_IDLE_SEC:
-            self._linked.pop(hwnd, None)
-            return None
-        return username
+        if link:
+            username, last = link
+            if now - last > LINK_IDLE_SEC:
+                self._linked.pop(hwnd, None)
+                self._candidate.pop(hwnd, None)
+                return None
+            return username
+        # Fall back to candidate username seen on this window
+        cand = self._candidate.get(hwnd)
+        if cand:
+            cand_user = cand[0] if isinstance(cand, tuple) else cand
+            cand_t = cand[1] if isinstance(cand, tuple) else 0.0
+            if cand_t and (now - cand_t > LINK_IDLE_SEC):
+                self._candidate.pop(hwnd, None)
+                return None
+            return cand_user
+        return None
 
     def touch(self, hwnd: Any, now: float) -> None:
         """A registered page was seen in this window: it is not idle. An already-expired link stays dropped."""
-        if self.current(hwnd, now) is not None:
-            self._linked[hwnd] = (self._linked[hwnd][0], now)
+        curr = self.current(hwnd, now)
+        if curr is not None:
+            self._linked[hwnd] = (curr, now)
 
 
 def _client_block(links_user: Optional[str], lines: Sequence[str],
@@ -223,6 +241,11 @@ class Verifier:
             if spec.kind == "gst_login":
                 user = read_login_username(lines)
                 linked = self._links.read_login(hwnd, user, now)
+                if user and not linked and self._client_lookup:
+                    info, match = lookup_client(self._client_lookup, user)
+                    if info and match == "exact":
+                        self._links.promote_candidate(hwnd, user, now)
+                        linked = True
                 return {"status": "login_linked" if linked else ("login_seen" if user else "login_empty"),
                         "page_kind": spec.kind,
                         "username": user}
