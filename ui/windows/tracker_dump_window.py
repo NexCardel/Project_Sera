@@ -931,12 +931,24 @@ class PayloadInspectorDialog(QDialog):
         name_lbl = QLabel(_strip_pan_suffix(client_name, pan_val))
         name_lbl.setObjectName("InspName")
         name_lbl.setStyleSheet(f"color: {'#FFA657' if is_unreg else '#F0F6FC'};")
-        name_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
         name_row.addWidget(name_lbl)
         if is_unreg:
             b = QLabel("No matching client")
             b.setObjectName("UnregBadge")
             name_row.addWidget(b)
+
+        vsdc_v_info = {}
+        try:
+            pj_v = json.loads(raw_json) if isinstance(raw_json, str) else (raw_json or {})
+            vsdc_v_info = pj_v.get("vsdc247-v") or pj_v.get("raw_payload", {}).get("vsdc247-v") or pj_v.get("vsdc247") or {}
+        except Exception:
+            pass
+        if isinstance(vsdc_v_info, dict) and vsdc_v_info.get("verified"):
+            vb = QLabel("✓ VSDC247-V Verified")
+            vb.setStyleSheet("background: #2e1065; color: #d8b4fe; border: 1px solid #7e22ce; border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: 600;")
+            vb.setToolTip(f"Verified by VSDC247-V OCR Verifier\nARN: {vsdc_v_info.get('arn', 'N/A')}\nSeen at: {vsdc_v_info.get('seen_at', 'N/A')}")
+            name_row.addWidget(vb)
+
         name_row.addStretch()
         head_text.addLayout(name_row)
 
@@ -3190,6 +3202,22 @@ class TrackerDumpWindow(QWidget):
                                 it.setToolTip(f"{existing_tip}\n[{verify_tip}]")
                         else:
                             it.setToolTip(verify_tip)
+            else:
+                # SGT row verified by VSDC247-V
+                r_json = r.get("raw_payload_json") or ""
+                if "vsdc247" in r_json:
+                    try:
+                        p_obj = json.loads(r_json) if isinstance(r_json, str) else r_json
+                        vb = p_obj.get("vsdc247-v") or p_obj.get("raw_payload", {}).get("vsdc247-v") or p_obj.get("raw_payload", {}).get("vsdc247")
+                        if isinstance(vb, dict) and (vb.get("verified") or vb.get("result") in ("matched", "matched_client_differs")):
+                            v_note = "✓ VSDC247-V Verified (OCR confirmed)"
+                            status_item = self.table.item(row_idx, self.COL_STATUS)
+                            if status_item:
+                                stip = status_item.toolTip()
+                                if v_note not in stip:
+                                    status_item.setToolTip(f"{stip}\n[{v_note}]" if stip else v_note)
+                    except Exception:
+                        pass
         self._elide_status_labels()
 
     def _populate_raw_table(self, records: list[dict]):
@@ -3273,6 +3301,22 @@ class TrackerDumpWindow(QWidget):
                                 it.setToolTip(f"{existing_tip}\n[{verify_tip}]")
                         else:
                             it.setToolTip(verify_tip)
+            else:
+                # SGT row verified by VSDC247-V
+                r_json = r.get("raw_payload_json") or ""
+                if "vsdc247" in r_json:
+                    try:
+                        p_obj = json.loads(r_json) if isinstance(r_json, str) else r_json
+                        vb = p_obj.get("vsdc247-v") or p_obj.get("raw_payload", {}).get("vsdc247-v") or p_obj.get("raw_payload", {}).get("vsdc247")
+                        if isinstance(vb, dict) and (vb.get("verified") or vb.get("result") in ("matched", "matched_client_differs")):
+                            v_note = "✓ VSDC247-V Verified (OCR confirmed)"
+                            status_item = self.table.item(row_idx, self.COL_STATUS)
+                            if status_item:
+                                stip = status_item.toolTip()
+                                if v_note not in stip:
+                                    status_item.setToolTip(f"{stip}\n[{v_note}]" if stip else v_note)
+                    except Exception:
+                        pass
         self._elide_status_labels()
 
     def _full_container(self, item: dict) -> dict:

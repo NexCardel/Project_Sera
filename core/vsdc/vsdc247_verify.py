@@ -228,6 +228,31 @@ class Verifier:
     def ledger(self) -> Dict[str, dict]:
         return self.saved
 
+    def get_verification(self, arn: str) -> Optional[Dict[str, Any]]:
+        """Returns verification payload block if this ARN has been verified by OCR, else None."""
+        clean_arn = (arn or "").strip().upper()
+        if not clean_arn or clean_arn in ("N/A", "NONE"):
+            return None
+        with self._lock:
+            entry = self.saved.get(clean_arn)
+            if not entry:
+                return None
+            return {
+                "verified": True,
+                "status": "verified",
+                "arn": entry.get("arn") or clean_arn,
+                "form": entry.get("form"),
+                "period": entry.get("period"),
+                "score": entry.get("score"),
+                "tier": entry.get("tier", "certain"),
+                "client": entry.get("client") or {},
+                "page_kind": entry.get("page_kind"),
+                "page_url": entry.get("page_url"),
+                "seen_at": entry.get("seen_at"),
+                "confirmed_by": entry.get("confirmed_by", "vsdc247_verifier"),
+                "device_name": entry.get("device_name"),
+            }
+
     def client_for_window(self, hwnd: Any) -> Optional[str]:
         return self._links.current(hwnd, self._clock())
 

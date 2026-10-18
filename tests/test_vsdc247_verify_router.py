@@ -89,28 +89,57 @@ class TestVerifierRouterLane(unittest.TestCase):
         self.router.evaluate_tick()
         self.router._run_verifier.assert_called_once()
 
-    def test_verifier_outbox_dispatches_flagged_row(self):
+    def test_sgt_dispatch_enriched_with_vsdc247_v(self):
         self.router.apply_engine_settings(vsdc=False, vsdc_x=False, vsdc247=False, sgt="live", vsdc247_verify=True)
 
-        flagged = {
-            "source": "vsdc247_verify",
-            "portal": "GST Portal",
-            "arn": "AA191026999932T",
-            "status": "Submitted",
-            "capture_method": "VSDC247_verify",
-            "dataset_key": "V247:GST:AA191026999932T",
+        arn = "AA191026999932T"
+        # Pre-seed verifier ledger
+        self.router._verifier.saved[arn] = {
+            "arn": arn,
+            "form": "GSTR-1",
+            "period": "September - 2026-27",
+            "page_kind": "gst_ack",
+            "score": 95,
+            "tier": "certain",
+            "seen_at": "2026-10-18T12:00:00",
+            "client": {"username": "TESTUSER", "agreement": "agrees"},
         }
-        self.router._verifier_outbox.append(flagged)
+
+        # Mock SGT pending dispatch
+        mock_sgt_row = {
+            "source": "sgt",
+            "portal": "GST Portal",
+            "arn": arn,
+            "filing_type": "GSTR-1",
+            "period_label": "September - 2026-27",
+            "status": "Submitted",
+            "capture_method": "SGT_live",
+            "raw_payload": {},
+        }
+        self.router._sgt = MagicMock()
+        self.router._sgt.pending.return_value = True
+        self.router._sgt.pop_dispatch.return_value = dict(mock_sgt_row)
 
         initial_dispatched = len(self.router._dispatched_ids)
         row = self.router.evaluate_tick()
 
         self.assertIsNotNone(row)
-        self.assertEqual(row["arn"], "AA191026999932T")
-        self.assertEqual(row["capture_method"], "VSDC247_verify")
-        self.assertEqual(len(self.router._verifier_outbox), 0)
-        # Did not poison capture dedupe set
+        self.assertEqual(row["arn"], arn)
+        self.assertIn("vsdc247-v", row)
+        self.assertTrue(row["vsdc247-v"]["verified"])
+        self.assertEqual(row["vsdc247-v"]["status"], "verified")
+        self.assertEqual(row["vsdc247-v"]["score"], 95)
+        self.assertEqual(row["raw_payload"]["vsdc247-v"]["verified"], True)
         self.assertEqual(len(self.router._dispatched_ids), initial_dispatched)
+
+    def test_standalone_flagged_rows_not_emitted(self):
+        self.router.apply_engine_settings(vsdc=False, vsdc_x=False, vsdc247=False, sgt="live", vsdc247_verify=True)
+        # Standalone rows must NOT be emitted from evaluate_tick
+        self.router._verifier_outbox.append({"arn": "STANDALONE_ARN", "capture_method": "VSDC247_verify"})
+        self.router._sgt = MagicMock()
+        self.router._sgt.pending.return_value = False
+        row = self.router.evaluate_tick()
+        self.assertIsNone(row)
 
     def test_verifier_alert_dispatch(self):
         self.router.apply_engine_settings(vsdc=False, vsdc_x=False, vsdc247=False, sgt="live", vsdc247_verify=True)

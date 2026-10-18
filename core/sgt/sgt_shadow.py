@@ -339,6 +339,8 @@ class SgtShadow:
         self._sgt_i = intelligence
         # SCC-U (core.scc.SccHost), or None. Copies only, like SGT-I; see _hand_to_scc.
         self._scc = scc
+        # VSDC247-V verifier for payload verification enrichment
+        self._verifier = None
         self.set_mode(mode)
         # live: (form, page) of a submission written with no client - the phone alert
         self._alert_unattributed = alert_unattributed
@@ -431,6 +433,10 @@ class SgtShadow:
     def set_scc(self, host: Any) -> None:
         """Attaches SCC-U's host (or None). It never changes what the Core captures."""
         self._scc = host
+
+    def set_verifier(self, verifier: Any) -> None:
+        """Attaches VSDC247-V's verifier for payload verification enrichment."""
+        self._verifier = verifier
 
     @property
     def live(self) -> bool:
@@ -1309,6 +1315,50 @@ class SgtShadow:
             payload["raw_payload"]["sdis"] = info
             s.sdis.carried = info_signature(info)
 
+    def _attach_verifier(self, s: _Session, slot: Any, payload: Dict[str, Any]) -> None:
+        """Attaches the vsdc247-v verification section directly to the payload."""
+        arn = payload.get("arn") or (getattr(slot, "arn", None) if slot is not None else None)
+        if not arn and hasattr(slot, "values") and isinstance(slot.values, dict):
+            arn = slot.values.get("arn")
+        arn_clean = str(arn).strip().upper() if arn and str(arn).strip().upper() not in ("N/A", "NONE", "") else None
+        verif = None
+        if self._verifier is not None and arn_clean:
+            try:
+                if hasattr(self._verifier, "get_verification"):
+                    verif = self._verifier.get_verification(arn_clean)
+                elif hasattr(self._verifier, "ledger") and isinstance(self._verifier.ledger, dict):
+                    entry = self._verifier.ledger.get(arn_clean)
+                    if entry:
+                        verif = {
+                            "verified": True,
+                            "status": "verified",
+                            "arn": entry.get("arn") or arn_clean,
+                            "form": entry.get("form") or payload.get("filing_type"),
+                            "period": entry.get("period") or payload.get("period_label"),
+                            "score": entry.get("score"),
+                            "tier": entry.get("tier", "certain"),
+                            "client": entry.get("client") or {},
+                            "page_kind": entry.get("page_kind"),
+                            "page_url": entry.get("page_url") or payload.get("page_url"),
+                            "seen_at": entry.get("seen_at"),
+                            "confirmed_by": entry.get("confirmed_by", "vsdc247_verifier"),
+                            "device_name": entry.get("device_name"),
+                        }
+            except Exception:
+                verif = None
+
+        if verif is None:
+            verif = {
+                "verified": False,
+                "status": "unverified",
+                "arn": arn_clean or (arn or "N/A"),
+            }
+
+        payload["vsdc247-v"] = dict(verif)
+        if "raw_payload" in payload and isinstance(payload["raw_payload"], dict):
+            payload["raw_payload"]["vsdc247-v"] = dict(verif)
+            payload["raw_payload"]["vsdc247"] = dict(verif)
+
     def _carry_sdis(self, s: _Session) -> None:
         """Session end: values no dispatched row carried yet go out - on the session's last row, or,
         with no dataset row at all, on its one carrier row (capture method SGT_sdis_info)."""
@@ -1382,6 +1432,7 @@ class SgtShadow:
             },
         }
         self._attach_sdis(s, payload)
+        self._attach_verifier(s, obj, payload)
         return payload
 
     # ── Folding a page into the session ──────────────────────────────────────────
@@ -1590,6 +1641,7 @@ class SgtShadow:
             if extra:
                 payload["raw_payload"]["sgt_i"] = extra
         self._attach_sdis(s, payload)
+        self._attach_verifier(s, slot, payload)
         return payload
 
     # ── HUD pill ─────────────────────────────────────────────────────────────────

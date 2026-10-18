@@ -303,16 +303,21 @@ def build_vsdc247_block(
     period: Optional[str] = None,
     page_kind: Optional[str] = None,
     username: Optional[str] = None,
-    client: str = "unknown",
+    client: Any = "unknown",
     link: Optional[str] = None,
     sgt_delay_sec: Optional[int] = None,
     page_url: Optional[str] = None,
     late: bool = False,
     reason: Optional[str] = None,
+    score: Optional[int] = None,
+    tier: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Build the raw_payload['vsdc247'] block for the SGT row or ledger (plan 6.4)."""
+    """Build the vsdc247-v verification section for the SGT payload or ledger."""
+    is_verified = (result in (OUTCOME_MATCHED, OUTCOME_MATCHED_CLIENT_DIFFERS))
     if result == OUTCOME_SGT_ONLY:
         return {
+            "verified": False,
+            "status": "unverified",
             "checked": False,
             "reason": reason or "not seen by OCR",
             "result": OUTCOME_SGT_ONLY,
@@ -320,18 +325,24 @@ def build_vsdc247_block(
         }
 
     block: Dict[str, Any] = {
+        "verified": is_verified,
+        "status": "verified" if is_verified else ("missed" if result == OUTCOME_MISSED else "pending"),
         "checked": True,
         "result": result,
+        "arn": arn_seen,
         "arn_seen": arn_seen,
         "seen_at": seen_at,
         "form": form,
         "period": period,
+        "score": score,
+        "tier": tier or "certain",
         "page_kind": page_kind,
         "username": username,
         "client": client,
         "link": link,
         "sgt_delay_sec": int(sgt_delay_sec) if sgt_delay_sec is not None else 0,
         "page_url": page_url,
+        "confirmed_by": "vsdc247_verifier",
         "verifier_version": VERIFIER_VERSION,
     }
     if late:
@@ -379,6 +390,7 @@ class Reconciler:
         grace_sec: float = DEFAULT_GRACE_SEC,
         clock: Callable[[], float] = time.time,
         on_alert: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+        allow_flagged_rows: bool = False,
     ) -> None:
         self._sgt_lookup = sgt_lookup
         self._sgt_router = sgt_router
@@ -387,6 +399,7 @@ class Reconciler:
         self.grace_sec = float(grace_sec)
         self._clock = clock
         self._on_alert = on_alert
+        self.allow_flagged_rows = bool(allow_flagged_rows)
 
         self._lock = threading.Lock()
         self._pending: Dict[str, Tuple[Dict[str, Any], float]] = {}  # arn -> (entry, seen_epoch)
@@ -630,7 +643,7 @@ class Reconciler:
         )
         flagged_row = build_flagged_row(entry, block)
 
-        if self._db and hasattr(self._db, "insert_vsdc247_flagged_row"):
+        if self.allow_flagged_rows and self._db and hasattr(self._db, "insert_vsdc247_flagged_row"):
             try:
                 self._db.insert_vsdc247_flagged_row(flagged_row)
             except Exception:
@@ -647,6 +660,37 @@ class Reconciler:
             alert_kind="sgt_missed",
             flagged_row=flagged_row,
         )
+
+    def record_sgt_matched(self, arn: str, sgt_record_or_row: Any) -> Optional[ReconciliationResult]:
+        """Directly record that SGT has captured/matched this ARN, removing it from pending."""
+        clean_arn = (arn or "").strip().upper()
+        if not clean_arn:
+            return None
+        with self._lock:
+            if clean_arn in self._reconciled:
+                return self._reconciled[clean_arn]
+            entry_tuple = self._pending.pop(clean_arn, None) or self._missed.pop(clean_arn, None)
+            entry = entry_tuple[0] if entry_tuple else None
+            if not entry and self._sgt_router and hasattr(self._sgt_router, "_verifier") and self._sgt_router._verifier:
+                entry = self._sgt_router._verifier.saved.get(clean_arn)
+            if not entry:
+                return None
+            seen_epoch = _parse_epoch(entry, self._clock())
+            if isinstance(sgt_record_or_row, SgtRecord):
+                sgt = sgt_record_or_row
+            else:
+                sgt = SgtRecord(
+                    arn=clean_arn,
+                    pan=_extract_pan(sgt_record_or_row.get("pan")),
+                    gstin=_extract_gstin(sgt_record_or_row.get("gstin")),
+                    client_name=_clean_str(sgt_record_or_row.get("client_name")),
+                    form=_clean_str(sgt_record_or_row.get("filing_type")),
+                    period=_clean_str(sgt_record_or_row.get("period_label")),
+                    source="sgt_direct",
+                )
+            res = self._resolve_match(entry, sgt, seen_epoch, self._clock(), late=False)
+            self._reconciled[clean_arn] = res
+            return res
 
 
     def _maybe_alert(self, res: ReconciliationResult) -> None:

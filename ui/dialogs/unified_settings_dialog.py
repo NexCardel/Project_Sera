@@ -1250,13 +1250,28 @@ class UnifiedSettingsDialog(QDialog):
         self.health_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.health_table.setSelectionMode(QAbstractItemView.NoSelection)
         self.health_table.verticalHeader().setVisible(False)
-        self.health_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.health_table.setAlternatingRowColors(False)
+        self.health_table.setStyleSheet(
+            f"QTableWidget {{ background: #1a1a1a; color: {_TEXT_PRI}; border: 1px solid {_BORDER}; "
+            f"border-radius: 6px; gridline-color: #2a2a2a; font-size: 12px; }}"
+            f"QHeaderView::section {{ background: #222222; color: {_TEXT_SEC}; border: none; padding: 6px 8px; "
+            f"font-weight: 600; }}")
+        hdr = self.health_table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(2, QHeaderView.Stretch)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(6, QHeaderView.ResizeToContents)
         self.health_table.setMinimumHeight(170)
         v.addWidget(self.health_table)
         buttons = QHBoxLayout()
         refresh = QPushButton("Refresh")
+        refresh.setIcon(_icon("mdi.refresh", color=_TEXT_PRI))
         refresh.clicked.connect(self._refresh_health_panel)
         copy = QPushButton("Copy report")
+        copy.setIcon(_icon("mdi.content-copy", color=_TEXT_PRI))
         copy.clicked.connect(self._copy_health_report)
         buttons.addWidget(refresh)
         buttons.addWidget(copy)
@@ -1289,12 +1304,15 @@ class UnifiedSettingsDialog(QDialog):
                    fleet_health.ALERT: _DANGER, fleet_health.OFF: _TEXT_SEC}
         self.health_table.setRowCount(len(rows))
         for i, r in enumerate(rows):
-            cells = [r.device, r.version or "?", f"{r.state} ({r.note})", r.since[11:16] or "?",
+            state_text = r.state if not r.note or r.note == r.state else f"{r.state} ({r.note})"
+            cells = [r.device, r.version or "?", state_text, r.since[11:16] or "?",
                      fleet_health.age_text(r.age_min), f"{r.blind_min} / {r.stalled_min} min", str(r.rows_sent)]
             for j, text in enumerate(cells):
                 item = QTableWidgetItem(text)
                 if j == 2:
                     item.setForeground(QColor(colours.get(r.level, _TEXT_PRI)))
+                else:
+                    item.setForeground(QColor(_TEXT_PRI))
                 self.health_table.setItem(i, j, item)
         self.health_digest_label.setText(
             snapshot.get(TEXT_KEY) or "No digest yet. The admin PC makes one on its first capture tick of each day.")

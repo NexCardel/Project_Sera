@@ -54,11 +54,17 @@ class TrackerDumpMixin:
 
     def annotate_vsdc247(self, arn: str, block: dict) -> int:
         """Annotates SGT's row(s) for arn with the vsdc247 verification block (plan 6.4).
-        Idempotent: merges raw_payload["vsdc247"], leaves all other keys and columns unchanged.
+        Idempotent: merges raw_payload["vsdc247"] and raw_payload["vsdc247-v"],
+        leaves all other keys and columns unchanged.
         Never goes through insert_tracker_dump. Returns count of updated rows."""
         clean_arn = (arn or "").strip().upper()
         if not clean_arn or not isinstance(block, dict):
             return 0
+        v_block = dict(block)
+        if "verified" not in v_block:
+            v_block["verified"] = True
+        if "status" not in v_block:
+            v_block["status"] = "verified"
         updated = 0
         with self._connect_raw() as r_conn:
             rows = r_conn.execute(
@@ -74,8 +80,10 @@ class TrackerDumpMixin:
                 if not isinstance(payload, dict):
                     payload = {}
                 if "raw_payload" in payload and isinstance(payload["raw_payload"], dict):
-                    payload["raw_payload"]["vsdc247"] = dict(block)
-                payload["vsdc247"] = dict(block)
+                    payload["raw_payload"]["vsdc247"] = dict(v_block)
+                    payload["raw_payload"]["vsdc247-v"] = dict(v_block)
+                payload["vsdc247"] = dict(v_block)
+                payload["vsdc247-v"] = dict(v_block)
                 new_json = json.dumps(payload, ensure_ascii=False)
                 r_conn.execute(
                     "UPDATE tracker_dump SET raw_payload_json = ? WHERE id = ?",

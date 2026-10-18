@@ -544,6 +544,8 @@ class VSDCRouter:
         """Configures or clears VSDC247-V verifier lane."""
         if not self._verifier_enabled:
             self._verifier = None
+            if self._sgt is not None:
+                self._sgt.set_verifier(None)
             self._verifier_outbox.clear()
             return
         if self._verifier is None:
@@ -560,6 +562,8 @@ class VSDCRouter:
                     client_lookup=getattr(self, "_client_lookup", None),
                     reconciler=reconciler,
                 )
+                if self._sgt is not None:
+                    self._sgt.set_verifier(self._verifier)
                 print("[VSDC247-V] SGT verifier lane active")
             except Exception as e:
                 print(f"[VSDC247-V] could not initialize verifier: {e}")
@@ -607,6 +611,8 @@ class VSDCRouter:
             self._sgt.set_digest(getattr(self, "_digest", None))
             self._apply_sgt_i()
             self._apply_scc()
+            if self._verifier is not None:
+                self._sgt.set_verifier(self._verifier)
 
     def _run_capture(self) -> None:
         """SGT's tick: the capture loop watches the browser windows, asks the reader for page reads
@@ -647,14 +653,12 @@ class VSDCRouter:
             self._verifier_stats["ticks"] += 1
             now = time.time()
 
-            # 1. Tick reconciler (handles grace timeouts, late arrivals)
             resolved = self._verifier.reconcile_tick(now)
             for res in resolved:
-                if res.flagged_row:
-                    self._verifier_outbox.append(res.flagged_row)
-                    self._verifier_stats["missed"] += 1
-                elif res.outcome == "matched":
+                if res.outcome == "matched":
                     self._verifier_stats["matched"] += 1
+                elif res.outcome == "missed":
+                    self._verifier_stats["missed"] += 1
 
             # 2. Check target window (foreground first, or visible background browser window)
             hwnd, title, proc_name = self.get_foreground_info()
@@ -1135,6 +1139,7 @@ class VSDCRouter:
             return []
         rows = self._sgt.drain()
         for r in rows:
+            self._enrich_sgt_row_with_verifier(r)
             stamp_device_name(r)
         return rows
 
@@ -1238,14 +1243,53 @@ class VSDCRouter:
         except Exception:
             pass
 
-    def _evaluate_tick(self) -> Optional[Dict[str, Any]]:
-        # SGT tracker rows waiting to be saved go out first, one per tick - even when the
-        # VSDC247-V flagged rows waiting to be saved go out first (plan section 7)
-        if self._verifier_outbox:
-            flagged = self._verifier_outbox.pop(0)
-            stamp_device_name(flagged)
-            return flagged
+    def _enrich_sgt_row_with_verifier(self, sgt_row: Dict[str, Any]) -> Dict[str, Any]:
+        """Ensures the SGT row carries the vsdc247-v verification section."""
+        if not isinstance(sgt_row, dict):
+            return sgt_row
 
+        arn = (sgt_row.get("arn") or "").strip().upper()
+        is_real_arn = bool(arn and arn not in ("N/A", "NONE", ""))
+
+        v_existing = sgt_row.get("vsdc247-v")
+        if not isinstance(v_existing, dict):
+            v_existing = sgt_row.get("raw_payload", {}).get("vsdc247-v") if isinstance(sgt_row.get("raw_payload"), dict) else None
+
+        if isinstance(v_existing, dict) and v_existing.get("verified"):
+            return sgt_row
+
+        verif = None
+        if is_real_arn and self._verifier_enabled and self._verifier is not None:
+            verif = self._verifier.get_verification(arn)
+            if verif is None:
+                # Active screen frame might show the confirmation right now; give OCR a quick pass
+                try:
+                    self._run_verifier()
+                    verif = self._verifier.get_verification(arn)
+                except Exception:
+                    pass
+
+        if verif:
+            vsdc_v_section = dict(verif)
+            if self._verifier and self._verifier.reconciler:
+                try:
+                    self._verifier.reconciler.record_sgt_matched(arn, sgt_row)
+                except Exception:
+                    pass
+        else:
+            vsdc_v_section = {
+                "verified": False,
+                "status": "unverified",
+                "arn": arn if is_real_arn else "N/A",
+            }
+
+        sgt_row["vsdc247-v"] = vsdc_v_section
+        if "raw_payload" in sgt_row and isinstance(sgt_row["raw_payload"], dict):
+            sgt_row["raw_payload"]["vsdc247-v"] = dict(vsdc_v_section)
+            sgt_row["raw_payload"]["vsdc247"] = dict(vsdc_v_section)
+        return sgt_row
+
+    def _evaluate_tick(self) -> Optional[Dict[str, Any]]:
         # SGT tracker rows waiting to be saved go out first, one per tick - even when the
         # engines were just switched off (switching SGT off queues its last rows) and whatever
         # window is in front. They are SGT's own rows: never recorded in _dispatched_ids, so
@@ -1253,6 +1297,7 @@ class VSDCRouter:
         if self._sgt is not None and self._sgt.pending():
             sgt_row = self._sgt.pop_dispatch()
             if sgt_row:
+                self._enrich_sgt_row_with_verifier(sgt_row)
                 stamp_device_name(sgt_row)
                 return sgt_row
         if self._engines_off:

@@ -206,7 +206,7 @@ class TestTrackerDumpWP4(unittest.TestCase):
             def advance(self, s): self.t += s
 
         clock = Clock()
-        reconciler = Reconciler(db=self.db, grace_sec=60.0, clock=clock)
+        reconciler = Reconciler(db=self.db, grace_sec=60.0, clock=clock, allow_flagged_rows=True)
 
         # 1. Match: OCR sees self.arn (which is already in self.db as SGT_live)
         entry1 = {
@@ -281,6 +281,37 @@ class TestTrackerDumpWP4(unittest.TestCase):
         sgt_payload = json.loads(sgt_row[0])
         self.assertEqual(sgt_payload["vsdc247"]["result"], OUTCOME_MATCHED)
         self.assertTrue(sgt_payload["vsdc247"]["late"])
+
+    def test_reconciler_default_does_not_insert_flagged_row(self):
+        class Clock:
+            def __init__(self): self.t = 1_800_000_000.0
+            def __call__(self): return self.t
+            def advance(self, s): self.t += s
+
+        clock = Clock()
+        # Default allow_flagged_rows is False
+        reconciler = Reconciler(db=self.db, grace_sec=60.0, clock=clock)
+
+        unseen_arn = "AA8888888888888"
+        entry = {
+            "arn": unseen_arn,
+            "form": "GSTR-3B",
+            "period": "Jul-Sep - 2026",
+            "seen_at": "2026-10-18T12:01:00",
+            "seen_epoch": clock.t,
+            "client": {"username": "UNSEEN"},
+        }
+        reconciler.observe_arn(entry)
+        clock.advance(65.0)
+        res_list = reconciler.check_pending()
+        self.assertEqual(len(res_list), 1)
+        self.assertEqual(res_list[0].outcome, OUTCOME_MISSED)
+
+        # Confirm NO row was inserted into tracker_dump!
+        flagged = self.db.conn.execute(
+            "SELECT id FROM tracker_dump WHERE arn_number = ?", (unseen_arn,)
+        ).fetchone()
+        self.assertIsNone(flagged)
 
 
 if __name__ == "__main__":
