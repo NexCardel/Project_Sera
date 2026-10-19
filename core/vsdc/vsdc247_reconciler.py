@@ -101,6 +101,14 @@ def append_accountant_reconciliation_log(
     to reconcile GST returns and quickly spot SGT misses or mismatches.
     """
     try:
+        is_anomaly = (
+            outcome == OUTCOME_MISSED
+            or late
+            or outcome == OUTCOME_MATCHED_CLIENT_DIFFERS
+        )
+        if not is_anomaly and (outcome or arn):
+            return False
+
         target_path = Path(path) if path else _default_accountant_log_path()
         target_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -171,20 +179,6 @@ def append_accountant_reconciliation_log(
             lines.append(f"  Filing PC:       {pc_str}")
             lines.append("  Summary:         SGT captured this under a different client than the GST portal login.")
             lines.append("  Action Required: Review Tracker Dump to confirm correct client assignment.")
-            lines.append("-" * 80)
-            lines.append("")
-
-        elif outcome == OUTCOME_MATCHED:
-            lines.append(f"[{now_str}] [VERIFIED] SGT & PORTAL OCR MATCHED")
-            lines.append("-" * 80)
-            lines.append(f"  ARN:             {arn_str}")
-            lines.append(f"  Form:            {form_str}")
-            lines.append(f"  Return Period:   {period_str}")
-            lines.append(f"  Client:          {client_info}")
-            lines.append(f"  Filing PC:       {pc_str}")
-            lines.append(f"  SGT Delay:       {sgt_delay_sec} seconds")
-            lines.append("  Summary:         Successfully captured by SGT and verified against GST Portal screen.")
-            lines.append("  Action Required: None (Fully reconciled).")
             lines.append("-" * 80)
             lines.append("")
 
@@ -747,21 +741,22 @@ class Reconciler:
             except Exception:
                 pass
 
-        append_accountant_reconciliation_log(
-            outcome=outcome,
-            arn=arn,
-            form=entry.get("form") or sgt.form,
-            period=entry.get("period") or sgt.period,
-            username=username,
-            client_name=sgt.client_name or username,
-            filing_pc=orig_author,
-            sgt_delay_sec=delay,
-            sgt_client=sgt.client_name,
-            sgt_pan=sgt.pan,
-            late=late,
-            seen_at=entry.get("seen_at"),
-            path=getattr(self, "accountant_log_path", None),
-        )
+        if late or outcome == OUTCOME_MATCHED_CLIENT_DIFFERS:
+            append_accountant_reconciliation_log(
+                outcome=outcome,
+                arn=arn,
+                form=entry.get("form") or sgt.form,
+                period=entry.get("period") or sgt.period,
+                username=username,
+                client_name=sgt.client_name or username,
+                filing_pc=orig_author,
+                sgt_delay_sec=delay,
+                sgt_client=sgt.client_name,
+                sgt_pan=sgt.pan,
+                late=late,
+                seen_at=entry.get("seen_at"),
+                path=getattr(self, "accountant_log_path", None),
+            )
 
         return ReconciliationResult(
             outcome=outcome,

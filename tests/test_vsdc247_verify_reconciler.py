@@ -513,9 +513,10 @@ class TestAccountantReconciliationLog(unittest.TestCase):
         self.assertIn("Laptop-Office", content)
         self.assertIn("Pending_AA290121009125S", content)
 
-    def test_log_matched_entry(self):
+    def test_normal_matched_not_logged(self):
+        """Normal matched returns are not logged to prevent bloating the accountant text file."""
         from core.vsdc.vsdc247_reconciler import append_accountant_reconciliation_log
-        append_accountant_reconciliation_log(
+        res = append_accountant_reconciliation_log(
             outcome=OUTCOME_MATCHED,
             arn="AA2703260123456",
             form="GSTR-1",
@@ -523,13 +524,11 @@ class TestAccountantReconciliationLog(unittest.TestCase):
             client_name="Normal Client",
             filing_pc="Office-PC-1",
             sgt_delay_sec=3,
+            late=False,
             path=self.log_file,
         )
-        content = self.log_file.read_text(encoding="utf-8")
-        self.assertIn("[VERIFIED] SGT & PORTAL OCR MATCHED", content)
-        self.assertIn("AA2703260123456", content)
-        self.assertIn("Normal Client", content)
-        self.assertIn("3 seconds", content)
+        self.assertFalse(res)
+        self.assertFalse(self.log_file.exists())
 
     def test_log_client_mismatch_entry(self):
         from core.vsdc.vsdc247_reconciler import append_accountant_reconciliation_log
