@@ -100,6 +100,40 @@ def stamp_device_name(payload):
     return payload
 
 
+def stamp_original_author(payload, is_live=True, author=None):
+    """
+    Records which PC filed the return and captured the ARN live: "original_author" at the top level
+    and inside "raw_payload".
+
+    If the return was filed and captured live (is_live=True), records that PC's name (author or device_name()).
+    If the capture was from history (is_live=False), does NOT record this PC as the original author.
+    An existing original_author is never overwritten. Returns the payload.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    existing = payload.get("original_author")
+    if not existing and isinstance(payload.get("raw_payload"), dict):
+        existing = payload["raw_payload"].get("original_author")
+    if existing:
+        payload["original_author"] = existing
+        if isinstance(payload.get("raw_payload"), dict):
+            payload["raw_payload"]["original_author"] = existing
+        return payload
+
+    if is_live:
+        orig = str(author or device_name()).strip()
+        payload["original_author"] = orig
+        raw = payload.get("raw_payload")
+        if isinstance(raw, dict):
+            raw["original_author"] = orig
+    else:
+        payload.setdefault("original_author", None)
+        raw = payload.get("raw_payload")
+        if isinstance(raw, dict):
+            raw.setdefault("original_author", None)
+    return payload
+
+
 def _config_path() -> Path:
     """
     Installed app: next to the program first, else the PC's Sera data folder. The program sits

@@ -9,7 +9,7 @@ import json
 import time
 from core.dataset_key import NOT_CARRIER_SQL, compute_dataset_key as _compute_dataset_key
 
-from sera_db.common import SKELETON_NAME_REGEX, is_sgt_capture, payload_device_name
+from sera_db.common import SKELETON_NAME_REGEX, is_sgt_capture, payload_device_name, payload_original_author
 
 
 RECOVERED_NAME_MARK = "/-"      # follows the client name of a row the ARN fixer corrected
@@ -84,6 +84,13 @@ class TrackerDumpMixin:
                     payload["raw_payload"]["vsdc247-v"] = dict(v_block)
                 payload["vsdc247"] = dict(v_block)
                 payload["vsdc247-v"] = dict(v_block)
+                orig_author = v_block.get("original_author") or v_block.get("device_name")
+                if orig_author:
+                    if not payload.get("original_author"):
+                        payload["original_author"] = orig_author
+                    if "raw_payload" in payload and isinstance(payload["raw_payload"], dict):
+                        if not payload["raw_payload"].get("original_author"):
+                            payload["raw_payload"]["original_author"] = orig_author
                 new_json = json.dumps(payload, ensure_ascii=False)
                 r_conn.execute(
                     "UPDATE tracker_dump SET raw_payload_json = ? WHERE id = ?",
@@ -367,11 +374,12 @@ class TrackerDumpMixin:
             # Monotonicity Guard: A submitted status must NEVER demote back to 'Not Submitted'!
             if final_dataset_key and not final_dataset_key.endswith(":UNKNOWN:FORM:CURRENT"):
                 ex_row = r_conn.execute(
-                    f"SELECT status, arn_number FROM tracker_dump WHERE dataset_key = ? ORDER BY created_at DESC, {order_sec}, id DESC LIMIT 1",
+                    f"SELECT status, arn_number, raw_payload_json FROM tracker_dump WHERE dataset_key = ? ORDER BY created_at DESC, {order_sec}, id DESC LIMIT 1",
                     (final_dataset_key,)
                 ).fetchone()
                 if ex_row:
-                    ex_status, ex_arn = ex_row
+                    ex_status, ex_arn, ex_json = ex_row
+                    ex_author = payload_original_author(ex_json)
                     # A complete dataset (ARN + verified) is locked: the portal read again, a dashboard tile or an
                     # unasked "correction" cannot lower it. Only a change the user confirmed gets through.
                     if status_correction and not user_confirmed and is_complete(ex_status, ex_arn):
@@ -386,6 +394,15 @@ class TrackerDumpMixin:
                     # equal status (a dashboard tile "Filed" re-read after the filing carries no ARN).
                     if (not arn_number or arn_number == "N/A") and ex_arn and ex_arn != "N/A" and not status_correction:
                         arn_number = ex_arn
+                    if ex_author and isinstance(p_obj, dict):
+                        cm = str(capture_method or "").lower()
+                        is_history = "history" in cm or "audit" in cm or "calendar" in cm or "view_filed" in cm
+                        in_author = p_obj.get("original_author") or (p_obj.get("raw_payload", {}).get("original_author") if isinstance(p_obj.get("raw_payload"), dict) else None)
+                        if not in_author or is_history:
+                            p_obj["original_author"] = ex_author
+                            if isinstance(p_obj.get("raw_payload"), dict):
+                                p_obj["raw_payload"]["original_author"] = ex_author
+                            raw_payload_json = json.dumps(p_obj, ensure_ascii=False)
                 del_cur = r_conn.execute("DELETE FROM tracker_dump WHERE dataset_key = ?", (final_dataset_key,))
                 if del_cur.rowcount > 0:
                     is_replaced = True

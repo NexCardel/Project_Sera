@@ -43,6 +43,12 @@ class FakeDb(TrackerDumpMixin):
                 screenshot_path TEXT
             )
         """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS clients (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                is_archived INTEGER DEFAULT 0
+            )
+        """)
 
     @contextlib.contextmanager
     def _connect_raw(self):
@@ -51,6 +57,21 @@ class FakeDb(TrackerDumpMixin):
     @contextlib.contextmanager
     def _connect(self):
         yield self.conn
+
+    def _extract_identity_candidates_from_payload(self, **kwargs):
+        return []
+
+    def _upgrade_client_name_if_placeholder(self, *args, **kwargs):
+        pass
+
+    def _update_srpf_container(self, *args, **kwargs):
+        pass
+
+    def _bump_sync_revision_if_configured(self):
+        pass
+
+    def enrich_client_from_capture(self, *args, **kwargs):
+        pass
 
 
 class TestVsdc247PayloadEnrichment(unittest.TestCase):
@@ -122,6 +143,11 @@ class TestVsdc247PayloadEnrichment(unittest.TestCase):
         self.assertTrue(row["raw_payload"]["vsdc247-v"]["verified"])
         # Backwards compatible key
         self.assertIn("vsdc247", row["raw_payload"])
+
+        # Check original_author field (the PC that filed the return and captured ARN live)
+        self.assertEqual(row.get("original_author"), "TestPC")
+        self.assertEqual(row["raw_payload"].get("original_author"), "TestPC")
+        self.assertEqual(v.get("original_author"), "TestPC")
 
     def test_sgt_payload_marked_unverified_when_arn_not_seen(self):
         """When ARN is not seen by OCR, vsdc247-v section has verified=False."""
@@ -246,6 +272,8 @@ class TestVsdc247PayloadEnrichment(unittest.TestCase):
             "tier": "certain",
             "seen_at": "2026-10-18T16:36:00",
             "confirmed_by": "single_frame",
+            "device_name": "TestPC",
+            "original_author": "TestPC",
         }
         updated = self.db.annotate_vsdc247(arn, block)
         self.assertEqual(updated, 1)
@@ -260,10 +288,115 @@ class TestVsdc247PayloadEnrichment(unittest.TestCase):
         self.assertEqual(payload["vsdc247-v"]["status"], "verified")
         self.assertEqual(payload["vsdc247-v"]["score"], 99)
         self.assertTrue(payload["raw_payload"]["vsdc247-v"]["verified"])
+        self.assertEqual(payload.get("original_author"), "TestPC")
+        self.assertEqual(payload["raw_payload"].get("original_author"), "TestPC")
 
         # Still exactly 1 row in tracker_dump!
         total_rows = self.db.conn.execute("SELECT COUNT(*) FROM tracker_dump").fetchone()[0]
         self.assertEqual(total_rows, 1)
+
+    def test_original_author_preserved_from_live_filing_not_overwritten_by_history(self):
+        """When an ARN was captured live by PC-1, a subsequent capture from history by PC-2 preserves PC-1 as original_author."""
+        arn = "AA2703260555555"
+        d_key = f"GST:TEST:GSTR1:SEP_2026_HIST"
+
+        # 1. PC-1 files return live
+        live_payload = {
+            "source": "sgt",
+            "portal": "GST Portal",
+            "arn": arn,
+            "filing_type": "GSTR-1",
+            "period_label": "September (FY 2026-27)",
+            "status": "Submitted",
+            "capture_method": "SGT_live",
+            "device_name": "DESK-PC-1",
+            "original_author": "DESK-PC-1",
+            "raw_payload": {
+                "source": {"engine": "SGT", "record": "gst_submit_success"},
+                "device_name": "DESK-PC-1",
+                "original_author": "DESK-PC-1",
+            },
+        }
+
+        self.db.insert_tracker_dump(
+            client_id=101,
+            portal="GST Portal",
+            period_label="September (FY 2026-27)",
+            arn_number=arn,
+            capture_method="SGT_live",
+            status="Submitted",
+            raw_payload_json=json.dumps(live_payload),
+            dataset_key=d_key,
+        )
+
+        # Confirm inserted with original_author = "DESK-PC-1"
+        row = self.db.conn.execute("SELECT raw_payload_json FROM tracker_dump WHERE dataset_key = ?", (d_key,)).fetchone()
+        self.assertIsNotNone(row)
+        p = json.loads(row[0])
+        self.assertEqual(p["original_author"], "DESK-PC-1")
+
+        # 2. Later, PC-2 browses portal history (e.g. GST returns calendar / view filed returns)
+        history_payload = {
+            "source": "sgt",
+            "portal": "GST Portal",
+            "arn": arn,
+            "filing_type": "GSTR-1",
+            "period_label": "September (FY 2026-27)",
+            "status": "Submitted",
+            "capture_method": "SGT_calendar_history",
+            "device_name": "LAPTOP-PC-2",
+            "original_author": None,  # Captured from history, NOT live
+            "raw_payload": {
+                "source": {"engine": "SGT", "record": "gst_returns_calendar"},
+                "device_name": "LAPTOP-PC-2",
+                "original_author": None,
+            },
+        }
+
+        self.db.insert_tracker_dump(
+            client_id=101,
+            portal="GST Portal",
+            period_label="September (FY 2026-27)",
+            arn_number=arn,
+            capture_method="SGT_calendar_history",
+            status="Submitted",
+            raw_payload_json=json.dumps(history_payload),
+            dataset_key=d_key,
+        )
+
+        # Verify that original_author is STILL DESK-PC-1 (the PC that filed it live), NOT LAPTOP-PC-2
+        row2 = self.db.conn.execute("SELECT raw_payload_json FROM tracker_dump WHERE dataset_key = ?", (d_key,)).fetchone()
+        p2 = json.loads(row2[0])
+        self.assertEqual(p2["original_author"], "DESK-PC-1")
+        self.assertEqual(p2["raw_payload"]["original_author"], "DESK-PC-1")
+
+    def test_history_capture_does_not_set_original_author(self):
+        """When an SGT row is emitted from a history record, original_author is None."""
+        self.router.apply_engine_settings(vsdc=False, vsdc_x=False, vsdc247=False, sgt="live", vsdc247_verify=True)
+        arn = "AA2703260444444"
+
+        # SGT row from history (calendar)
+        sgt_history_payload = {
+            "source": "sgt",
+            "portal": "GST Portal",
+            "arn": arn,
+            "filing_type": "GSTR-1",
+            "period_label": "September (FY 2026-27)",
+            "status": "Submitted",
+            "capture_method": "SGT_live",
+            "raw_payload": {
+                "source": {"engine": "SGT", "record": "gst_returns_calendar"},
+            },
+        }
+        self.router._sgt = MagicMock()
+        self.router._sgt.pending.return_value = True
+        self.router._sgt.pop_dispatch.return_value = dict(sgt_history_payload)
+
+        row = self.router.evaluate_tick()
+        self.assertIsNotNone(row)
+        # Because it came from history, original_author must NOT be set to the scanning PC
+        self.assertIsNone(row.get("original_author"))
+        self.assertIsNone(row["raw_payload"].get("original_author"))
 
 
 if __name__ == "__main__":

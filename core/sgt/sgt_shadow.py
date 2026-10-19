@@ -1343,6 +1343,7 @@ class SgtShadow:
                             "seen_at": entry.get("seen_at"),
                             "confirmed_by": entry.get("confirmed_by", "vsdc247_verifier"),
                             "device_name": entry.get("device_name"),
+                            "original_author": entry.get("original_author") or entry.get("device_name"),
                         }
             except Exception:
                 verif = None
@@ -1352,7 +1353,15 @@ class SgtShadow:
                 "verified": False,
                 "status": "unverified",
                 "arn": arn_clean or (arn or "N/A"),
+                "original_author": payload.get("original_author"),
             }
+        else:
+            orig = verif.get("original_author") or verif.get("device_name")
+            if orig:
+                verif["original_author"] = orig
+                payload["original_author"] = orig
+                if "raw_payload" in payload and isinstance(payload["raw_payload"], dict):
+                    payload["raw_payload"]["original_author"] = orig
 
         payload["vsdc247-v"] = dict(verif)
         if "raw_payload" in payload and isinstance(payload["raw_payload"], dict):
@@ -1598,6 +1607,8 @@ class SgtShadow:
         filing_date = (f"{v['filing_date']} 00:00:00" if v.get("filing_date")
                        else datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         default_form = "GST Return" if "gst" in (s.portal or "").lower() else "ITR"
+        is_history_record = slot.record in ("gst_returns_calendar", "gst_track_return_status", "itr_filed_returns_history", "itr_dataset_cards")
+        orig_author = None if is_history_record else device_name()
         payload = {
             "source": "sgt",
             "session_id": f"SGT-{s.session_id}",
@@ -1623,6 +1634,7 @@ class SgtShadow:
             "supersedes_dataset_key": supersedes,
             "status_correction": lowered,
             "status_confirmed": bool(lowered and confirmed),     # a complete (ARN + verified) row yields only to this
+            "original_author": orig_author,
             "raw_payload": {
                 "source": {"engine": "SGT", "mode": self.mode, "record": slot.record, "confidence": slot.confidence,
                            "identity": s.confirm_note or "not confirmed yet",
@@ -1632,6 +1644,7 @@ class SgtShadow:
                 "timeline": list(s.timeline),
                 "session_id": f"SGT-{s.session_id}",
                 "dataset_key": key,
+                "original_author": orig_author,
             },
         }
         sgt_i = self._sgt_i    # one read (see observe): a failure here would drop this row
