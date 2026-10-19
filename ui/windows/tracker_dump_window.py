@@ -2077,7 +2077,7 @@ class TrackerDumpWindow(QWidget):
         self.cmb_view_mode = QComboBox(self)
         self.cmb_view_mode.addItems(["Grouped by Client Container (SRPF)", "Individual Raw Captures"])
         self.cmb_view_mode.hide()
-        self.cmb_view_mode.currentIndexChanged.connect(self.load_data)
+        self.cmb_view_mode.currentIndexChanged.connect(lambda: self.load_data(reset_page=True))
         self.cmb_view_mode.currentIndexChanged.connect(self._sync_view_buttons)
 
         seg = QHBoxLayout()
@@ -2298,10 +2298,7 @@ class TrackerDumpWindow(QWidget):
         """Reloads the list only when the pass changed a capture's client, and keeps the page the user is on."""
         if not updated or not self.isVisible():
             return
-        page = self._current_page
-        self.load_data()          # resets to page 1 ...
-        self._current_page = page  # ... so put the user's page back
-        self._apply_filters()
+        self.load_data(reset_page=False)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -2506,6 +2503,7 @@ class TrackerDumpWindow(QWidget):
     def _on_cell_double_clicked(self, row, column):
         """Fast double click inspection."""
         if hasattr(self, "_current_page_items") and 0 <= row < len(self._current_page_items):
+            self.table.setCurrentCell(row, column)
             item = self._current_page_items[row]
             is_grouped = (self.cmb_view_mode.currentIndex() == 0)
             if is_grouped:
@@ -2518,6 +2516,10 @@ class TrackerDumpWindow(QWidget):
         row = self.table.rowAt(pos.y())
         if row < 0 or not hasattr(self, "_current_page_items") or row >= len(self._current_page_items):
             return
+        col = self.table.columnAt(pos.x())
+        if col < 0:
+            col = 0
+        self.table.setCurrentCell(row, col)
         item = self._current_page_items[row]
         is_grouped = (self.cmb_view_mode.currentIndex() == 0)
 
@@ -2651,13 +2653,20 @@ class TrackerDumpWindow(QWidget):
             if btn is not None:
                 btn.setChecked(True)
 
-    def load_data(self):
+    def load_data(self, reset_page: bool = False):
         """Fetch tracker dumps or SRPF unified containers from database."""
         self._first_load_pending = False
         try:
             gen_at_start = self.db.data_generation() if hasattr(self.db, "data_generation") else None
             raw_gen_at_start = self.db.raw_generation() if hasattr(self.db, "raw_generation") else None
             is_grouped = (self.cmb_view_mode.currentIndex() == 0)
+
+            saved_page = 1 if reset_page else getattr(self, "_current_page", 1)
+            v_val = self.table.verticalScrollBar().value()
+            h_val = self.table.horizontalScrollBar().value()
+            curr_row = self.table.currentRow()
+            curr_col = self.table.currentColumn()
+
             # Every row is loaded so search and the filters see the whole database; the slim reads
             # keep payloads out of the list, and a dialog fetches its one row's payload on demand.
             if is_grouped:
@@ -2668,9 +2677,19 @@ class TrackerDumpWindow(QWidget):
                 self._dumps_cache = self.db.get_tracker_dumps(limit=-1, slim=True)
                 # Default chronological organisation: latest entry at top
                 self._dumps_cache.sort(key=lambda r: (str(r.get("created_at") or ""), r.get("id") or 0), reverse=True)
-            self._current_page = 1
+            self._current_page = max(1, saved_page)
             self._update_summary()
             self._apply_filters()
+
+            if curr_row >= 0 and self.table.rowCount() > 0:
+                target_r = min(curr_row, self.table.rowCount() - 1)
+                col = curr_col if (0 <= curr_col < self.table.columnCount()) else 0
+                self.table.setCurrentCell(target_r, col)
+            if v_val > 0:
+                self.table.verticalScrollBar().setValue(v_val)
+            if h_val > 0:
+                self.table.horizontalScrollBar().setValue(h_val)
+
             self._loaded_state = (gen_at_start, raw_gen_at_start, self.cmb_view_mode.currentIndex(), time.monotonic())
         except Exception as e:
             QMessageBox.critical(self, "Error Loading Dumps", f"Could not load tracker dumps: {e}")
@@ -2894,6 +2913,10 @@ class TrackerDumpWindow(QWidget):
     def _on_action_create(self, cell: QWidget) -> None:
         item = self._action_cell_item(cell)
         if item is not None:
+            row = cell.property("row")
+            if row is not None:
+                col = self.table.currentColumn() if self.table.currentColumn() >= 0 else 0
+                self.table.setCurrentCell(int(row), col)
             self._create_client_from_capture(item)
 
     def _service_for_row(self, item: dict):
@@ -2959,6 +2982,10 @@ class TrackerDumpWindow(QWidget):
         item = self._action_cell_item(cell)
         if item is None:
             return
+        row = cell.property("row")
+        if row is not None:
+            col = self.table.currentColumn() if self.table.currentColumn() >= 0 else 0
+            self.table.setCurrentCell(int(row), col)
         if cell.property("grouped"):
             self._show_container_dialog(item)
         else:
@@ -2967,6 +2994,10 @@ class TrackerDumpWindow(QWidget):
     def _on_action_more(self, cell: QWidget, anchor: QPushButton) -> None:
         item = self._action_cell_item(cell)
         if item is not None:
+            row = cell.property("row")
+            if row is not None:
+                col = self.table.currentColumn() if self.table.currentColumn() >= 0 else 0
+                self.table.setCurrentCell(int(row), col)
             self._show_row_action_menu(item, bool(cell.property("grouped")), anchor)
 
     def _build_action_cell(self, item: dict, is_grouped: bool) -> QWidget:
@@ -3333,23 +3364,70 @@ class TrackerDumpWindow(QWidget):
                 return full[0]
         return item
 
+    def _restore_table_position(self, page: int, row: int, col: int, v_scroll: int, h_scroll: int, target_key=None):
+        if hasattr(self, "_current_page"):
+            self._current_page = max(1, page)
+        if self._page_size > 0 and hasattr(self, "_filtered_cache"):
+            total_items = len(self._filtered_cache)
+            total_pages = max(1, (total_items + self._page_size - 1) // self._page_size)
+            self._current_page = max(1, min(self._current_page, total_pages))
+
+        target_row = row
+        if target_key is not None and hasattr(self, "_current_page_items"):
+            for idx, itm in enumerate(self._current_page_items):
+                if itm.get("identity_key") == target_key or itm.get("id") == target_key:
+                    target_row = idx
+                    break
+        if target_row >= 0 and self.table.rowCount() > 0:
+            target_r = min(target_row, self.table.rowCount() - 1)
+            target_c = col if (0 <= col < self.table.columnCount()) else 0
+            self.table.setCurrentCell(target_r, target_c)
+        if v_scroll > 0:
+            self.table.verticalScrollBar().setValue(v_scroll)
+        if h_scroll > 0:
+            self.table.horizontalScrollBar().setValue(h_scroll)
+
     def _show_container_dialog(self, container_item: dict):
         container_item = self._full_container(container_item)
+        saved_page = getattr(self, "_current_page", 1)
+        curr_row = self.table.currentRow()
+        curr_col = self.table.currentColumn()
+        v_val = self.table.verticalScrollBar().value()
+        h_val = self.table.horizontalScrollBar().value()
         dlg = PayloadInspectorDialog(container_item, db=self.db, is_container=True, parent=self)
-        if dlg.exec() == QDialog.Accepted:
-            self.load_data()
+        try:
+            if dlg.exec() == QDialog.Accepted:
+                self.load_data(reset_page=False)
+        finally:
+            self._restore_table_position(saved_page, curr_row, curr_col, v_val, h_val, container_item.get("identity_key"))
 
     def _show_payload_dialog(self, dump_item: dict):
         dump_item = self._full_container(dump_item)
+        saved_page = getattr(self, "_current_page", 1)
+        curr_row = self.table.currentRow()
+        curr_col = self.table.currentColumn()
+        v_val = self.table.verticalScrollBar().value()
+        h_val = self.table.horizontalScrollBar().value()
         dlg = PayloadInspectorDialog(dump_item, db=self.db, is_container=False, parent=self)
-        if dlg.exec() == QDialog.Accepted:
-            self.load_data()
+        try:
+            if dlg.exec() == QDialog.Accepted:
+                self.load_data(reset_page=False)
+        finally:
+            self._restore_table_position(saved_page, curr_row, curr_col, v_val, h_val, dump_item.get("id"))
 
     def _create_client_from_capture(self, dump_item: dict):
         dump_item = self._full_container(dump_item)
+        saved_page = getattr(self, "_current_page", 1)
+        curr_row = self.table.currentRow()
+        curr_col = self.table.currentColumn()
+        v_val = self.table.verticalScrollBar().value()
+        h_val = self.table.horizontalScrollBar().value()
         dlg = AddClientFromCaptureDialog(self.db, dump_item, self)
-        if dlg.exec() == QDialog.Accepted:
-            self.load_data()
+        try:
+            if dlg.exec() == QDialog.Accepted:
+                self.load_data(reset_page=False)
+        finally:
+            self._restore_table_position(saved_page, curr_row, curr_col, v_val, h_val, dump_item.get("identity_key") or dump_item.get("id"))
 
     def _delete_srpf_container(self, identity_key: str):
         if QMessageBox.question(
@@ -3378,7 +3456,7 @@ class TrackerDumpWindow(QWidget):
             self.db.clear_tracker_dumps()
             with self.db._connect_raw() as conn:
                 conn.execute("DELETE FROM client_raw_containers")
-            self.load_data()
+            self.load_data(reset_page=True)
 
     def _export_csv(self):
         if not self._dumps_cache:
