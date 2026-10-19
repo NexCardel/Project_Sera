@@ -477,6 +477,114 @@ class TestVerifierWithReconciler(unittest.TestCase):
         self.assertEqual(results[0].outcome, OUTCOME_MISSED)
 
 
+class TestAccountantReconciliationLog(unittest.TestCase):
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        self.log_file = Path(self.tmp_dir.name) / "test_gst_reconciliation.txt"
+        self.clock = Clock()
+        self.clock.t = 1000.0
+
+    def tearDown(self):
+        self.tmp_dir.cleanup()
+
+    def test_log_sgt_missed_entry(self):
+        from core.vsdc.vsdc247_reconciler import append_accountant_reconciliation_log
+        append_accountant_reconciliation_log(
+            outcome=OUTCOME_MISSED,
+            arn="AA290121009125S",
+            form="GSTR-1",
+            period="September - 2026-27",
+            username="29AABCU9603R1ZM",
+            client_name="ABC Enterprises",
+            filing_pc="Laptop-Office",
+            seen_at="2026-10-19 15:39:46",
+            path=self.log_file,
+        )
+        self.assertTrue(self.log_file.exists())
+        content = self.log_file.read_text(encoding="utf-8")
+        self.assertIn("SERA GST FILING RECONCILIATION LOG", content)
+        self.assertIn("[WARNING] SGT MISSED RETURN - CAPTURED BY OCR ONLY", content)
+        self.assertIn("AA290121009125S", content)
+        self.assertIn("GSTR-1", content)
+        self.assertIn("ABC Enterprises (29AABCU9603R1ZM)", content)
+        self.assertIn("Laptop-Office", content)
+        self.assertIn("Pending_AA290121009125S", content)
+
+    def test_log_matched_entry(self):
+        from core.vsdc.vsdc247_reconciler import append_accountant_reconciliation_log
+        append_accountant_reconciliation_log(
+            outcome=OUTCOME_MATCHED,
+            arn="AA2703260123456",
+            form="GSTR-1",
+            period="March 2026",
+            client_name="Normal Client",
+            filing_pc="Office-PC-1",
+            sgt_delay_sec=3,
+            path=self.log_file,
+        )
+        content = self.log_file.read_text(encoding="utf-8")
+        self.assertIn("[VERIFIED] SGT & PORTAL OCR MATCHED", content)
+        self.assertIn("AA2703260123456", content)
+        self.assertIn("Normal Client", content)
+        self.assertIn("3 seconds", content)
+
+    def test_log_client_mismatch_entry(self):
+        from core.vsdc.vsdc247_reconciler import append_accountant_reconciliation_log
+        append_accountant_reconciliation_log(
+            outcome=OUTCOME_MATCHED_CLIENT_DIFFERS,
+            arn="AA2703260222222",
+            form="GSTR-3B",
+            period="March 2026",
+            username="portal_user_b",
+            sgt_client="SGT Client A",
+            sgt_pan="AAAAA0000A",
+            filing_pc="Office-PC-2",
+            path=self.log_file,
+        )
+        content = self.log_file.read_text(encoding="utf-8")
+        self.assertIn("[ATTENTION] CLIENT MISMATCH", content)
+        self.assertIn("SGT Client:      SGT Client A (PAN: AAAAA0000A)", content)
+        self.assertIn("Portal User:     portal_user_b", content)
+
+    def test_log_late_arrival_entry(self):
+        from core.vsdc.vsdc247_reconciler import append_accountant_reconciliation_log
+        append_accountant_reconciliation_log(
+            outcome=OUTCOME_MATCHED,
+            arn="AA290121009125S",
+            form="GSTR-1",
+            period="September - 2026-27",
+            client_name="ABC Enterprises",
+            filing_pc="Office-PC-1",
+            sgt_delay_sec=145,
+            late=True,
+            path=self.log_file,
+        )
+        content = self.log_file.read_text(encoding="utf-8")
+        self.assertIn("[RESOLVED] SGT LATE ARRIVAL", content)
+        self.assertIn("145 seconds", content)
+        self.assertIn("cleared automatically", content)
+
+    def test_reconciler_writes_to_accountant_log_automatically(self):
+        reconciler = Reconciler(
+            grace_sec=30.0,
+            clock=self.clock,
+            accountant_log_path=self.log_file,
+        )
+        entry = _sample_ocr_entry(arn="AA8888888888888", seen_epoch=self.clock.t)
+        reconciler.observe_arn(entry, now=self.clock.t)
+
+        # Advance clock to expire grace
+        self.clock.advance(35.0)
+        reconciler.check_pending(now=self.clock.t)
+
+        self.assertTrue(self.log_file.exists())
+        content = self.log_file.read_text(encoding="utf-8")
+        self.assertIn("[WARNING] SGT MISSED RETURN", content)
+        self.assertIn("AA8888888888888", content)
+
 
 if __name__ == "__main__":
     unittest.main()

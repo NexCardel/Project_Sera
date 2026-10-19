@@ -20,6 +20,8 @@ Late SGT arrival (plan 6.5):
 from dataclasses import dataclass, field
 import datetime
 import json
+import os
+from pathlib import Path
 import re
 import threading
 import time
@@ -29,6 +31,13 @@ from .vsdc_alerts import device_name
 
 DEFAULT_GRACE_SEC = 90.0
 VERIFIER_VERSION = 1
+
+ACCOUNTANT_LOG_ENV = "VSDC_ACCOUNTANT_LOG"
+
+
+def _default_accountant_log_path() -> Path:
+    env = os.environ.get(ACCOUNTANT_LOG_ENV) or os.environ.get("GST_RECONCILIATION_LOG")
+    return Path(env) if env else Path.home() / "AmanAssociates_Sera" / "logs" / "gst_reconciliation.txt"
 
 OUTCOME_MATCHED = "matched"
 OUTCOME_MATCHED_CLIENT_DIFFERS = "matched_client_differs"
@@ -70,6 +79,122 @@ class ReconciliationResult:
     alert_kind: Optional[str] = None         # "client_differs", "sgt_missed"
     remove_flagged_row: bool = False
     flagged_row: Optional[Dict[str, Any]] = None
+
+
+def append_accountant_reconciliation_log(
+    outcome: str,
+    arn: str,
+    form: Optional[str] = None,
+    period: Optional[str] = None,
+    username: Optional[str] = None,
+    client_name: Optional[str] = None,
+    filing_pc: Optional[str] = None,
+    sgt_delay_sec: int = 0,
+    sgt_client: Optional[str] = None,
+    sgt_pan: Optional[str] = None,
+    late: bool = False,
+    seen_at: Optional[str] = None,
+    path: Optional[Union[str, Path]] = None,
+) -> bool:
+    """
+    Appends a human-readable, non-technical plain text entry for accountants
+    to reconcile GST returns and quickly spot SGT misses or mismatches.
+    """
+    try:
+        target_path = Path(path) if path else _default_accountant_log_path()
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        form_str = _clean_str(form) or "GST Return"
+        period_str = _clean_str(period) or "N/A"
+        pc_str = _clean_str(filing_pc) or device_name()
+        arn_str = (arn or "UNKNOWN").strip().upper()
+
+        clean_cname = _clean_str(client_name)
+        clean_user = _clean_str(username)
+        if clean_cname and clean_user and clean_cname != clean_user:
+            client_info = f"{clean_cname} ({clean_user})"
+        else:
+            client_info = clean_cname or clean_user or "Unknown Client"
+
+        lines = []
+
+        # If file is empty or brand new, write initial banner
+        if not target_path.exists() or target_path.stat().st_size == 0:
+            lines.append("=" * 80)
+            lines.append("SERA GST FILING RECONCILIATION LOG")
+            lines.append("Plain text audit trail for accountants to reconcile office GST filings.")
+            lines.append(f"Initialized: {now_str}")
+            lines.append("=" * 80)
+            lines.append("")
+
+        if outcome == OUTCOME_MISSED:
+            lines.append(f"[{now_str}] [WARNING] SGT MISSED RETURN - CAPTURED BY OCR ONLY")
+            lines.append("-" * 80)
+            lines.append(f"  ARN:             {arn_str}")
+            lines.append(f"  Form:            {form_str}")
+            lines.append(f"  Return Period:   {period_str}")
+            lines.append(f"  Portal Login:    {client_info}")
+            lines.append(f"  Filing PC:       {pc_str}")
+            if seen_at:
+                lines.append(f"  Portal Seen At:  {seen_at}")
+            lines.append("  Summary:         Return was submitted on GST Portal, but SGT did not capture it.")
+            lines.append(f"  Action Required: Flagged in Tracker Dump as 'Pending_{arn_str}'.")
+            lines.append("                   Please verify the client in Sera and assign the return.")
+            lines.append("-" * 80)
+            lines.append("")
+
+        elif late:
+            lines.append(f"[{now_str}] [RESOLVED] SGT LATE ARRIVAL")
+            lines.append("-" * 80)
+            lines.append(f"  ARN:             {arn_str}")
+            lines.append(f"  Form:            {form_str}")
+            lines.append(f"  Return Period:   {period_str}")
+            lines.append(f"  Client:          {client_info}")
+            lines.append(f"  Filing PC:       {pc_str}")
+            lines.append(f"  SGT Delay:       {sgt_delay_sec} seconds")
+            lines.append("  Summary:         SGT capture arrived late after the initial 90s grace period.")
+            lines.append(f"  Action Required: None. Temporary row 'Pending_{arn_str}' has been cleared automatically.")
+            lines.append("-" * 80)
+            lines.append("")
+
+        elif outcome == OUTCOME_MATCHED_CLIENT_DIFFERS:
+            lines.append(f"[{now_str}] [ATTENTION] CLIENT MISMATCH")
+            lines.append("-" * 80)
+            lines.append(f"  ARN:             {arn_str}")
+            lines.append(f"  Form:            {form_str}")
+            lines.append(f"  Return Period:   {period_str}")
+            sgt_str = _clean_str(sgt_client) or "Unknown Client"
+            pan_part = f" (PAN: {sgt_pan})" if sgt_pan else ""
+            lines.append(f"  SGT Client:      {sgt_str}{pan_part}")
+            lines.append(f"  Portal User:     {client_info}")
+            lines.append(f"  Filing PC:       {pc_str}")
+            lines.append("  Summary:         SGT captured this under a different client than the GST portal login.")
+            lines.append("  Action Required: Review Tracker Dump to confirm correct client assignment.")
+            lines.append("-" * 80)
+            lines.append("")
+
+        elif outcome == OUTCOME_MATCHED:
+            lines.append(f"[{now_str}] [VERIFIED] SGT & PORTAL OCR MATCHED")
+            lines.append("-" * 80)
+            lines.append(f"  ARN:             {arn_str}")
+            lines.append(f"  Form:            {form_str}")
+            lines.append(f"  Return Period:   {period_str}")
+            lines.append(f"  Client:          {client_info}")
+            lines.append(f"  Filing PC:       {pc_str}")
+            lines.append(f"  SGT Delay:       {sgt_delay_sec} seconds")
+            lines.append("  Summary:         Successfully captured by SGT and verified against GST Portal screen.")
+            lines.append("  Action Required: None (Fully reconciled).")
+            lines.append("-" * 80)
+            lines.append("")
+
+        if lines:
+            with target_path.open("a", encoding="utf-8") as fh:
+                fh.write("\n".join(lines) + "\n")
+            return True
+        return False
+    except Exception:
+        return False
 
 
 def _clean_str(val: Any) -> Optional[str]:
@@ -400,6 +525,7 @@ class Reconciler:
         clock: Callable[[], float] = time.time,
         on_alert: Optional[Callable[[str, Dict[str, Any]], None]] = None,
         allow_flagged_rows: bool = False,
+        accountant_log_path: Optional[Union[str, Path]] = None,
     ) -> None:
         self._sgt_lookup = sgt_lookup
         self._sgt_router = sgt_router
@@ -409,6 +535,7 @@ class Reconciler:
         self._clock = clock
         self._on_alert = on_alert
         self.allow_flagged_rows = bool(allow_flagged_rows)
+        self.accountant_log_path = Path(accountant_log_path) if accountant_log_path else None
 
         self._lock = threading.Lock()
         self._pending: Dict[str, Tuple[Dict[str, Any], float]] = {}  # arn -> (entry, seen_epoch)
@@ -620,6 +747,22 @@ class Reconciler:
             except Exception:
                 pass
 
+        append_accountant_reconciliation_log(
+            outcome=outcome,
+            arn=arn,
+            form=entry.get("form") or sgt.form,
+            period=entry.get("period") or sgt.period,
+            username=username,
+            client_name=sgt.client_name or username,
+            filing_pc=orig_author,
+            sgt_delay_sec=delay,
+            sgt_client=sgt.client_name,
+            sgt_pan=sgt.pan,
+            late=late,
+            seen_at=entry.get("seen_at"),
+            path=getattr(self, "accountant_log_path", None),
+        )
+
         return ReconciliationResult(
             outcome=outcome,
             arn=arn,
@@ -661,6 +804,20 @@ class Reconciler:
                 self._db.insert_vsdc247_flagged_row(flagged_row)
             except Exception:
                 pass
+
+        orig_author = entry.get("original_author") or entry.get("device_name")
+        append_accountant_reconciliation_log(
+            outcome=OUTCOME_MISSED,
+            arn=arn,
+            form=entry.get("form"),
+            period=entry.get("period"),
+            username=username,
+            client_name=username,
+            filing_pc=orig_author,
+            sgt_delay_sec=delay,
+            seen_at=entry.get("seen_at"),
+            path=getattr(self, "accountant_log_path", None),
+        )
 
         return ReconciliationResult(
             outcome=OUTCOME_MISSED,

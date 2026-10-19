@@ -557,6 +557,7 @@ class VSDCRouter:
                     db=getattr(self, "db", None),
                     client_lookup=getattr(self, "_client_lookup", None),
                     on_alert=self._on_verifier_alert,
+                    allow_flagged_rows=True,
                 )
                 self._verifier = Verifier(
                     client_lookup=getattr(self, "_client_lookup", None),

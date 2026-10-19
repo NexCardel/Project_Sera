@@ -3464,6 +3464,17 @@ class TrackerDumpWindow(QWidget):
         finally:
             QApplication.restoreOverrideCursor()
 
+    def _open_reconciliation_log(self):
+        """Opens the plain-text GST reconciliation audit log for accountants."""
+        from core.vsdc.vsdc247_reconciler import _default_accountant_log_path, append_accountant_reconciliation_log
+        log_path = _default_accountant_log_path()
+        if not log_path.exists() or log_path.stat().st_size == 0:
+            append_accountant_reconciliation_log("", "", path=log_path)
+        try:
+            os.startfile(str(log_path))
+        except Exception as e:
+            QMessageBox.warning(self, "GST Reconciliation Log", f"Could not open the reconciliation log: {e}")
+
     def _open_distill(self):
         """Sera Distill (SDIS Part L): the admin PC only; the dialog is non-modal and kept alive here."""
         if not self.db.is_admin_pc():
@@ -3516,6 +3527,9 @@ class TrackerDumpWindow(QWidget):
 
         act_ltt_open = menu.addAction(_safe_qta_icon("mdi.microsoft-excel", "#4CF9B7"), "Open LTT sheet")
         act_ltt_open.triggered.connect(self._open_ltt_sheet)
+
+        act_rec_log = menu.addAction(_safe_qta_icon("mdi.file-document-check-outline", "#4CF9B7"), "Open GST Reconciliation Log")
+        act_rec_log.triggered.connect(self._open_reconciliation_log)
 
         menu.addSeparator()
 
