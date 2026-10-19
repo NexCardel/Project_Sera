@@ -1,0 +1,14 @@
+{
+ "synthetic": true,
+ "note": "Negative: the GSTR-3B RETURNS page on the list path (not the filing path). Out of scope for the verifier, so it is not registered at all. Cues from the SGT corpus. Placeholders only.",
+ "page_kind": null,
+ "portal": "GST Portal",
+ "url": "return.gst.gov.in/returns/auth/gstr3b",
+ "source": "ocr",
+ "lines": [
+  "GSTR-9BQ - Quarterly Return",
+  "Status - Filed",
+  "SYSTEM GENERATED GSTR-9B",
+  "DOWNLOAD FILED GSTR-9B"
+ ]
+}

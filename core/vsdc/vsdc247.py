@@ -194,8 +194,8 @@ _FAILURE = re.compile(
 )
 _DRAFT = re.compile(r"\b(draft|saved\s+as|save\s+as|save\s+draft|saved\s+successfully)\b", re.IGNORECASE)
 
-_GST_FORM = re.compile(r"\b(GSTR[-\s]?[0-9A-Z]{1,3}|CMP[-\s]?08|ITC[-\s]?04|REG[-\s]?[0-9]{2}[A-Z]?|RFD[-\s]?[0-9]{2}[A-Z]?|"
-                       r"PMT[-\s]?[0-9]{2}|TRAN[-\s]?[0-9]|ASP[-\s]?[0-9]{2}|IFF)\b", re.IGNORECASE)
+_GST_FORM = re.compile(r"\b(GSTR[-_.\s]?[0-9A-Z]{1,3}|CMP[-_.\s]?08|ITC[-_.\s]?04|REG[-_.\s]?[0-9]{2}[A-Z]?|RFD[-_.\s]?[0-9]{2}[A-Z]?|"
+                       r"PMT[-_.\s]?[0-9]{2}|TRAN[-_.\s]?[0-9]|ASP[-_.\s]?[0-9]{2}|IFF)\b", re.IGNORECASE)
 
 
 # A number sitting right after an ARN label whose shape is NOT the usual two letters + digits.
@@ -419,7 +419,27 @@ def analyze_frame(
         score += 30
         reasons.append("success wording: " + re.sub(r"\s+", " ", success_hit.group(0).lower()))
 
-    form = extract_filing_type(window) or (_GST_FORM.search(window).group(1).upper().replace(" ", "-") if _GST_FORM.search(window) else None)
+    form = extract_filing_type(window)
+    if not form and known_form:
+        norm_kf = known_form.upper().replace(" ", "-")
+        if norm_kf in ("GSTR-1", "GSTR-I") and re.search(r"\bGSTR[-_.\s]*[1Il|]\b", window, re.I):
+            form = "GSTR-1"
+        elif norm_kf in ("GSTR-3B", "GSTR-38") and re.search(r"\bGSTR[-_.\s]*3[B8]\b", window, re.I):
+            form = "GSTR-3B"
+        elif re.search(rf"\b{re.escape(norm_kf)}\b", window, re.I):
+            form = known_form
+    if not form and _GST_FORM.search(window):
+        all_forms = []
+        for l_idx, l_text in enumerate(window_lines):
+            for fm in _GST_FORM.finditer(l_text):
+                val = re.sub(r"[-_.\s]+", "-", fm.group(1).upper())
+                if re.match(r"^GSTR-[1IL|]$", val, re.I):
+                    val = "GSTR-1"
+                dist = abs((lo + l_idx) - cand.line)
+                all_forms.append((dist, val))
+        if all_forms:
+            all_forms.sort(key=lambda x: x[0])
+            form = all_forms[0][1]
     if form:
         score += 10
         reasons.append("form on screen: " + form)
@@ -429,6 +449,10 @@ def analyze_frame(
     else:
         tp, fy = extract_gst_tax_period(window), extract_gst_fy(window)
         period = format_gst_period_label(tp, fy) if (tp or fy) else None
+        if not period:
+            m_per = re.search(r"(?:for\s+the\s+|return\s+)?period\s*[-:]?\s*['\"]?\s*([A-Za-z]{3,9}(?:\s*[\W_]+\s*[A-Za-z]{3,9})?(?:\s*[\W_]+\s*|\s+)?20\d{2})", window, re.I)
+            if m_per:
+                period = re.sub(r"[^\w\s-]+", "-", m_per.group(1)).strip(" -")
     if period:
         score += 5
         reasons.append("period on screen: " + period)

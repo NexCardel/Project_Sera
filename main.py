@@ -1823,7 +1823,7 @@ class SeraApp:
             # pill is shown, so it applies even when no engine is on.
             from core.vsdc.vsdc_engines import (apply_sgt_live_rollout, read_engine_flags, read_hud_enabled,
                                                 read_scc_detect_mode, read_sgt_i_mode, read_sgt_mode,
-                                                read_sdis_record, read_sgt_record_pages)
+                                                read_sdis_record, read_sgt_record_pages, read_verifier_enabled)
             # Once per office: SGT live becomes the capture engine, the other three go off.
             apply_sgt_live_rollout(self.db.get_setting, self.db.set_settings_bulk)
             hud = getattr(self, "vsdc_hud", None)
@@ -1836,16 +1836,19 @@ class SeraApp:
             worker.router.health.set_sync_minutes(read_sync_min(self.db.get_setting))
             vsdc, vsdc_x, vsdc247 = read_engine_flags(self.db.get_setting)
             sgt = read_sgt_mode(self.db.get_setting)
+            vsdc247_verify = read_verifier_enabled(self.db.get_setting)
             worker.router.apply_engine_settings(vsdc, vsdc_x, vsdc247, sgt=sgt,
                                                 sgt_record=read_sgt_record_pages(self.db.get_setting),
                                                 sgt_i=False,   # SGT-I unhooked: never attached, whatever the sgt_i_mode setting says
                                                 scc_detect=read_scc_detect_mode(self.db.get_setting) == "on",
-                                                sdis_record=read_sdis_record(self.db.get_setting))
-            if (vsdc or vsdc_x or vsdc247 or sgt != "off") and not worker.isRunning():
+                                                sdis_record=read_sdis_record(self.db.get_setting),
+                                                vsdc247_verify=vsdc247_verify)
+            if (vsdc or vsdc_x or vsdc247 or vsdc247_verify or sgt != "off") and not worker.isRunning():
                 worker.start()
                 print("⚡ [main] VSDC Worker started "
                       f"(VSDC={'on' if vsdc else 'off'}, VSDC-X={'on' if vsdc_x else 'off'}, "
-                      f"VSDC 24/7={'on' if vsdc247 else 'off'}, SGT={sgt}).")
+                      f"VSDC 24/7={'on' if vsdc247 else 'off'}, SGT={sgt}, "
+                      f"VSDC247-V={'on' if vsdc247_verify else 'off'}).")
         except Exception as e:
             print(f"⚠️ [main] Could not apply the VSDC engine settings: {e}")
 

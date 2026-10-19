@@ -39,5 +39,17 @@ def payload_device_name(raw_payload_json) -> str:
     return str(p.get("device_name") or raw.get("device_name") or "").strip()
 
 
+def payload_original_author(raw_payload_json) -> str:
+    """The PC that filed the return and captured the ARN live, or "" when not known."""
+    try:
+        p = json.loads(raw_payload_json) if isinstance(raw_payload_json, str) else raw_payload_json
+    except (TypeError, ValueError):
+        return ""
+    if not isinstance(p, dict):
+        return ""
+    raw = p.get("raw_payload") if isinstance(p.get("raw_payload"), dict) else {}
+    return str(p.get("original_author") or raw.get("original_author") or "").strip()
+
+
 class DatabaseError(Exception):
     pass

@@ -1151,6 +1151,11 @@ class UnifiedSettingsDialog(QDialog):
         lay.addWidget(_setting_row("Enable VSDC 24/7",
             "Always-on background optical screen harvester. Periodically takes screenshots of designated web portals and runs OCR to detect compliance receipts.", self.vsdc247_check))
 
+        self.vsdc247_verify_check = QCheckBox()
+        lay.addWidget(_setting_row("Enable SGT Verifier (VSDC247-V)",
+            "Independent OCR verifier for the GST portal. Passively cross-checks GSTR-1 and GSTR-3B filings against SGT without affecting live capture.", self.vsdc247_verify_check))
+
+
         lay.addWidget(_sub_header("SGT - Sera Global Tracker"))
         self.sgt_mode_combo = QComboBox()
         self.sgt_mode_combo.addItem("Live (main capture engine)", "live")
@@ -1209,7 +1214,9 @@ class UnifiedSettingsDialog(QDialog):
         self.vsdc_check.toggled.connect(self._on_control_changed)
         self.vsdc_x_check.toggled.connect(self._on_control_changed)
         self.vsdc247_check.toggled.connect(self._on_control_changed)
+        self.vsdc247_verify_check.toggled.connect(self._on_control_changed)
         self.vsdc_hud_check.toggled.connect(self._on_control_changed)
+
         self.sgt_mode_combo.currentIndexChanged.connect(self._on_control_changed)
         self.sgt_record_check.toggled.connect(self._on_control_changed)
         self.sdis_record_check.toggled.connect(self._on_control_changed)
@@ -1531,7 +1538,9 @@ class UnifiedSettingsDialog(QDialog):
             state["vsdc_enabled"] = self.vsdc_check.isChecked()
             state["vsdc_x_enabled"] = self.vsdc_x_check.isChecked()
             state["vsdc247_enabled"] = self.vsdc247_check.isChecked()
+            state["vsdc247_verify"] = self.vsdc247_verify_check.isChecked()
             state["vsdc_hud_enabled"] = self.vsdc_hud_check.isChecked()
+
             state["sgt_mode"] = self.sgt_mode_combo.currentData()
             state["sgt_record_pages"] = self.sgt_record_check.isChecked()
             state["sdis_record"] = self.sdis_record_check.isChecked()
@@ -1650,7 +1659,9 @@ class UnifiedSettingsDialog(QDialog):
             self.vsdc_check.setChecked(g("vsdc_enabled", "0") == "1")
             self.vsdc_x_check.setChecked(g("vsdc_x_enabled", "0") == "1")
             self.vsdc247_check.setChecked(g("vsdc247_enabled", "0") == "1")
+            self.vsdc247_verify_check.setChecked(g("vsdc247_verify", "0") == "1")
             self.vsdc_hud_check.setChecked(g("vsdc_hud_enabled", "1") == "1")
+
             _set(self.sgt_mode_combo, g("sgt_mode", "live"))
             self.sgt_record_check.setChecked(g("sgt_record_pages", "1") == "1")
             self.sdis_record_check.setChecked(g("sdis_record", "1") == "1")
@@ -1733,7 +1744,9 @@ class UnifiedSettingsDialog(QDialog):
                 bulk_settings["vsdc_enabled"] = b(self.vsdc_check)
                 bulk_settings["vsdc_x_enabled"] = b(self.vsdc_x_check)
                 bulk_settings["vsdc247_enabled"] = b(self.vsdc247_check)
+                bulk_settings["vsdc247_verify"] = b(self.vsdc247_verify_check)
                 bulk_settings["vsdc_hud_enabled"] = b(self.vsdc_hud_check)
+
                 bulk_settings["sgt_mode"] = self.sgt_mode_combo.currentData() or "live"
                 bulk_settings["sgt_record_pages"] = b(self.sgt_record_check)
                 bulk_settings["sdis_record"] = b(self.sdis_record_check)

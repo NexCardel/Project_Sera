@@ -137,3 +137,23 @@ def read_hud_enabled(get_setting: Callable[..., object]) -> bool:
         return _on(get_setting(HUD_SETTING, HUD_DEFAULT), HUD_DEFAULT)
     except Exception:
         return _on(None, HUD_DEFAULT)
+
+
+# VSDC247-V - SGT Verifier (Settings -> Tracker). Independent of vsdc247_enabled.
+VERIFY_SETTING = "vsdc247_verify"
+VERIFY_DEFAULT = "0"
+VERIFY_ENV = "VSDC247_VERIFY"
+
+
+def read_verifier_enabled(get_setting: Callable[..., object]) -> bool:
+    """Whether the SGT verifier (VSDC247-V) is switched on (default off).
+    Env override VSDC247_VERIFY=1|0 is for tests only."""
+    import os
+    env = os.environ.get(VERIFY_ENV)
+    if env is not None:
+        return env.strip().lower() in _TRUE
+    try:
+        return _on(get_setting(VERIFY_SETTING, VERIFY_DEFAULT), VERIFY_DEFAULT)
+    except Exception:
+        return _on(None, VERIFY_DEFAULT)
+

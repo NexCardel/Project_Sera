@@ -1,0 +1,16 @@
+{
+ "synthetic": true,
+ "note": "REAL Windows OCR output (2026-10-18) of a rendered copy of gstr1_submit_success_02 (placeholder values). Second frame for the two-read rule.",
+ "page_kind": "gstr1_submit",
+ "portal": "GST Portal",
+ "url": "return.gst.gov.in/returns/auth/file",
+ "source": "ocr",
+ "lines": [
+  "GSTRI of GSTIN - OOAAAAAOOOOAI ZO for the Return Period - 'September - 2026-27 has been successfully filed. The Acknowledgment Reference Number",
+  "is ABOOOOOOOOOOOOU .",
+  "The GSTRI can be viewed on your Dashboard Login=>Taxpayer Dashboard=> Returns.",
+  "GSTIN - OOAAAAAOOOOAIZO",
+  "Return Period - September(Q",
+  "Status - Filed"
+ ]
+}

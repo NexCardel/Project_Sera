@@ -1,0 +1,16 @@
+{
+ "synthetic": true,
+ "note": "Second GSTR-1 frame showing the same ARN on a different screen (the banner has moved up as the page settled). Used for the two-read rule. Placeholders only.",
+ "page_kind": "gstr1_submit",
+ "portal": "GST Portal",
+ "url": "return.gst.gov.in/returns/auth/file",
+ "source": "ocr",
+ "lines": [
+  "GSTR1 of GSTIN - 00AAAAA0000A1Z0 for the Return Period - 'September - 2026-27 has been successfully filed. The Acknowledgment Reference Number",
+  "is AB000000000000U .",
+  "The GSTR1 can be viewed on your Dashboard Login=>Taxpayer Dashboard=>Returns.",
+  "GSTIN - 00AAAAA0000A1Z0",
+  "Return Period - September(Q)",
+  "Status - Filed"
+ ]
+}

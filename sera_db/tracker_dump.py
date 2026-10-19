@@ -9,7 +9,7 @@ import json
 import time
 from core.dataset_key import NOT_CARRIER_SQL, compute_dataset_key as _compute_dataset_key
 
-from sera_db.common import SKELETON_NAME_REGEX, is_sgt_capture, payload_device_name
+from sera_db.common import SKELETON_NAME_REGEX, is_sgt_capture, payload_device_name, payload_original_author
 
 
 RECOVERED_NAME_MARK = "/-"      # follows the client name of a row the ARN fixer corrected
@@ -51,6 +51,105 @@ class TrackerDumpMixin:
             cur = r_conn.execute(
                 "DELETE FROM tracker_dump WHERE dataset_key = ? AND capture_method LIKE 'SGT%'", (dataset_key,))
             return cur.rowcount or 0
+
+    def annotate_vsdc247(self, arn: str, block: dict) -> int:
+        """Annotates SGT's row(s) for arn with the vsdc247 verification block (plan 6.4).
+        Idempotent: merges raw_payload["vsdc247"] and raw_payload["vsdc247-v"],
+        leaves all other keys and columns unchanged.
+        Never goes through insert_tracker_dump. Returns count of updated rows."""
+        clean_arn = (arn or "").strip().upper()
+        if not clean_arn or not isinstance(block, dict):
+            return 0
+        v_block = dict(block)
+        if "verified" not in v_block:
+            v_block["verified"] = True
+        if "status" not in v_block:
+            v_block["status"] = "verified"
+        updated = 0
+        with self._connect_raw() as r_conn:
+            rows = r_conn.execute(
+                "SELECT id, raw_payload_json FROM tracker_dump "
+                "WHERE capture_method LIKE 'SGT%' AND UPPER(TRIM(arn_number)) = ?",
+                (clean_arn,),
+            ).fetchall()
+            for r_id, r_json in rows:
+                try:
+                    payload = json.loads(r_json) if r_json else {}
+                except Exception:
+                    payload = {}
+                if not isinstance(payload, dict):
+                    payload = {}
+                if "raw_payload" in payload and isinstance(payload["raw_payload"], dict):
+                    payload["raw_payload"]["vsdc247"] = dict(v_block)
+                    payload["raw_payload"]["vsdc247-v"] = dict(v_block)
+                payload["vsdc247"] = dict(v_block)
+                payload["vsdc247-v"] = dict(v_block)
+                orig_author = v_block.get("original_author") or v_block.get("device_name")
+                if orig_author:
+                    if not payload.get("original_author"):
+                        payload["original_author"] = orig_author
+                    if "raw_payload" in payload and isinstance(payload["raw_payload"], dict):
+                        if not payload["raw_payload"].get("original_author"):
+                            payload["raw_payload"]["original_author"] = orig_author
+                new_json = json.dumps(payload, ensure_ascii=False)
+                r_conn.execute(
+                    "UPDATE tracker_dump SET raw_payload_json = ? WHERE id = ?",
+                    (new_json, r_id),
+                )
+                updated += 1
+        return updated
+
+    def insert_vsdc247_flagged_row(self, row_dict: dict) -> int:
+        """Inserts or updates an independent flagged row for an ARN missed by SGT (plan 6.5).
+        capture_method = 'VSDC247_verify'
+        dataset_key = 'V247:GST:<ARN>'"""
+        arn = (row_dict.get("arn") or "").strip().upper()
+        if not arn:
+            return 0
+        d_key = row_dict.get("dataset_key") or f"V247:GST:{arn}"
+        portal = row_dict.get("portal") or "GST Portal"
+        period = row_dict.get("period_label") or ""
+        status = row_dict.get("status") or "Submitted"
+        client_name = row_dict.get("client_name") or f"Pending_{arn}"
+        unassigned_id = f"Pending_{arn}"
+        capture_method = "VSDC247_verify"
+        raw_payload = row_dict.get("raw_payload") or {}
+        raw_json = json.dumps(raw_payload, ensure_ascii=False) if isinstance(raw_payload, dict) else str(raw_payload)
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        with self._connect_raw() as r_conn:
+            existing = r_conn.execute(
+                "SELECT id FROM tracker_dump WHERE dataset_key = ? AND capture_method = 'VSDC247_verify'",
+                (d_key,),
+            ).fetchone()
+            if existing:
+                r_conn.execute(
+                    "UPDATE tracker_dump SET raw_payload_json = ?, status = ?, period_label = ? WHERE id = ?",
+                    (raw_json, status, period, existing[0]),
+                )
+                return existing[0]
+
+            cur = r_conn.execute(
+                """INSERT INTO tracker_dump
+                   (client_id, unassigned_identity, service_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, created_at, dataset_key)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (None, unassigned_id, None, portal, period, arn, capture_method, status, raw_json, "VSDC247-V", now, d_key),
+            )
+            return cur.lastrowid
+
+    def remove_vsdc247_flagged_row(self, arn: str) -> int:
+        """Removes the independent flagged row when SGT later delivers the ARN (plan 6.5)."""
+        clean_arn = (arn or "").strip().upper()
+        if not clean_arn:
+            return 0
+        d_key = f"V247:GST:{clean_arn}"
+        with self._connect_raw() as r_conn:
+            cur = r_conn.execute(
+                "DELETE FROM tracker_dump WHERE capture_method = 'VSDC247_verify' AND (arn_number = ? OR dataset_key = ?)",
+                (clean_arn, d_key),
+            )
+            return cur.rowcount or 0
+
 
     @staticmethod
     def _convert_sgt_shadow_rows(conn) -> int:
@@ -275,11 +374,12 @@ class TrackerDumpMixin:
             # Monotonicity Guard: A submitted status must NEVER demote back to 'Not Submitted'!
             if final_dataset_key and not final_dataset_key.endswith(":UNKNOWN:FORM:CURRENT"):
                 ex_row = r_conn.execute(
-                    f"SELECT status, arn_number FROM tracker_dump WHERE dataset_key = ? ORDER BY created_at DESC, {order_sec}, id DESC LIMIT 1",
+                    f"SELECT status, arn_number, raw_payload_json FROM tracker_dump WHERE dataset_key = ? ORDER BY created_at DESC, {order_sec}, id DESC LIMIT 1",
                     (final_dataset_key,)
                 ).fetchone()
                 if ex_row:
-                    ex_status, ex_arn = ex_row
+                    ex_status, ex_arn, ex_json = ex_row
+                    ex_author = payload_original_author(ex_json)
                     # A complete dataset (ARN + verified) is locked: the portal read again, a dashboard tile or an
                     # unasked "correction" cannot lower it. Only a change the user confirmed gets through.
                     if status_correction and not user_confirmed and is_complete(ex_status, ex_arn):
@@ -294,6 +394,15 @@ class TrackerDumpMixin:
                     # equal status (a dashboard tile "Filed" re-read after the filing carries no ARN).
                     if (not arn_number or arn_number == "N/A") and ex_arn and ex_arn != "N/A" and not status_correction:
                         arn_number = ex_arn
+                    if ex_author and isinstance(p_obj, dict):
+                        cm = str(capture_method or "").lower()
+                        is_history = "history" in cm or "audit" in cm or "calendar" in cm or "view_filed" in cm
+                        in_author = p_obj.get("original_author") or (p_obj.get("raw_payload", {}).get("original_author") if isinstance(p_obj.get("raw_payload"), dict) else None)
+                        if not in_author or is_history:
+                            p_obj["original_author"] = ex_author
+                            if isinstance(p_obj.get("raw_payload"), dict):
+                                p_obj["raw_payload"]["original_author"] = ex_author
+                            raw_payload_json = json.dumps(p_obj, ensure_ascii=False)
                 del_cur = r_conn.execute("DELETE FROM tracker_dump WHERE dataset_key = ?", (final_dataset_key,))
                 if del_cur.rowcount > 0:
                     is_replaced = True

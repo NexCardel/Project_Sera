@@ -654,14 +654,14 @@ def extract_filing_type(text: str, allow_multiple: bool = False) -> Optional[str
         return "Form " + form_m.group(1).upper().replace(" ", "-")
 
     # 3. GST Forms
-    # Optical repair: GSTR-I, GSTR-l, GSTR-i -> GSTR-1, CMP-O8 -> CMP-08
-    text_fixed = re.sub(r"\bGSTR[-_\s]*[Ili]\b", "GSTR-1", text, flags=re.IGNORECASE)
-    text_fixed = re.sub(r"\bCMP[-_\s]*[Oo]8\b", "CMP-08", text_fixed, flags=re.IGNORECASE)
-    gst_matches = re.findall(r"\b(GSTR[-_\s]?[1-9A-Z]+|CMP[-_\s]?08|IFF)\b", text_fixed, re.IGNORECASE)
+    # Optical repair: GSTR-I, GSTR-l, GSTR-i, GSTR.I, GSTR.1 -> GSTR-1, CMP-O8 -> CMP-08
+    text_fixed = re.sub(r"\bGSTR[-_.\s]*[Ili1]\b", "GSTR-1", text, flags=re.IGNORECASE)
+    text_fixed = re.sub(r"\bCMP[-_.\s]*[Oo]8\b", "CMP-08", text_fixed, flags=re.IGNORECASE)
+    gst_matches = re.findall(r"\b(GSTR[-_.\s]?[1-9A-Z]+|CMP[-_.\s]?08|IFF)\b", text_fixed, re.IGNORECASE)
     if gst_matches:
         canonical_gst = []
         for m in gst_matches:
-            val = re.sub(r"[-_\s]+", "-", m.upper())
+            val = re.sub(r"[-_.\s]+", "-", m.upper())
             if val not in canonical_gst:
                 canonical_gst.append(val)
         if len(canonical_gst) > 1 and not allow_multiple:

@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from datetime import datetime, timezone
 from PySide6.QtCore import Qt, Signal, QTimer, QSize, QThread, QSettings
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QClipboard, QPixmap, QImage, QKeySequence, QShortcut
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QClipboard, QPixmap, QImage, QKeySequence, QShortcut, QBrush
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
@@ -931,12 +931,24 @@ class PayloadInspectorDialog(QDialog):
         name_lbl = QLabel(_strip_pan_suffix(client_name, pan_val))
         name_lbl.setObjectName("InspName")
         name_lbl.setStyleSheet(f"color: {'#FFA657' if is_unreg else '#F0F6FC'};")
-        name_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
         name_row.addWidget(name_lbl)
         if is_unreg:
             b = QLabel("No matching client")
             b.setObjectName("UnregBadge")
             name_row.addWidget(b)
+
+        vsdc_v_info = {}
+        try:
+            pj_v = json.loads(raw_json) if isinstance(raw_json, str) else (raw_json or {})
+            vsdc_v_info = pj_v.get("vsdc247-v") or pj_v.get("raw_payload", {}).get("vsdc247-v") or pj_v.get("vsdc247") or {}
+        except Exception:
+            pass
+        if isinstance(vsdc_v_info, dict) and vsdc_v_info.get("verified"):
+            vb = QLabel("✓ VSDC247-V Verified")
+            vb.setStyleSheet("background: #2e1065; color: #d8b4fe; border: 1px solid #7e22ce; border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: 600;")
+            vb.setToolTip(f"Verified by VSDC247-V OCR Verifier\nARN: {vsdc_v_info.get('arn', 'N/A')}\nSeen at: {vsdc_v_info.get('seen_at', 'N/A')}")
+            name_row.addWidget(vb)
+
         name_row.addStretch()
         head_text.addLayout(name_row)
 
@@ -3172,6 +3184,40 @@ class TrackerDumpWindow(QWidget):
             # Actions - reused; the buttons read this row's item when clicked
             self._set_action_cell(row_idx, r, is_grouped=True)
             self._finish_client_tooltip(c_item, row_idx)
+
+            # VSDC247_verify flagged row visual highlight & tooltip
+            is_vsdc_verify = (str(method_val).startswith("VSDC247_") or
+                              any(str(h.get("capture_method") or "").startswith("VSDC247_")
+                                  for h in (r.get("filing_history") or [])))
+            if is_vsdc_verify:
+                verify_bg = QBrush(QColor("#241633"))
+                verify_tip = "Seen only by OCR — SGT missed it"
+                for col in range(self.COLUMN_COUNT):
+                    it = self.table.item(row_idx, col)
+                    if it is not None:
+                        it.setBackground(verify_bg)
+                        existing_tip = it.toolTip()
+                        if existing_tip:
+                            if verify_tip not in existing_tip:
+                                it.setToolTip(f"{existing_tip}\n[{verify_tip}]")
+                        else:
+                            it.setToolTip(verify_tip)
+            else:
+                # SGT row verified by VSDC247-V
+                r_json = r.get("raw_payload_json") or ""
+                if "vsdc247" in r_json:
+                    try:
+                        p_obj = json.loads(r_json) if isinstance(r_json, str) else r_json
+                        vb = p_obj.get("vsdc247-v") or p_obj.get("raw_payload", {}).get("vsdc247-v") or p_obj.get("raw_payload", {}).get("vsdc247")
+                        if isinstance(vb, dict) and (vb.get("verified") or vb.get("result") in ("matched", "matched_client_differs")):
+                            v_note = "✓ VSDC247-V Verified (OCR confirmed)"
+                            status_item = self.table.item(row_idx, self.COL_STATUS)
+                            if status_item:
+                                stip = status_item.toolTip()
+                                if v_note not in stip:
+                                    status_item.setToolTip(f"{stip}\n[{v_note}]" if stip else v_note)
+                    except Exception:
+                        pass
         self._elide_status_labels()
 
     def _populate_raw_table(self, records: list[dict]):
@@ -3240,6 +3286,37 @@ class TrackerDumpWindow(QWidget):
             # Actions Column - reused; the buttons read this row's item when clicked
             self._set_action_cell(row_idx, r, is_grouped=False)
             self._finish_client_tooltip(c_item, row_idx)
+
+            # VSDC247_verify flagged row visual highlight & tooltip
+            if str(method).startswith("VSDC247_"):
+                verify_bg = QBrush(QColor("#241633"))
+                verify_tip = "Seen only by OCR — SGT missed it"
+                for col in range(self.COLUMN_COUNT):
+                    it = self.table.item(row_idx, col)
+                    if it is not None:
+                        it.setBackground(verify_bg)
+                        existing_tip = it.toolTip()
+                        if existing_tip:
+                            if verify_tip not in existing_tip:
+                                it.setToolTip(f"{existing_tip}\n[{verify_tip}]")
+                        else:
+                            it.setToolTip(verify_tip)
+            else:
+                # SGT row verified by VSDC247-V
+                r_json = r.get("raw_payload_json") or ""
+                if "vsdc247" in r_json:
+                    try:
+                        p_obj = json.loads(r_json) if isinstance(r_json, str) else r_json
+                        vb = p_obj.get("vsdc247-v") or p_obj.get("raw_payload", {}).get("vsdc247-v") or p_obj.get("raw_payload", {}).get("vsdc247")
+                        if isinstance(vb, dict) and (vb.get("verified") or vb.get("result") in ("matched", "matched_client_differs")):
+                            v_note = "✓ VSDC247-V Verified (OCR confirmed)"
+                            status_item = self.table.item(row_idx, self.COL_STATUS)
+                            if status_item:
+                                stip = status_item.toolTip()
+                                if v_note not in stip:
+                                    status_item.setToolTip(f"{stip}\n[{v_note}]" if stip else v_note)
+                    except Exception:
+                        pass
         self._elide_status_labels()
 
     def _full_container(self, item: dict) -> dict:
@@ -3387,6 +3464,17 @@ class TrackerDumpWindow(QWidget):
         finally:
             QApplication.restoreOverrideCursor()
 
+    def _open_reconciliation_log(self):
+        """Opens the plain-text GST reconciliation audit log for accountants."""
+        from core.vsdc.vsdc247_reconciler import _default_accountant_log_path, append_accountant_reconciliation_log
+        log_path = _default_accountant_log_path()
+        if not log_path.exists() or log_path.stat().st_size == 0:
+            append_accountant_reconciliation_log("", "", path=log_path)
+        try:
+            os.startfile(str(log_path))
+        except Exception as e:
+            QMessageBox.warning(self, "GST Reconciliation Log", f"Could not open the reconciliation log: {e}")
+
     def _open_distill(self):
         """Sera Distill (SDIS Part L): the admin PC only; the dialog is non-modal and kept alive here."""
         if not self.db.is_admin_pc():
@@ -3439,6 +3527,9 @@ class TrackerDumpWindow(QWidget):
 
         act_ltt_open = menu.addAction(_safe_qta_icon("mdi.microsoft-excel", "#4CF9B7"), "Open LTT sheet")
         act_ltt_open.triggered.connect(self._open_ltt_sheet)
+
+        act_rec_log = menu.addAction(_safe_qta_icon("mdi.file-document-check-outline", "#4CF9B7"), "Open GST Reconciliation Log")
+        act_rec_log.triggered.connect(self._open_reconciliation_log)
 
         menu.addSeparator()
 

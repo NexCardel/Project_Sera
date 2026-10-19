@@ -1,0 +1,19 @@
+{
+ "synthetic": true,
+ "note": "Same login page with the username TYPED (placeholder gone, value present). The password value is a masked run and must never be returned. Placeholders only.",
+ "page_kind": "gst_login",
+ "portal": "GST Portal",
+ "url": "services.gst.gov.in/services/login",
+ "source": "ocr",
+ "lines": [
+  "Login",
+  "indicates mandatory fields",
+  "Username*",
+  "EXAMPLEUSER01",
+  "Password*",
+  "••••••••",
+  "LOGIN",
+  "Forgot Username",
+  "Forgot Password"
+ ]
+}

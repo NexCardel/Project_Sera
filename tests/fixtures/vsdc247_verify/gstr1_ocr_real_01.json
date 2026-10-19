@@ -1,0 +1,21 @@
+{
+ "synthetic": true,
+ "note": "REAL Windows OCR output (2026-10-18) of a rendered copy of gstr1_submit_success_01 (placeholder values). OCR read GSTR1 as GSTRI and 0 as O. Kept so the OCR-tolerant cues are tested against real OCR, not hand-typed text.",
+ "page_kind": "gstr1_submit",
+ "portal": "GST Portal",
+ "url": "return.gst.gov.in/returns/auth/file",
+ "source": "ocr",
+ "lines": [
+  "GSTRI of GSTIN - OOAAAAAOOOOAI ZO for the Return Period - 'September - 2026-27 has been successfully filed. The Acknowledgment Reference Number",
+  "is ABOOOOOOOOOOOOU .",
+  "The GSTRI can be viewed on your Dashboard Login=>Taxpayer Dashboard=> Returns. This message is sent to your registered",
+  "Email ID and Mobile Number.",
+  "GSTIN - OOAAAAAOOOOAIZO",
+  "Legal Name - EXAMPLE TAXPAYER",
+  "Return Type - GSTRI",
+  "FY - 2026-27",
+  "Return Period - September(Q",
+  "Status - Filed",
+  "Returns Filing for GST GSTRI"
+ ]
+}
