@@ -1,3 +1,4 @@
+from .vsdc_alerts import device_name
 """
 core/vsdc/vsdc_assembler.py — Boundary-Driven Visual Session Assembler
 ======================================================================
@@ -987,6 +988,12 @@ class VisualSessionAssembler:
     # ── Unified Single-Point Payload Dispatch Engine ──────────────────────────
     def _build_payload(self, record: FilingRecord, crosshair_id: str) -> Dict[str, Any]:
         """Builds the canonical master payload envelope expected by database.py."""
+        cm = record.capture_method or f"VSDC_{crosshair_id}"
+        cm_lower = cm.lower()
+        is_history = "history" in cm_lower or "audit" in cm_lower or "calendar" in cm_lower or "view_filed" in cm_lower
+        is_complete = self._is_dataset_complete(record)
+        is_live_completed = is_complete and not is_history
+        orig_author = device_name() if is_live_completed else None
         return {
             "source": "vsdc_optical",
             "session_id": self.session_id,
@@ -1009,6 +1016,7 @@ class VisualSessionAssembler:
             "status": record.status,
             "raw_text": record.raw_text,
             "capture_method": record.capture_method or f"VSDC_{crosshair_id}",
+            "original_author": orig_author,
             "raw_payload": {
                 "source": {
                     "protocol": record.portal,
@@ -1022,6 +1030,7 @@ class VisualSessionAssembler:
                 "trade_name": record.trade_name,
                 "assembler_captures": [record.to_dict()],
                 "timeline": list(self.session.steps),
+                "original_author": orig_author,
             },
         }
 

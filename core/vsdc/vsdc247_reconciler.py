@@ -432,11 +432,9 @@ def build_vsdc247_block(
     reason: Optional[str] = None,
     score: Optional[int] = None,
     tier: Optional[str] = None,
-    original_author: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build the vsdc247-v verification section for the SGT payload or ledger."""
     is_verified = (result in (OUTCOME_MATCHED, OUTCOME_MATCHED_CLIENT_DIFFERS))
-    orig_author = original_author or (device_name() if is_verified else None)
     if result == OUTCOME_SGT_ONLY:
         return {
             "verified": False,
@@ -444,7 +442,6 @@ def build_vsdc247_block(
             "checked": False,
             "reason": reason or "not seen by OCR",
             "result": OUTCOME_SGT_ONLY,
-            "original_author": orig_author,
             "verifier_version": VERIFIER_VERSION,
         }
 
@@ -467,7 +464,6 @@ def build_vsdc247_block(
         "sgt_delay_sec": int(sgt_delay_sec) if sgt_delay_sec is not None else 0,
         "page_url": page_url,
         "confirmed_by": "vsdc247_verifier",
-        "original_author": orig_author,
         "verifier_version": VERIFIER_VERSION,
     }
     if late:
@@ -482,7 +478,7 @@ def build_flagged_row(entry: Dict[str, Any], block: Dict[str, Any]) -> Dict[str,
     client_name = client_block.get("username") or f"Pending_{arn}"
     form = entry.get("form") or "GST Return"
     period = entry.get("period") or ""
-    orig_author = entry.get("original_author") or entry.get("device_name") or block.get("original_author")
+    orig_author = entry.get("original_author") or entry.get("device_name") or device_name()
 
     return {
         "source": "vsdc247_verify",
@@ -708,7 +704,6 @@ class Reconciler:
         username = client_block.get("username")
         link = client_block.get("link")
 
-        orig_author = entry.get("original_author") or entry.get("device_name")
         block = build_vsdc247_block(
             result=outcome,
             arn_seen=arn,
@@ -724,7 +719,6 @@ class Reconciler:
             late=late,
             score=entry.get("score"),
             tier=entry.get("tier"),
-            original_author=orig_author,
         )
 
         alert_needed = (outcome == OUTCOME_MATCHED_CLIENT_DIFFERS)
@@ -749,7 +743,7 @@ class Reconciler:
                 period=entry.get("period") or sgt.period,
                 username=username,
                 client_name=sgt.client_name or username,
-                filing_pc=orig_author,
+                filing_pc=entry.get("device_name") or device_name(),
                 sgt_delay_sec=delay,
                 sgt_client=sgt.client_name,
                 sgt_pan=sgt.pan,
@@ -800,7 +794,6 @@ class Reconciler:
             except Exception:
                 pass
 
-        orig_author = entry.get("original_author") or entry.get("device_name")
         append_accountant_reconciliation_log(
             outcome=OUTCOME_MISSED,
             arn=arn,
@@ -808,7 +801,7 @@ class Reconciler:
             period=entry.get("period"),
             username=username,
             client_name=username,
-            filing_pc=orig_author,
+            filing_pc=entry.get("device_name") or device_name(),
             sgt_delay_sec=delay,
             seen_at=entry.get("seen_at"),
             path=getattr(self, "accountant_log_path", None),

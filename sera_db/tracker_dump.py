@@ -84,13 +84,6 @@ class TrackerDumpMixin:
                     payload["raw_payload"]["vsdc247-v"] = dict(v_block)
                 payload["vsdc247"] = dict(v_block)
                 payload["vsdc247-v"] = dict(v_block)
-                orig_author = v_block.get("original_author") or v_block.get("device_name")
-                if orig_author:
-                    if not payload.get("original_author"):
-                        payload["original_author"] = orig_author
-                    if "raw_payload" in payload and isinstance(payload["raw_payload"], dict):
-                        if not payload["raw_payload"].get("original_author"):
-                            payload["raw_payload"]["original_author"] = orig_author
                 new_json = json.dumps(payload, ensure_ascii=False)
                 r_conn.execute(
                     "UPDATE tracker_dump SET raw_payload_json = ? WHERE id = ?",

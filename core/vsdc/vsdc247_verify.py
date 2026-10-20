@@ -252,7 +252,7 @@ class Verifier:
                 "seen_at": entry.get("seen_at"),
                 "confirmed_by": entry.get("confirmed_by", "vsdc247_verifier"),
                 "device_name": entry.get("device_name"),
-                "original_author": entry.get("original_author") or entry.get("device_name"),
+
             }
 
     def client_for_window(self, hwnd: Any) -> Optional[str]:
@@ -324,7 +324,7 @@ class Verifier:
             "confirmed_by": "single_frame" if score >= SINGLE_FRAME_SCORE else "two_reads",
             "client": _client_block(username, lines, self._client_lookup),
             "device_name": device_name(),
-            "original_author": device_name(),
+
         }
         written = self._sink(entry)
         self.saved[arn] = entry

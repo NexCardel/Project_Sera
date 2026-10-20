@@ -77,6 +77,11 @@ class FakeDb(TrackerDumpMixin):
 class TestVsdc247PayloadEnrichment(unittest.TestCase):
 
     def setUp(self):
+        from unittest.mock import patch
+        self._dev_patch = patch("core.vsdc.vsdc_router.device_name", return_value="TestPC")
+        self._dev_patch.start()
+        self.addCleanup(self._dev_patch.stop)
+
         self.db = FakeDb()
         self.router = VSDCRouter(ocr_engine=MagicMock())
         self.router.alerts = MagicMock()
@@ -147,7 +152,8 @@ class TestVsdc247PayloadEnrichment(unittest.TestCase):
         # Check original_author field (the PC that filed the return and captured ARN live)
         self.assertEqual(row.get("original_author"), "TestPC")
         self.assertEqual(row["raw_payload"].get("original_author"), "TestPC")
-        self.assertEqual(v.get("original_author"), "TestPC")
+        # original_author is decoupled from vsdc247-v verification block
+        self.assertNotIn("original_author", v)
 
     def test_sgt_payload_marked_unverified_when_arn_not_seen(self):
         """When ARN is not seen by OCR, vsdc247-v section has verified=False."""
@@ -245,9 +251,11 @@ class TestVsdc247PayloadEnrichment(unittest.TestCase):
             "period_label": "September (FY 2026-27)",
             "status": "Submitted",
             "capture_method": "SGT_live",
+            "original_author": "TestPC",
             "vsdc247-v": {"verified": False, "status": "unverified", "arn": arn},
             "raw_payload": {
                 "source": {"engine": "SGT"},
+                "original_author": "TestPC",
                 "vsdc247-v": {"verified": False, "status": "unverified", "arn": arn},
             },
         }
@@ -261,7 +269,7 @@ class TestVsdc247PayloadEnrichment(unittest.TestCase):
              json.dumps(initial_sgt_payload), f"GST:TEST:GSTR1:SEP_2026"),
         )
 
-        # Later, OCR verifies it
+        # Later, OCR verifies it (vsdc247-v verification block has NO original_author)
         block = {
             "verified": True,
             "status": "verified",
@@ -273,7 +281,6 @@ class TestVsdc247PayloadEnrichment(unittest.TestCase):
             "seen_at": "2026-10-18T16:36:00",
             "confirmed_by": "single_frame",
             "device_name": "TestPC",
-            "original_author": "TestPC",
         }
         updated = self.db.annotate_vsdc247(arn, block)
         self.assertEqual(updated, 1)
@@ -397,6 +404,28 @@ class TestVsdc247PayloadEnrichment(unittest.TestCase):
         # Because it came from history, original_author must NOT be set to the scanning PC
         self.assertIsNone(row.get("original_author"))
         self.assertIsNone(row["raw_payload"].get("original_author"))
+
+
+    def test_vsdc_assembler_completed_dataset_stamps_original_author(self):
+        """When VSDC assembler finishes a complete dataset, original_author is set to device_name()."""
+        from core.vsdc.vsdc_assembler import VisualSessionAssembler
+        assembler = VisualSessionAssembler()
+        assembler.record_step("https://eportal.incometax.gov.in/dashboard", "itr_landing")
+        assembler.update_identity(pan="AHJPR0846B", name="AMAN ASSOCIATES", portal="Income Tax")
+        assembler.update_selection(filing_type="ITR-4", period_label="AY 2026-27")
+        assembler.record_submission(
+            ack_number="982348123456789",
+            status="Submitted (e-Verified)",
+            crosshair_id="itr_filed_verified",
+        )
+
+        from unittest.mock import patch
+        with patch("core.vsdc.vsdc_assembler.device_name", return_value="TestPC"):
+            payload = assembler.get_completed_dataset_payload()
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload.get("original_author"), "TestPC")
+        self.assertEqual(payload["raw_payload"].get("original_author"), "TestPC")
+        self.assertNotIn("original_author", payload.get("vsdc247-v", {}))
 
 
 if __name__ == "__main__":

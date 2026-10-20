@@ -143,6 +143,21 @@ def run_local_pages_test():
         browser = p.chromium.launch(channel="msedge", headless=False)
         page = browser.new_page(viewport={"width": 1366, "height": 768})
 
+        # Provide robust window capture that falls back to page.screenshot()
+        # so OCR is never blocked by OS window occlusion or background terminal focus
+        orig_capture = router.ocr.capture_window_image
+        def _robust_capture(h):
+            img = orig_capture(h)
+            if img is not None:
+                return img
+            try:
+                b = page.screenshot()
+                from PIL import Image
+                return Image.open(io.BytesIO(b)).convert("RGB")
+            except Exception:
+                return None
+        router.ocr.capture_window_image = _robust_capture
+
         # -------------------------------------------------------------
         # STEP 1: Load GSTR-1 local simulation page with green box success
         # -------------------------------------------------------------
@@ -163,13 +178,16 @@ def run_local_pages_test():
             pin(hwnd)
             user32.SetForegroundWindow(hwnd)
 
-        # Run ticks so OCR analyzes the frame
-        for _ in range(6):
+        # Run ticks so OCR analyzes the frame (loop until detected or timeout)
+        matched_1_arn = None
+        for _ in range(12):
             router.evaluate_tick()
+            matched_1_arn = next((k for k in router._verifier.ledger if k == gstr1_arn or k in gstr1_arn or gstr1_arn in k), None)
+            if matched_1_arn is not None:
+                break
             time.sleep(0.3)
 
         print(f"OCR Ledger entries: {list(router._verifier.ledger.keys())}")
-        matched_1_arn = next((k for k in router._verifier.ledger if k == gstr1_arn or k in gstr1_arn or gstr1_arn in k), None)
         gstr1_seen = matched_1_arn is not None
         print(f"[CHECK] GSTR-1 ARN ({gstr1_arn}) seen by OCR: {gstr1_seen} (as {matched_1_arn})")
         assert gstr1_seen, f"GSTR-1 ARN {gstr1_arn} was not detected by OCR!"
@@ -213,7 +231,13 @@ def run_local_pages_test():
              emitted_row["capture_method"], emitted_row["status"], json.dumps(emitted_row), "GST:29ABACD1191FAZK:GSTR1:JAN_2021"),
         )
 
-        print("\nEmitted SGT Payload 'vsdc247-v' Section:")
+        print("\n[Dataset Metadata]")
+        print(f"  • original_author:             {emitted_row.get('original_author')}")
+        print(f"  • raw_payload.original_author: {emitted_row.get('raw_payload', {}).get('original_author')}")
+        print(f"  • portal / form:               {emitted_row.get('portal')} / {emitted_row.get('filing_type')}")
+        print(f"  • status:                      {emitted_row.get('status')}")
+
+        print("\n[VSDC247-V Verification Block (OCR Telemetry - decoupled from original_author)]:")
         print(json.dumps(emitted_row.get("vsdc247-v"), indent=2))
 
         assert emitted_row.get("vsdc247-v", {}).get("verified") is True
@@ -228,7 +252,10 @@ def run_local_pages_test():
         # -------------------------------------------------------------
         print("\n--- STEP 2: Loading GSTR-3B Modal Popup ---")
         page.evaluate("() => { switchForm('GSTR-3B'); showSuccessModal(); }")
-        page.wait_for_timeout(500)
+        page.wait_for_timeout(800)
+
+        if hwnd:
+            user32.SetForegroundWindow(hwnd)
 
         gstr3b_arn = page.evaluate("() => document.getElementById('succArn').innerText.trim()")
         print(f"DOM GSTR-3B ARN: {gstr3b_arn}")
@@ -237,12 +264,15 @@ def run_local_pages_test():
         router._sgt.pending = lambda: False
         router._sgt.pop_dispatch = lambda: None
 
-        for _ in range(6):
+        matched_3b_arn = None
+        for _ in range(12):
             router.evaluate_tick()
+            matched_3b_arn = next((k for k in router._verifier.ledger if k == gstr3b_arn or k in gstr3b_arn or gstr3b_arn in k), None)
+            if matched_3b_arn is not None:
+                break
             time.sleep(0.3)
 
         print(f"OCR Ledger entries: {list(router._verifier.ledger.keys())}")
-        matched_3b_arn = next((k for k in router._verifier.ledger if k == gstr3b_arn or k in gstr3b_arn or gstr3b_arn in k), None)
         gstr3b_seen = matched_3b_arn is not None
         print(f"[CHECK] GSTR-3B ARN ({gstr3b_arn}) seen by OCR: {gstr3b_seen} (as {matched_3b_arn})")
         assert gstr3b_seen, f"GSTR-3B ARN {gstr3b_arn} was not detected by OCR!"
@@ -281,7 +311,13 @@ def run_local_pages_test():
              emitted_row_3b["capture_method"], emitted_row_3b["status"], json.dumps(emitted_row_3b), "GST:29ABACD1191FAZK:GSTR3B:JAN_2021"),
         )
 
-        print("\nEmitted GSTR-3B Payload 'vsdc247-v' Section:")
+        print("\n[Dataset Metadata (GSTR-3B)]")
+        print(f"  • original_author:             {emitted_row_3b.get('original_author')}")
+        print(f"  • raw_payload.original_author: {emitted_row_3b.get('raw_payload', {}).get('original_author')}")
+        print(f"  • portal / form:               {emitted_row_3b.get('portal')} / {emitted_row_3b.get('filing_type')}")
+        print(f"  • status:                      {emitted_row_3b.get('status')}")
+
+        print("\n[VSDC247-V Verification Block (OCR Telemetry - decoupled from original_author)]:")
         print(json.dumps(emitted_row_3b.get("vsdc247-v"), indent=2))
 
         assert emitted_row_3b.get("vsdc247-v", {}).get("verified") is True

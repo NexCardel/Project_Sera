@@ -1245,23 +1245,37 @@ class VSDCRouter:
             pass
 
     def _enrich_sgt_row_with_verifier(self, sgt_row: Dict[str, Any]) -> Dict[str, Any]:
-        """Ensures the SGT row carries the vsdc247-v verification section and original_author."""
+        """Ensures the SGT row carries the vsdc247-v verification section and original_author dataset metadata."""
         if not isinstance(sgt_row, dict):
             return sgt_row
 
         arn = (sgt_row.get("arn") or "").strip().upper()
         is_real_arn = bool(arn and arn not in ("N/A", "NONE", ""))
 
+        # Ensure original_author on dataset payload
+        raw_p = sgt_row.get("raw_payload", {}) if isinstance(sgt_row.get("raw_payload"), dict) else {}
+        record = raw_p.get("source", {}).get("record", "")
+        is_history = record in ("gst_returns_calendar", "gst_track_return_status", "itr_filed_returns_history", "itr_dataset_cards")
+        status = str(sgt_row.get("status") or "").lower()
+        is_live = not is_history and is_real_arn and status in ("submitted", "submitted & verified", "verified")
+
+        existing_orig = sgt_row.get("original_author") or raw_p.get("original_author")
+        if existing_orig:
+            orig_author = existing_orig
+        elif is_live:
+            orig_author = device_name()
+        else:
+            orig_author = None
+
+        sgt_row["original_author"] = orig_author
+        if "raw_payload" in sgt_row and isinstance(sgt_row["raw_payload"], dict):
+            sgt_row["raw_payload"]["original_author"] = orig_author
+
         v_existing = sgt_row.get("vsdc247-v")
         if not isinstance(v_existing, dict):
             v_existing = sgt_row.get("raw_payload", {}).get("vsdc247-v") if isinstance(sgt_row.get("raw_payload"), dict) else None
 
         if isinstance(v_existing, dict) and v_existing.get("verified"):
-            orig_author = v_existing.get("original_author") or v_existing.get("device_name")
-            if orig_author:
-                sgt_row.setdefault("original_author", orig_author)
-                if isinstance(sgt_row.get("raw_payload"), dict):
-                    sgt_row["raw_payload"].setdefault("original_author", orig_author)
             return sgt_row
 
         verif = None
@@ -1277,16 +1291,6 @@ class VSDCRouter:
 
         if verif:
             vsdc_v_section = dict(verif)
-            orig_author = (
-                vsdc_v_section.get("original_author")
-                or vsdc_v_section.get("device_name")
-                or sgt_row.get("original_author")
-                or device_name()
-            )
-            vsdc_v_section["original_author"] = orig_author
-            sgt_row["original_author"] = orig_author
-            if "raw_payload" in sgt_row and isinstance(sgt_row["raw_payload"], dict):
-                sgt_row["raw_payload"]["original_author"] = orig_author
             if self._verifier and self._verifier.reconciler:
                 try:
                     self._verifier.reconciler.record_sgt_matched(arn, sgt_row)
@@ -1298,25 +1302,6 @@ class VSDCRouter:
                 "status": "unverified",
                 "arn": arn if is_real_arn else "N/A",
             }
-            # If not verified by OCR, determine if SGT captured this live or from history
-            raw_p = sgt_row.get("raw_payload", {}) if isinstance(sgt_row.get("raw_payload"), dict) else {}
-            record = raw_p.get("source", {}).get("record", "")
-            is_history = record in ("gst_returns_calendar", "gst_track_return_status", "itr_filed_returns_history", "itr_dataset_cards")
-            status = str(sgt_row.get("status") or "").lower()
-            is_live = not is_history and is_real_arn and status in ("submitted", "submitted & verified", "verified")
-
-            existing_orig = sgt_row.get("original_author") or raw_p.get("original_author")
-            if existing_orig:
-                orig_author = existing_orig
-            elif is_live:
-                orig_author = device_name()
-            else:
-                orig_author = None
-
-            sgt_row["original_author"] = orig_author
-            if "raw_payload" in sgt_row and isinstance(sgt_row["raw_payload"], dict):
-                sgt_row["raw_payload"]["original_author"] = orig_author
-            vsdc_v_section["original_author"] = orig_author
 
         sgt_row["vsdc247-v"] = vsdc_v_section
         if "raw_payload" in sgt_row and isinstance(sgt_row["raw_payload"], dict):

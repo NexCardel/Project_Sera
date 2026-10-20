@@ -9,6 +9,24 @@
 - **Primary Active Workspace Target (`APP`)**: ALWAYS synchronize all code edits, extension scripts, and documentation updates directly to `C:\Users\Nex\Downloads\Project Sera\APP`.
 - **Do Not Sync to Source 2 (`source_2`)**: NEVER copy, mirror, or synchronize any code edits, extension scripts, files, or documentation to `source_2` or any of its subdirectories. `source_2` is strictly excluded from all synchronization routines.
 - **Privacy & Client Data Protection**: NEVER scan through, inspect, or expose client "personal" information (such as email addresses, mobile/phone numbers, bank accounts, IFSC codes, access messages, passwords, or personal addresses). ONLY extract and display Client PAN, Client Name, Submission Status, Portal ARNs, Reference Codes, Form Types, Periods/AY, and event timestamps.
+- **Original Author Tracking (`original_author`)**:
+  - Attached exclusively to completed return dataset payloads (`payload["original_author"]` and `raw_payload["original_author"]`) representing the office member workstation (`device_name()`).
+  - Completely decoupled from VSDC247 (must NOT be present inside `vsdc247-v` verification blocks or OCR ledgers).
+  - History/retrospective scans (`gst_returns_calendar`, `gst_track_return_status`, `itr_filed_returns_history`, `itr_dataset_cards`) must NOT stamp `original_author` (must remain `None`).
+  - Once established by a live filing, `original_author` is immutable and must NEVER be overwritten or cleared by subsequent history captures, deduplication, sync, or tracker dump updates.
+- **Root Cause First Workflow (Diagnose Before Fixing)**: Whenever the user reports a bug, error, or issue, ALWAYS investigate and determine the root cause first. Report the cause, findings, and proposed fix clearly to the user, and wait for their confirmation/instruction before applying any code fixes or modifying code.
+- **Running the Test Suite (`live_tf`)**:
+  - Whenever running the full test suite, use the live T/F/S plugin instead of plain `pytest`:
+    ```powershell
+    $env:PYTHONPATH="tools"; .\venv\Scripts\python.exe -m pytest -p live_tf -p no:terminal -p no:cacheprovider --basetemp=$env:TEMP\sera_pytest_tmp tests
+    ```
+  - Prints one line per test as it finishes (`T` pass, `F` fail, `S` skip), followed by a summary and list of failed tests.
+  - Run the suite in the background with output redirected to a log file (`test_run.log`), and inform the user to watch progress via:
+    ```powershell
+    Get-Content -Path "test_run.log" -Wait -Tail 20
+    ```
+  - Do not post per-test progress in chat (too noisy); report the final summary and any failed tests when the run concludes.
+  - To inspect failure tracebacks, rerun individual failing tests with plain `.\venv\Scripts\python.exe -m pytest <nodeid>`.
 - **Tool & Command Execution Allowlist**: The following tools and command patterns are explicitly authorized for routine development operations:
   - **File Tools**: `view_file`, `replace_file_content`, `write_to_file`, `Read`, `Edit`, `Write`, `Glob`, `Grep`, `TodoWrite`
   - **Python Runtime & Tests**: `../APP/venv/Scripts/python.exe`, `pytest`

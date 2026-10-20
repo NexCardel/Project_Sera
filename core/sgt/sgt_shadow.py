@@ -1343,7 +1343,7 @@ class SgtShadow:
                             "seen_at": entry.get("seen_at"),
                             "confirmed_by": entry.get("confirmed_by", "vsdc247_verifier"),
                             "device_name": entry.get("device_name"),
-                            "original_author": entry.get("original_author") or entry.get("device_name"),
+
                         }
             except Exception:
                 verif = None
@@ -1353,15 +1353,7 @@ class SgtShadow:
                 "verified": False,
                 "status": "unverified",
                 "arn": arn_clean or (arn or "N/A"),
-                "original_author": payload.get("original_author"),
             }
-        else:
-            orig = verif.get("original_author") or verif.get("device_name")
-            if orig:
-                verif["original_author"] = orig
-                payload["original_author"] = orig
-                if "raw_payload" in payload and isinstance(payload["raw_payload"], dict):
-                    payload["raw_payload"]["original_author"] = orig
 
         payload["vsdc247-v"] = dict(verif)
         if "raw_payload" in payload and isinstance(payload["raw_payload"], dict):
