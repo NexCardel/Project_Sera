@@ -1833,6 +1833,7 @@ class SeraApp:
             if worker is None:
                 return
             from core.fleet_health import read_sync_min
+            worker.router.db = self.db
             worker.router.health.set_sync_minutes(read_sync_min(self.db.get_setting))
             vsdc, vsdc_x, vsdc247 = read_engine_flags(self.db.get_setting)
             sgt = read_sgt_mode(self.db.get_setting)

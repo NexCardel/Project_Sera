@@ -3606,7 +3606,7 @@ class TrackerDumpWindow(QWidget):
         act_ltt_open = menu.addAction(_safe_qta_icon("mdi.microsoft-excel", "#4CF9B7"), "Open LTT sheet")
         act_ltt_open.triggered.connect(self._open_ltt_sheet)
 
-        act_rec_log = menu.addAction(_safe_qta_icon("mdi.file-document-check-outline", "#4CF9B7"), "Open GST Reconciliation Log")
+        act_rec_log = menu.addAction(_safe_qta_icon("mdi.file-check-outline", "#4CF9B7"), "Open GST Reconciliation Log")
         act_rec_log.triggered.connect(self._open_reconciliation_log)
 
         menu.addSeparator()

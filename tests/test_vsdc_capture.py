@@ -219,7 +219,9 @@ def test_reads_are_spaced_by_the_last_read_duration(rig):
     shade = 0
     for _ in range(30):
         shade = (shade + 40) % 240
-        r.platform.paint((0, 0, 319, 319), shade)            # the whole screen changes every tick
+        # Paint below the B4 urgent threshold (5x5 = 25 cells < URGENT_FRAME_CELLS=64)
+        # so normal READ_GAP_FACTOR spacing is preserved and B4 does not affect this test.
+        r.platform.paint((0, 0, 49, 49), shade)
         r.step()
     asked = [c.asked_at for c in r.page_reads()]
     assert len(asked) >= 3
@@ -610,3 +612,86 @@ def test_the_heartbeat_front_fields_describe_only_the_window_in_front(rig):
     r.step(12)
     d = r.loop.diag()
     assert d.get("front") == "other" and d.get("bg") == 1 and "page" not in d and "in_scope" not in d
+
+
+# ---- B4: urgent frame read after slow read -----------------------------------------------
+
+def test_a_large_change_after_a_slow_read_is_asked_on_the_next_tick(rig):
+    r = rig()
+    r.warm()
+    r.win.docs[0].cost_sec = 1.2
+    r.platform.paint((0, 0, 319, 319), 50)
+    r.step(1)
+    reads_before = len(r.page_reads())
+    r.platform.paint((0, 0, 319, 319), 150)
+    r.step(1)
+    ws = r.loop._states[HWND]
+    assert ws.last_read_ms >= 1200
+    before = ws.last_read_finished
+    assert len(r.page_reads()) == reads_before + 1
+    assert r.page_reads()[-1].asked_at > before
+    assert r.page_reads()[-1].asked_at - before <= TICK + 1e-6
+
+
+def test_a_large_change_after_a_fast_read_keeps_the_normal_gap(rig):
+    r = rig()
+    r.win.docs[0].cost_sec = 0.05
+    r.warm()
+    r.platform.paint((0, 0, 319, 319), 50)
+    r.step(2)
+    ws = r.loop._states[HWND]
+    assert ws.last_read_ms < vsdc_gate.FLASH_UIA_SLOW_MS
+    before = ws.last_read_finished
+    r.platform.paint((0, 0, 319, 319), 150)
+    assert not CaptureLoop._urgent(ws, 'frame', r.clock())
+    assert not CaptureLoop._spaced(ws, 'frame', before + vsdc_capture.BURST_GAP_SEC, urgent=False)
+    assert CaptureLoop._spaced(ws, 'frame', before + vsdc_capture.MIN_READ_GAP_SEC, urgent=False)
+
+
+def test_a_missing_frame_signature_is_not_urgent(rig):
+    r = rig()
+    r.warm()
+    ws = r.loop._states[HWND]
+    ws.last_read_ms = 1200
+    reason = r.loop._read_reason(r.platform.wins[HWND], ws, None, r.clock())
+    assert reason == "frame"
+    assert ws.frame_cells == 0
+    assert not CaptureLoop._urgent(ws, reason, r.clock())
+
+
+def test_a_small_change_after_a_slow_read_is_not_urgent():
+    from core.vsdc.vsdc_capture import WindowState
+    ws = WindowState(hwnd=1, frame_cells=20, last_read_ms=1200)
+    assert not CaptureLoop._urgent(ws, 'frame', 1000.0)
+
+
+def test_urgent_has_a_cooldown():
+    from core.vsdc.vsdc_capture import WindowState
+    now = 1000.0
+    ws = WindowState(hwnd=1, frame_cells=500, last_read_ms=1200, last_urgent_at=now)
+    assert not CaptureLoop._urgent(ws, 'frame', now + 1.0)
+    assert CaptureLoop._urgent(ws, 'frame', now + 3.0)
+
+
+def test_b5_urgent_read_preempts_slow_inflight_read(rig):
+    r = rig()
+    r.warm()
+    gate = threading.Event()
+    r.win.docs[0].gates.append(gate)
+    r.platform.paint((0, 0, 49, 49), 50)
+    r.clock.advance(TICK)
+    r.loop.tick()
+    wait_until(lambda: r.reader.inflight(HWND) is not None)
+    ws = r.loop._states[HWND]
+    pending_first = ws.pending_seq
+    r.clock.advance(3.5)
+    ws.last_read_ms = 800.0
+    r.platform.paint((0, 0, 319, 319), 150)
+    r.clock.advance(TICK)
+    r.loop.tick()
+    gate.set()
+    r.settle()
+    ws = r.loop._states[HWND]
+    asked = r.page_reads()
+    assert len(asked) >= 2
+    assert asked[-1].seq > pending_first

@@ -553,7 +553,7 @@ class VSDCRouter:
                 from .vsdc247_reconciler import Reconciler
                 from .vsdc247_verify import Verifier
                 reconciler = Reconciler(
-                    sgt_router=self._sgt,
+                    sgt_router_getter=lambda: self._sgt,
                     db=getattr(self, "db", None),
                     client_lookup=getattr(self, "_client_lookup", None),
                     on_alert=self._on_verifier_alert,
@@ -568,6 +568,10 @@ class VSDCRouter:
                 print("[VSDC247-V] SGT verifier lane active")
             except Exception as e:
                 print(f"[VSDC247-V] could not initialize verifier: {e}")
+        else:
+            reconciler = getattr(self._verifier, "reconciler", None)
+            if reconciler is not None and hasattr(reconciler, "set_db"):
+                reconciler.set_db(getattr(self, "db", None))
 
     def _on_verifier_alert(self, kind: str, data: Dict[str, Any]) -> None:
         """Dispatches ntfy alert and HUD notification for verifier events."""
@@ -614,6 +618,11 @@ class VSDCRouter:
             self._apply_scc()
             if self._verifier is not None:
                 self._sgt.set_verifier(self._verifier)
+                reconciler = getattr(self._verifier, "reconciler", None)
+                if reconciler is not None and hasattr(reconciler, "set_sgt_router"):
+                    reconciler.set_sgt_router(self._sgt)
+                if reconciler is not None and hasattr(reconciler, "set_db"):
+                    reconciler.set_db(getattr(self, "db", None))
 
     def _run_capture(self) -> None:
         """SGT's tick: the capture loop watches the browser windows, asks the reader for page reads

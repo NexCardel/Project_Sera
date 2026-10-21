@@ -406,6 +406,36 @@ class TestVsdc247PayloadEnrichment(unittest.TestCase):
         self.assertIsNone(row["raw_payload"].get("original_author"))
 
 
+    def test_verifier_reconciler_follows_sgt_built_later(self):
+        """The verifier is created before SGT exists, so its lookup must resolve SGT lazily."""
+        self.router.apply_engine_settings(vsdc=False, vsdc_x=False, vsdc247=False, sgt="live",
+                                          vsdc247_verify=True)
+        reconciler = self.router._verifier.reconciler
+        self.assertIs(reconciler._db, self.db)
+        arn = "AA2703260555555"
+
+        class _Slot:
+            def __init__(self, arn):
+                self.arn = arn
+                self.values = {"arn": arn, "form": "GSTR-1", "period": "September - 2026-27"}
+
+        class _Session:
+            def __init__(self, arn):
+                self.slots = [_Slot(arn)]
+                self.profile = {}
+
+        class _Sgt:
+            def __init__(self, arn):
+                self._outbox = {}
+                self._sessions = {1: _Session(arn)}
+                self._shelf = {}
+
+        self.assertIsNone(reconciler.lookup_sgt(arn))
+        self.router._sgt = _Sgt(arn)
+        record = reconciler.lookup_sgt(arn)
+        self.assertIsNotNone(record)
+        self.assertEqual(record.source, "sgt_session")
+
     def test_vsdc_assembler_completed_dataset_stamps_original_author(self):
         """When VSDC assembler finishes a complete dataset, original_author is set to device_name()."""
         from core.vsdc.vsdc_assembler import VisualSessionAssembler

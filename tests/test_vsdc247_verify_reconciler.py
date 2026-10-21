@@ -215,6 +215,47 @@ class TestSgtLookup(unittest.TestCase):
         self.assertEqual(rec.source, "sgt_outbox")
         self.assertEqual(rec.client_name, "OUTBOX USER")
 
+    def test_router_getter_resolves_sgt_built_after_verifier(self):
+        holder = {"sgt": None}
+        reconciler = Reconciler(sgt_router_getter=lambda: holder["sgt"], grace_sec=90.0,
+                                clock=lambda: 1000.0)
+        entry = _sample_ocr_entry(arn=ARN_1, seen_epoch=1000.0)
+        self.assertEqual(reconciler.observe_arn(entry, now=1000.0).outcome, OUTCOME_PENDING)
+
+        router = MockRouter()
+        router._sessions[1] = MockSession([MockSlot(ARN_1)])
+        holder["sgt"] = router
+
+        ticks = reconciler.check_pending(now=1010.0)
+        self.assertEqual(len(ticks), 1)
+        self.assertEqual(ticks[0].outcome, OUTCOME_MATCHED)
+        self.assertFalse(reconciler.is_pending(ARN_1))
+
+    def test_set_db_resolves_sgt_row_written_after_observation(self):
+        conn = sqlite3.connect(":memory:")
+        conn.execute("""
+            CREATE TABLE tracker_dump (
+                id INTEGER PRIMARY KEY, dataset_key TEXT, unassigned_identity TEXT,
+                arn_number TEXT, capture_method TEXT,
+                raw_payload_json TEXT, created_at TEXT, client_id INTEGER
+            )
+        """)
+        reconciler = Reconciler(grace_sec=90.0, clock=lambda: 1000.0)
+        entry = _sample_ocr_entry(arn=ARN_1, seen_epoch=1000.0)
+        self.assertEqual(reconciler.observe_arn(entry, now=1000.0).outcome, OUTCOME_PENDING)
+
+        conn.execute(
+            "INSERT INTO tracker_dump VALUES (1, 'K', 'ID', ?, 'SGT_live', '{}', "
+            "'2026-10-18T12:00:10', 42)",
+            (ARN_1,),
+        )
+        reconciler.set_db(conn)
+
+        ticks = reconciler.check_pending(now=1010.0)
+        self.assertEqual(len(ticks), 1)
+        self.assertEqual(ticks[0].outcome, OUTCOME_MATCHED)
+        self.assertEqual(ticks[0].sgt_record.source, "tracker_dump")
+
 
 # ── WP3: Client Comparison Tests ───────────────────────────────────────────────
 class TestClientComparison(unittest.TestCase):

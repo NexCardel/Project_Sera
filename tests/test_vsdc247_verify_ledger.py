@@ -20,6 +20,20 @@ TODAY = date(2026, 10, 17)
 GSTIN = "00AAAAA0000A1Z0"
 OTHER_GSTIN = "99ZZZZZ9999Z1Z9"
 
+_LOCAL_TEST_ENV = "VSDC_ALLOW_LOCAL_TEST"
+_saved_local_test = None
+
+
+def setUpModule():
+    """These tests check exact host/path registration, so local-test URL matching must be off."""
+    global _saved_local_test
+    _saved_local_test = os.environ.pop(_LOCAL_TEST_ENV, None)
+
+
+def tearDownModule():
+    if _saved_local_test is not None:
+        os.environ[_LOCAL_TEST_ENV] = _saved_local_test
+
 
 def _load(name):
     return json.loads((FIX / name).read_text(encoding="utf-8"))

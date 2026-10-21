@@ -11,14 +11,14 @@ import heapq
 import itertools
 from collections import Counter
 from concurrent.futures import Future
-from typing import Any, Callable, List, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 from .fake_browser import Browser, Tab
 
 T0 = 1_000_000.0                  # the run's first instant; the app's own clock never sees 0
 CT_TEXT = 50020
 ACCESSIBILITY_STUB = ["Enable accessibility"]
-COST = {"root": 0.001, "tab": 0.002, "documents": 0.004, "bar": 0.003}
+COST = {"root": 0.001, "tab": 0.002, "documents": 0.004, "bar": 0.003, "document_url": 0.001}
 
 
 class VirtualClock:
@@ -154,3 +154,11 @@ class FakeBackend:
         w = self._b.window_of_tab(element)
         self.spans.append((w.pid if w else 0, t, t + page.read_ms / 1000.0))
         return seen.nodes or [{"parent": -1, "depth": 0, "ctype": CT_TEXT, "name": ln} for ln in lines]
+
+    def document_url(self, element: Tab) -> Optional[str]:
+        """A1: cheap post-read URL check. Spends a small virtual cost like a live property read."""
+        self._vc.spend(COST["document_url"])
+        self.calls["document_url"] += 1
+        t = self._vc.rel()
+        page = element.page_at(t)
+        return page.url if page is not None else ""

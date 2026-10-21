@@ -55,6 +55,8 @@ PRUNE_EVERY_SEC = 5.0
 OCR_DUE_KEEP_SEC = 3.0        # an OCR scan the lane refused (rate limit) is asked again on later ticks this long
 OCR_ARM_SEC = 1.0             # a big picture change can still become a flash this long, once a read is running
 OCR_VERIFY_MAX_SEC = 4.0     # an OCR result whose tab no later read confirmed within this long is dropped
+URGENT_FRAME_CELLS = 64       # B4: cells changed (32x32) needed to trigger an urgent post-slow-read (≈6 % of screen)
+URGENT_COOLDOWN_SEC = 2.0     # B4: at most one urgent read per window in this window
 
 _seq = itertools.count(1)     # ReadContext.seq: unique per process run, shared by every loop
 
@@ -117,6 +119,9 @@ class WindowState:
     blind_retries: int = 0              # WP5 / WP8
     retry: str = ""                     # "torn-retry" waiting to be asked
     wanted: str = ""                    # a read was due but could not be asked yet: its reason
+    wanted_urgent: bool = False         # B4: the waiting reason qualifies for an urgent (fast-gap) read
+    frame_cells: int = 0               # B4: cells changed at the last frame check (0..1024)
+    last_urgent_at: float = 0.0        # B4: when the last urgent read was asked for this window
     pending_seq: int = 0                # the page read asked and not answered yet (0 = none)
     pending_at: float = 0.0
     frame: Any = None                   # the screenshot taken when frame_seq was asked (OCR of a blind page)
@@ -275,7 +280,12 @@ class CaptureLoop:
             ws.proofs.append((r.started_at, r.tab_after))
         newest = r.finished_at >= ws.url_at
         if newest:
-            self._learn_url(ws, r)
+            if r.torn == "tab":
+                # A1 skips the post-read locate on a tab switch, so r.url is the old tab's URL.
+                # Learn the new tab, but keep the old URL until the torn retry reads the new tab.
+                ws.tab = r.tab_after
+            else:
+                self._learn_url(ws, r)
         if r.url_only:
             return
         ws.last_read_finished, ws.last_read_ms = r.finished_at, r.ms
@@ -338,6 +348,7 @@ class CaptureLoop:
             ws.url = url
             ws.torn_retries = ws.blind_retries = 0
             ws.retry = ""
+            ws.wanted_urgent = False        # B4: a URL change resets any waiting urgent flag
             if url and self._scope.is_in_scope_url(url):
                 ws.burst_left = BURST_READS
 
@@ -424,19 +435,27 @@ class CaptureLoop:
         reason = self._read_reason(w, ws, sig, now)
         if not reason:
             return
-        if ws.pending_seq or not self._spaced(ws, reason, now):
-            ws.wanted = reason              # asked as soon as the read in flight is answered
+        urgent = self._urgent(ws, reason, now)
+        # B5: if an urgent read arrives while a slow read has been running for >= 3 s,
+        # abandon the slow read early so the urgent read does not wait behind it.
+        if ws.pending_seq and urgent and hasattr(self._reader, "abandon_slow_content"):
+            if self._reader.abandon_slow_content(w.hwnd):
+                ws.pending_seq, ws.pending_at = 0, 0.0
+        if ws.pending_seq or not self._spaced(ws, reason, now, urgent):
+            ws.wanted, ws.wanted_urgent = reason, urgent    # asked as soon as the read in flight is answered
             return
         status = self._request(w, ws, now, reason, sig, img, portal, owner)
         if status in ("started", "queued"):
-            ws.wanted = ""
+            ws.wanted, ws.wanted_urgent = "", False
             ws.last_sig, ws.last_request_at = sig, now
+            if urgent:
+                ws.last_urgent_at = now
             if reason in ("url", "burst"):
                 ws.burst_left -= 1
             elif reason in ("torn-retry", REASON_BLIND_RETRY):
                 ws.retry = ""
         else:
-            ws.wanted = reason              # paused / no lane: health shows it; the OCR trigger still runs
+            ws.wanted, ws.wanted_urgent = reason, urgent    # paused / no lane: health shows it
 
     def _ocr_wanted(self, ws: WindowState, cells: int, inflight: bool, last_ms: float) -> str:
         """Blueprint 5.1: "paused" (every frame change over FLASH_MIN_CELLS while UIA is paused) or
@@ -493,7 +512,12 @@ class CaptureLoop:
             return ws.retry
         if ws.burst_left > 0:
             return "url" if ws.burst_left == BURST_READS else "burst"
-        if sig is None or ws.last_sig is None or vsdc_gate.cells_changed(ws.last_sig, sig) >= vsdc_gate.GATE_MIN_CELLS:
+        # B4: compute and store the changed-cell count so _urgent can use it without re-comparing.
+        if sig is not None and ws.last_sig is not None:
+            ws.frame_cells = vsdc_gate.cells_changed(ws.last_sig, sig)
+        else:
+            ws.frame_cells = 0          # no screenshot evidence: never qualifies as an urgent change
+        if sig is None or ws.last_sig is None or ws.frame_cells >= vsdc_gate.GATE_MIN_CELLS:
             return "frame"
         if ws.wanted:
             return ws.wanted
@@ -504,11 +528,27 @@ class CaptureLoop:
         return ""
 
     @staticmethod
-    def _spaced(ws: WindowState, reason: str, now: float) -> bool:
+    def _urgent(ws: WindowState, reason: str, now: float) -> bool:
+        """B4: a large frame change after a slow read skips the post-read cooldown (down to
+        BURST_GAP_SEC) so a short-lived success dialog is not missed while waiting for the
+        normal READ_GAP_FACTOR * last_read_ms gap to expire. At most one per URGENT_COOLDOWN_SEC."""
+        if reason != "frame":
+            return False
+        if ws.wanted == reason and ws.wanted_urgent:
+            return True                     # already flagged urgent while waiting behind a pending read
+        if now - ws.last_urgent_at < URGENT_COOLDOWN_SEC:
+            return False
+        return ws.last_read_ms > vsdc_gate.FLASH_UIA_SLOW_MS and ws.frame_cells >= URGENT_FRAME_CELLS
+
+    @staticmethod
+    def _spaced(ws: WindowState, reason: str, now: float, urgent: bool = False) -> bool:
         if not ws.last_read_finished:
             return True
         quick = reason in ("url", "burst", "torn-retry", REASON_BLIND_RETRY)
-        gap = max(BURST_GAP_SEC if quick else MIN_READ_GAP_SEC, READ_GAP_FACTOR * ws.last_read_ms / 1000.0)
+        if urgent:
+            gap = BURST_GAP_SEC             # B4: bypass the slow-read cooldown for large frame changes
+        else:
+            gap = max(BURST_GAP_SEC if quick else MIN_READ_GAP_SEC, READ_GAP_FACTOR * ws.last_read_ms / 1000.0)
         return now - ws.last_read_finished >= gap
 
     def _request(self, w: WindowInfo, ws: WindowState, now: float, reason: str, sig: Optional[bytes],

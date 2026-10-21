@@ -1,0 +1,150 @@
+NOTES & MEDIA — FIX PLAN
+=======================
+
+STATUS: diagnosis only, no code changed yet.
+SCOPE: Tracker Dump -> Payload Inspector -> "Notes & Media" tab
+       (both Grouped by Client Container and Individual Raw Captures views).
+
+
+WHY MEDIA DISAPPEARS (confirmed causes)
+---------------------------------------
+
+1. Raw-capture rows are re-created, not updated.
+   file: sera_db/tracker_dump.py
+   - insert_tracker_dump() finds rows with the same dataset_key and runs
+     DELETE FROM tracker_dump WHERE dataset_key = ?   (line ~399)
+   - Unsubmitted-draft purge does the same by assessee/portal/period (line ~447)
+   - The replacement INSERT (line ~486) lists only payload columns.
+     It does NOT carry notes or screenshot_path, so the new row starts NULL.
+   Consequence: every re-capture of the same filing (VSDC/SGT/DOM re-read,
+   status refresh, history/calendar read, dedup) erases the attachment.
+   Evidence: live rawPayload.db has 279 tracker_dump rows but max id 2188
+   (heavy delete/re-insert churn), and 0 non-empty screenshot_path values,
+   while 12-13 images exist under data/media.
+
+2. Container media is keyed by identity_key, which can change.
+   file: sera_db/tracker_dump.py -> re_resolve_all_tracker_dumps()
+   - It snapshots notes/screenshot_path by identity_key (lines ~904-974),
+     DELETEs and rebuilds client_raw_containers, then re-applies by the SAME key.
+   - If a container key changes (unassigned/PAN -> CLI-#####, or PAN/GSTIN
+     re-resolution), the update hits 0 rows and the media is lost; a line is
+     printed to stdout but nothing is surfaced to the user.
+   Evidence: 116 of 119 live containers use transient CLI-##### keys.
+
+3. The stored path is absolute and points inside the app/code folder.
+   file: ui/windows/tracker_dump_window.py -> _save_notes() (line ~1439)
+   - media_dir = <folder of tracker_dump_window.py>/../../data/media
+   - Not the user data dir (~/AmanAssociates_Sera).
+   - Updating/reinstalling/moving the app orphans the files. Once the file is
+     missing:
+       _load_notes_and_media() skips it (os.path.exists check), and
+       _save_notes() sets final_path = "" and writes screenshot_path = "",
+     permanently clearing the pointer on the next notes autosave.
+
+Note: the attach/paste/preview/load logic itself was verified working against
+a copy of the live DB (attach -> save -> reopen shows the image).
+
+
+FIX PLAN
+--------
+
+PHASE 1 — Stop losing media on re-capture (raw capture rows)
+------------------------------------------------------------
+1. In insert_tracker_dump(), before deleting rows for dataset_key (and before
+   the draft purge), collect existing user media for the rows about to go:
+     SELECT id, notes, screenshot_path FROM tracker_dump
+     WHERE dataset_key = ? AND (notes IS NOT NULL OR screenshot_path IS NOT NULL)
+   Keep the newest non-empty notes / screenshot_path per dataset_key.
+2. After the replacement INSERT, re-apply the preserved values:
+     UPDATE tracker_dump SET notes = ?, screenshot_path = ? WHERE id = <new id>
+   Do this for every delete path:
+     - exact dataset_key replacement (line ~399)
+     - unsubmitted-draft purge (line ~447)
+     - URL fallback replacement (line ~479)
+3. Never blank a saved value with an empty one during this carry-over:
+   prefer non-empty notes; prefer non-empty screenshot_path.
+4. Add a debug/warning print if media existed but could not be re-applied,
+   including dataset_key and old/new row ids.
+
+PHASE 2 — Make container media survive key changes
+--------------------------------------------------
+1. Add a stable identity for user media instead of relying on identity_key.
+   Preferred: new table client_container_notes with
+     identity_key TEXT PRIMARY KEY,
+     client_id INTEGER,
+     notes TEXT,
+     screenshot_path TEXT,
+     updated_at TEXT
+   (This table is already specified in sync_schema.py as pending; creating it
+   also unblocks that sync work item.)
+2. Update get_srpf_container_media() / save_srpf_container_media() to read and
+   write this table. Keep writing client_raw_containers.notes/screenshot_path
+   and client_raw_container_light.notes as a compatibility mirror until all
+   readers are migrated.
+3. On container key change, migrate the media row:
+   if old key has media and new key does not, copy it to the new key.
+4. In re_resolve_all_tracker_dumps(), replace the identity_key-only preserved
+   notes logic with this table (or additionally re-apply by client_id when the
+   key changed), so a PAN -> CLI re-key keeps the attachment.
+
+PHASE 3 — Put media files in the user data dir, store relative paths
+--------------------------------------------------------------------
+1. Save new attachments under:
+     <db folder>/media/            (e.g. ~/AmanAssociates_Sera/media/)
+   using db.db_path or db.raw_db_path to resolve the folder, not __file__.
+2. Store only the filename (or media/<filename>) in the DB, not an absolute
+   path. Resolve it on load against the current data dir.
+3. On load, also accept legacy absolute paths; if the file exists, copy it
+   into the new media folder and rewrite the row to the relative path.
+4. Create the folder with os.makedirs(..., exist_ok=True) and surface a clear
+   error in lbl_save_status if writing fails.
+
+PHASE 4 — Do not erase the pointer when the file is missing
+-----------------------------------------------------------
+1. In _save_notes(), track whether the user explicitly cleared the image.
+   Only write screenshot_path = "" when _clear_image() was used or a new image
+   replaced the old one.
+2. If current_screenshot_path is set but the file is missing, keep the existing
+   DB value and show "Image file not found" instead of overwriting it.
+3. Make _load_notes_and_media() distinguish "no path stored" from "path stored
+   but file missing", and log/surface the latter once.
+
+PHASE 5 — Tests
+---------------
+Add tests (tools/live_tf suite) for:
+1. Insert raw capture with media -> re-insert same dataset_key -> media survives.
+2. Draft purge does not drop media.
+3. URL fallback replacement does not drop media.
+4. Container media survives re_resolve_all_tracker_dumps() when the key is
+   unchanged.
+5. Container media follows a key change (PAN/unassigned -> CLI-#####).
+6. Save with a missing file does not clear a stored screenshot_path.
+7. Legacy absolute path is migrated to the user data dir and still loads.
+8. Delete/clear image still clears screenshot_path.
+
+PHASE 6 — Rollout / data repair
+-------------------------------
+1. On startup, backfill: move existing data/media files into the user data dir
+   and rewrite any absolute paths that point at the old app folder.
+2. Leave the old data/media folder untouched (no deletion) for one release.
+3. Note in CHANGELOG: media now survives re-capture and app updates.
+4. Existing attachments whose pointers were already wiped cannot be recovered
+   from the DB; the orphan images in data/media have timestamp-only names, so
+   they cannot be auto-matched to clients. Mention this to the user separately.
+
+FILES TOUCHED (expected)
+------------------------
+- sera_db/tracker_dump.py        (media carry-over on delete/re-insert)
+- sera_db/srpf.py                (new media table read/write, key-change carry)
+- sera_db/schema.py              (create client_container_notes if adopted)
+- ui/windows/tracker_dump_window.py
+                                 (user data dir, relative paths, missing-file guard)
+- tests/...                      (new regression tests)
+- CHANGELOG.md
+
+OPEN DECISION
+-------------
+Pick one for container media storage before Phase 2:
+  A) new client_container_notes table (also unblocks sync plan), or
+  B) keep columns on client_raw_containers and add client_id-based carry-over.
+Recommended: A.

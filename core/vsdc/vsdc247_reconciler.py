@@ -509,6 +509,7 @@ class Reconciler:
         self,
         sgt_lookup: Optional[Callable[[str], Optional[SgtRecord]]] = None,
         sgt_router: Any = None,
+        sgt_router_getter: Optional[Callable[[], Any]] = None,
         db: Any = None,
         client_lookup: Optional[Callable[[str, str], Optional[dict]]] = None,
         grace_sec: float = DEFAULT_GRACE_SEC,
@@ -519,6 +520,7 @@ class Reconciler:
     ) -> None:
         self._sgt_lookup = sgt_lookup
         self._sgt_router = sgt_router
+        self._sgt_router_getter = sgt_router_getter
         self._db = db
         self._client_lookup = client_lookup
         self.grace_sec = float(grace_sec)
@@ -532,6 +534,21 @@ class Reconciler:
         self._missed: Dict[str, Tuple[Dict[str, Any], float]] = {}   # arn -> (entry, seen_epoch)
         self._reconciled: Dict[str, ReconciliationResult] = {}       # arn -> result
 
+    def _current_sgt_router(self) -> Any:
+        if self._sgt_router_getter is not None:
+            try:
+                return self._sgt_router_getter()
+            except Exception:
+                return None
+        return self._sgt_router
+
+    def set_sgt_router(self, sgt_router: Any) -> None:
+        self._sgt_router = sgt_router
+        self._sgt_router_getter = None
+
+    def set_db(self, db: Any) -> None:
+        self._db = db
+
     def lookup_sgt(self, arn: str) -> Optional[SgtRecord]:
         """Query SGT in-memory first, then tracker_dump."""
         if not arn:
@@ -540,8 +557,9 @@ class Reconciler:
             res = self._sgt_lookup(arn)
             if res:
                 return res if isinstance(res, SgtRecord) else SgtRecord(**res)
-        if self._sgt_router:
-            rec = find_sgt_in_router(self._sgt_router, arn)
+        router = self._current_sgt_router()
+        if router:
+            rec = find_sgt_in_router(router, arn)
             if rec:
                 return rec
         if self._db:
@@ -829,8 +847,9 @@ class Reconciler:
                 return self._reconciled[clean_arn]
             entry_tuple = self._pending.pop(clean_arn, None) or self._missed.pop(clean_arn, None)
             entry = entry_tuple[0] if entry_tuple else None
-            if not entry and self._sgt_router and hasattr(self._sgt_router, "_verifier") and self._sgt_router._verifier:
-                entry = self._sgt_router._verifier.saved.get(clean_arn)
+            router = self._current_sgt_router()
+            if not entry and router and hasattr(router, "_verifier") and router._verifier:
+                entry = router._verifier.saved.get(clean_arn)
             if not entry:
                 return None
             seen_epoch = _parse_epoch(entry, self._clock())

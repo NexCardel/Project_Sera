@@ -49,6 +49,7 @@ class Doc:
         self.gates = []
         self.hooks = []
         self.cost_sec = 0.0       # fake clock time one read of it takes
+        self.current_url_error = False   # A1: simulate GetCurrentPropertyValue failure
 
 
 class Window:
@@ -110,6 +111,13 @@ class FakeBackend:
         finally:
             with self._lock:
                 self.active[pid] -= 1
+
+    def document_url(self, doc):
+        """A1: cheap post-read URL check. Simulates GetCurrentPropertyValue(PID_VALUE)."""
+        self.calls.append(("document_url", id(doc)))
+        if getattr(doc, "current_url_error", False):
+            return None
+        return doc.url
 
 
 def make(windows, in_scope=None):
@@ -272,6 +280,58 @@ def test_five_wedged_workers_pause_then_resume(cleanup):
     assert reader.request(c) == "started"             # tried again, never off for the run
     assert any(r.ctx is c and r.error == "" for r in collect(reader, 1))
     assert any("paused" in n for n in notes) and any("pause over" in n for n in notes)
+
+
+# ---- A1: one document locate per clean content read ----------------------------------------
+
+def test_a_clean_read_asks_the_document_list_once(cleanup):
+    """A1: a clean content read calls Backend.documents exactly once and document_url once."""
+    win = Window(docs=[Doc(PORTAL, ["ARN: AA2709260123456"])])
+    reader, backend, clock, _ = make({1: win})
+    cleanup[0].append(reader)
+    reader.request(ctx(1, clock))
+    (r,) = collect(reader, 1)
+    assert sum(1 for m, _ in backend.calls if m == "documents") == 1
+    assert sum(1 for m, _ in backend.calls if m == "document_url") == 1
+    assert r.torn == "" and r.lines == ["ARN: AA2709260123456"]
+
+
+def test_tab_change_skips_the_second_document_scan(cleanup):
+    """A1: when the tab changes mid-read, url_after = url_before and only one documents call."""
+    win = Window(docs=[Doc(PORTAL)])
+    win.docs[0].hooks.append(lambda: setattr(win, "tab", "tab-2"))
+    reader, backend, clock, _ = make({1: win})
+    cleanup[0].append(reader)
+    reader.request(ctx(1, clock))
+    (r,) = collect(reader, 1)
+    assert (r.tab_before, r.tab_after, r.torn) == ("tab-1", "tab-2", "tab")
+    assert sum(1 for m, _ in backend.calls if m == "documents") == 1
+    assert sum(1 for m, _ in backend.calls if m == "document_url") == 0
+
+
+def test_url_change_still_scans_twice(cleanup):
+    """A1: when document_url returns a different URL, fall back to a second full locate."""
+    win = Window(docs=[Doc(PORTAL)])
+    win.docs[0].hooks.append(lambda: setattr(win.docs[0], "url", PORTAL_2))
+    reader, backend, clock, _ = make({1: win})
+    cleanup[0].append(reader)
+    reader.request(ctx(1, clock))
+    (r,) = collect(reader, 1)
+    assert (r.url_before, r.url_after, r.torn) == (PORTAL, PORTAL_2, "url")
+    assert sum(1 for m, _ in backend.calls if m == "documents") == 2
+
+
+def test_an_unavailable_current_url_falls_back_to_a_full_locate(cleanup):
+    """A1: if document_url returns None (property error), fall back to full locate — no data lost."""
+    win = Window(docs=[Doc(PORTAL, ["Success page"])])
+    win.docs[0].current_url_error = True
+    reader, backend, clock, _ = make({1: win})
+    cleanup[0].append(reader)
+    reader.request(ctx(1, clock))
+    (r,) = collect(reader, 1)
+    assert r.torn == "" and r.lines == ["Success page"]
+    assert sum(1 for m, _ in backend.calls if m == "documents") == 2
+    assert sum(1 for m, _ in backend.calls if m == "document_url") == 1
 
 
 # ---- torn reads ---------------------------------------------------------------------------
@@ -662,3 +722,72 @@ def test_diag_lines_hold_no_urls(cleanup):
     wait_until(lambda: reader.stats()["stuck"] == 0)
     reader.results()
     assert notes and not any("gst.gov.in" in n or "http" in n for n in notes)
+
+
+# ---- B5: separate latency abandon from wedged workers -------------------------------------
+
+def test_b5_early_abandon_frees_worker_without_wedging(cleanup):
+    doc = Doc(PORTAL)
+    gate = threading.Event()
+    doc.gates.append(gate)
+    reader, backend, clock, notes = make({1: Window(docs=[doc])})
+    cleanup[0].append(reader)
+    cleanup[1].append(gate)
+    c1 = ctx(1, clock)
+    assert reader.request(c1) == "started"
+    wait_until(lambda: backend.reads)
+    clock.advance(1.0)
+    assert not reader.abandon_slow_content(1, min_running_sec=3.0)
+    clock.advance(2.5)
+    assert reader.abandon_slow_content(1, min_running_sec=3.0)
+    c2 = ctx(1, clock)
+    assert reader.request(c2) == "started"
+    st = reader.stats()
+    assert st["abandoned"] == 1 and st["stuck"] == 0
+    gate.set()
+    (r1, r2) = collect(reader, 2)
+    assert r1.ctx is c1 and r1.error == "timeout-abandoned"
+    assert r2.ctx is c2 and r2.error == ""
+    assert reader.stats()["stuck"] == 0
+
+
+def test_b5_early_abandon_promoted_to_wedged_if_running_past_20s(cleanup):
+    doc = Doc(PORTAL)
+    gate = threading.Event()
+    doc.gates.append(gate)
+    reader, backend, clock, notes = make({1: Window(docs=[doc])})
+    cleanup[0].append(reader)
+    cleanup[1].append(gate)
+    c1 = ctx(1, clock)
+    assert reader.request(c1) == "started"
+    wait_until(lambda: backend.reads)
+    clock.advance(3.5)
+    assert reader.abandon_slow_content(1, min_running_sec=3.0)
+    assert reader.stats()["stuck"] == 0
+    clock.advance(17.0)
+    reader.results()
+    assert reader.stats()["stuck"] == 1
+    gate.set()
+
+
+def test_b5_early_abandon_respects_thread_cap(cleanup):
+    doc = Doc(PORTAL)
+    gates = [threading.Event() for _ in range(vsdc_reader.MAX_EARLY_ABANDONED + 1)]
+    doc.gates.extend(gates)
+    reader, backend, clock, notes = make({1: Window(docs=[doc])})
+    cleanup[0].append(reader)
+    for g in gates:
+        cleanup[1].append(g)
+    for _ in range(vsdc_reader.MAX_EARLY_ABANDONED):
+        c = ctx(1, clock)
+        assert reader.request(c) == "started"
+        wait_until(lambda: backend.reads)
+        clock.advance(3.5)
+        assert reader.abandon_slow_content(1, min_running_sec=3.0)
+    c_last = ctx(1, clock)
+    assert reader.request(c_last) == "started"
+    wait_until(lambda: backend.reads)
+    clock.advance(3.5)
+    assert not reader.abandon_slow_content(1, min_running_sec=3.0)
+    for g in gates:
+        g.set()

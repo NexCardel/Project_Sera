@@ -59,6 +59,8 @@ PAGE_TIMEOUT_SEC = 3.0        # a read longer than this is "late" (health state 
 URL_FRESH_SEC = 2.0           # how old a scope result may be for the loop's scope gate (WP4)
 HEAVY_READ_MS = 700.0         # R9: a page read slower than this is not read beside another of the same browser
 PAGE_MS_KEPT = 50             # last read time remembered for this many pages per lane
+MAX_EARLY_ABANDONED = 4       # B5: cap on concurrent workers abandoned early for latency
+URGENT_ABANDON_SEC = 3.0      # B5: running duration before an in-flight read can be abandoned for urgency
 
 WORKER_APARTMENT = "mta"      # D2 (owner, 2026-10-14). "sta" = the old CoInitialize().
 
@@ -141,6 +143,7 @@ class Backend(Protocol):
     def documents(self, root: Any) -> List[Tuple[Any, str, bool]]: ...     # (element, url, offscreen)
     def address_bar(self, hwnd: int, root: Any) -> str: ...
     def read_document(self, element: Any) -> List[Dict[str, Any]]: ...     # nodes
+    def document_url(self, element: Any) -> Optional[str]: ...             # cheap post-read URL check (A1)
 
 
 def init_com(apartment: str = WORKER_APARTMENT) -> None:
@@ -202,6 +205,16 @@ class UiaBackend:
 
     def read_document(self, element: Any) -> List[Dict[str, Any]]:
         return uia_nodes.read_cached_subtree(self._tls.uia, self._tls.client, element)
+
+    def document_url(self, element: Any) -> Optional[str]:
+        """Cheap post-read URL check (A1): read the live Value of the Document that was read,
+        avoiding a second full-window FindAllBuildCache when the URL hasn't changed. None means
+        the property could not be read and the caller should fall back to a full _locate."""
+        try:
+            value = element.GetCurrentPropertyValue(uia_nodes.PID_VALUE)
+        except Exception:
+            return None
+        return value.strip() if isinstance(value, str) else ""
 
 
 class _OneThread:
@@ -287,6 +300,7 @@ class PageReader:
         self._lanes: Dict[int, _Lane] = {}
         self._done: Deque[ReadResult] = deque()
         self._wedged: List[_Job] = []
+        self._early_abandoned: List[_Job] = []  # B5: jobs abandoned early for latency (not wedged unless > WEDGE_SEC)
         self._paused_until = 0.0
         self._closed = False
         self._tls = threading.local()       # per worker thread: backend initialised or not
@@ -355,6 +369,34 @@ class PageReader:
             job = lane.content.job if lane else None
             return job.ctx if job is not None and not job.abandoned else None
 
+    def abandon_slow_content(self, hwnd: int, min_running_sec: float = URGENT_ABANDON_SEC) -> bool:
+        """B5: Abandon an in-flight content read running for >= min_running_sec to free the lane
+        for an urgent read. The abandoned job does NOT count toward wedged workers unless it
+        continues running past WEDGE_SEC. Capped by MAX_EARLY_ABANDONED to prevent thread leaks."""
+        with self._lock:
+            if self._closed or self._paused_until:
+                return False
+            now = self._clock()
+            self._sweep(now)
+            self._early_abandoned[:] = [j for j in self._early_abandoned if j.future is not None and not j.future.done()]
+            if len(self._early_abandoned) >= MAX_EARLY_ABANDONED:
+                return False
+            lane = self._lanes.get(hwnd)
+            if lane is None:
+                return False
+            worker = lane.content
+            job = worker.job
+            if job is None or job.abandoned or job.future is None or job.future.done():
+                return False
+            if now - job.submitted < min_running_sec:
+                return False
+            self._abandon(worker, job)
+            self._abandoned += 1
+            self._early_abandoned.append(job)
+            self._diag_safe(f"reader content read abandoned early ({now - job.submitted:.1f} s running) "
+                            f"for urgent read ({len(self._early_abandoned)} early-abandoned running)")
+            return True
+
     def page_ms(self, hwnd: int, url: str) -> float:
         """How long the last read of this page in this window took (0.0 if never read)."""
         with self._lock:
@@ -394,6 +436,7 @@ class PageReader:
             for lane in list(self._lanes.values()):
                 self._retire(lane)
             self._lanes.clear()
+            self._early_abandoned.clear()
 
     # ---- inside the lock --------------------------------------------------------------------
 
@@ -430,6 +473,17 @@ class PageReader:
             if now - lane.last_used >= LANE_IDLE_SEC and lane.idle():
                 self._lanes.pop(lane.hwnd, None)
                 self._retire(lane)
+        # B5: check early-abandoned jobs - only promote to _wedged if they exceed WEDGE_SEC
+        for job in list(self._early_abandoned):
+            if job.future is not None and not job.future.done():
+                if now - job.submitted >= WEDGE_SEC and job not in self._wedged:
+                    wedged_now = True
+                    self._wedged.append(job)
+                    self._diag_safe(f"early-abandoned read still running past {WEDGE_SEC:.0f} s - counted as wedged "
+                                    f"({self._stuck()} still stuck)")
+            else:
+                if job in self._early_abandoned:
+                    self._early_abandoned.remove(job)
         # Only a new wedge can pause: after a pause, reads are tried again even if old ones are still stuck.
         if wedged_now and not self._paused_until and self._stuck() >= MAX_WEDGED_WORKERS:
             self._paused_until = now + PAUSE_SEC
@@ -598,7 +652,10 @@ class PageReader:
         return r
 
     def _content_job(self, ctx: ReadContext) -> ReadResult:
-        """Tab and URL, the in-scope Documents (one cached call each), tab and URL again."""
+        """Tab and URL, the in-scope Documents (one cached call each), tab and URL again.
+        A1: after reading, verify the URL cheaply via the primary Document's live Value rather
+        than a second full FindAllBuildCache. Falls back to the full _locate only when the tab
+        changed, the cheap check is unavailable, or the URL differs from url_before."""
         r, root = self._begin(ctx)
         try:
             if root is not None:
@@ -609,7 +666,21 @@ class PageReader:
                     r.doc_urls.append(url)
                 r.lines = uia_nodes.lines_from_nodes(r.docs, include_selection=True)
                 r.tab_after = self._backend.tab_id(ctx.hwnd, root)
-                r.url_after = self._locate(ctx.hwnd, root)[0]
+                if r.tab_after != r.tab_before:
+                    # Tab changed: torn by tab; no need to re-locate (already going to be dropped).
+                    r.url_after = r.url_before
+                elif to_read:
+                    # A1: re-read the live URL of the primary Document we just read — one cheap
+                    # GetCurrentPropertyValue instead of a second FindAllBuildCache(Descendants).
+                    primary = to_read[0][0]
+                    current = self._backend.document_url(primary)
+                    if current is not None and current == r.url_before:
+                        r.url_after = r.url_before   # fast path: URL unchanged, skip second locate
+                    else:
+                        r.url_after = self._locate(ctx.hwnd, root)[0]   # fallback: URL changed or unavailable
+                else:
+                    # No Document was read (address-bar path, or nothing in scope): keep existing behaviour.
+                    r.url_after = self._locate(ctx.hwnd, root)[0]
         except Exception as e:
             r.error = f"exception:{type(e).__name__}"
         r.finished_at = self._clock()
