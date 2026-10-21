@@ -1,8 +1,8 @@
 {
-  "version": "2.13.2",
+  "version": "2.13.3",
   "min_required_version": "2.9.9",
   "mandatory": false,
-  "download_url": "https://github.com/NexCardel/Project_Sera/releases/download/v2.13.2/Amas_Sera_Setup_v2.13.1.exe",
-  "sha256": "0704f033c1c23d78897697cdfe7bbeee429d8514247729ebf2db78f74bf34c81",
-  "release_notes": "Project Sera v2.13.2 - Decouple original_author tracking from vsdc247-v verification telemetry"
+  "download_url": "https://github.com/NexCardel/Project_Sera/releases/download/v2.13.3/Amas_Sera_Setup_v2.13.3.exe",
+  "sha256": "",
+  "release_notes": "Project Sera v2.13.3 - SGT capture latency optimizations (A1/B4/B5), VSDC247-V reconciler integration, and original_author tracking preservation"
 }
