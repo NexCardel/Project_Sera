@@ -377,8 +377,8 @@ class TestVsdc247PayloadEnrichment(unittest.TestCase):
         self.assertEqual(p2["original_author"], "DESK-PC-1")
         self.assertEqual(p2["raw_payload"]["original_author"], "DESK-PC-1")
 
-    def test_history_capture_does_not_set_original_author(self):
-        """When an SGT row is emitted from a history record, original_author is None."""
+    def test_history_capture_stamps_original_author_when_no_prior_author(self):
+        """When an SGT row with an ARN appears, original_author is filled with device_name()."""
         self.router.apply_engine_settings(vsdc=False, vsdc_x=False, vsdc247=False, sgt="live", vsdc247_verify=True)
         arn = "AA2703260444444"
 
@@ -401,9 +401,9 @@ class TestVsdc247PayloadEnrichment(unittest.TestCase):
 
         row = self.router.evaluate_tick()
         self.assertIsNotNone(row)
-        # Because it came from history, original_author must NOT be set to the scanning PC
-        self.assertIsNone(row.get("original_author"))
-        self.assertIsNone(row["raw_payload"].get("original_author"))
+        # When an ARN appears, original_author is filled with device_name()
+        self.assertEqual(row.get("original_author"), "TestPC")
+        self.assertEqual(row["raw_payload"].get("original_author"), "TestPC")
 
 
     def test_verifier_reconciler_follows_sgt_built_later(self):
@@ -456,6 +456,26 @@ class TestVsdc247PayloadEnrichment(unittest.TestCase):
         self.assertEqual(payload.get("original_author"), "TestPC")
         self.assertEqual(payload["raw_payload"].get("original_author"), "TestPC")
         self.assertNotIn("original_author", payload.get("vsdc247-v", {}))
+
+    def test_vsdc_assembler_seal_and_flush_stamps_original_author(self):
+        """When VSDC assembler seals and flushes a complete filing, original_author is stamped."""
+        from core.vsdc.vsdc_assembler import VisualSessionAssembler
+        assembler = VisualSessionAssembler()
+        assembler.record_step("https://return.gst.gov.in/returns/auth/gstr3b/filing", "gst_filing_success")
+        assembler.update_identity(gstin="27AABCU9603R1ZX", name="AMAN ASSOCIATES", portal="GST Portal")
+        assembler.update_selection(filing_type="GSTR-3B", period_label="July (FY 2026-27)")
+        assembler.record_submission(
+            ack_number="AA2707260000001",
+            status="Filed & Verified",
+            crosshair_id="gst_filing_success",
+        )
+
+        from unittest.mock import patch
+        with patch("core.vsdc.vsdc_assembler.device_name", return_value="Accountant-PC"):
+            flushed = assembler.seal_and_flush()
+        self.assertIsNotNone(flushed)
+        self.assertEqual(flushed.get("original_author"), "Accountant-PC")
+        self.assertEqual(flushed["raw_payload"].get("original_author"), "Accountant-PC")
 
     @staticmethod
     def _sgt_live_payload(arn, device, author):

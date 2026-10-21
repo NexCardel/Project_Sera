@@ -52,14 +52,16 @@ def payload_original_author(raw_payload_json) -> str:
 
 
 def is_filed_dataset(status, arn) -> bool:
-    """A return has actually been filed: it carries a real ARN and is at least submitted.
+    """A return has actually been filed: it carries a real ARN.
 
     Only such a dataset may establish original_author. An in-progress capture (draft, form
     selected, not submitted) has no ARN to preserve, so the PC that later files it is the author."""
-    if not arn or str(arn).strip().upper() in ("N/A", "NA", "", "UNKNOWN"):
+    if not arn or str(arn).strip().upper() in ("N/A", "NA", "", "UNKNOWN", "NONE"):
         return False
-    from core.vsdc.vsdc_assembler import get_status_rank
-    return get_status_rank(status) >= 2
+    clean_status = str(status or "").strip().lower()
+    if clean_status in ("not submitted", "draft", "visited / in progress"):
+        return False
+    return True
 
 
 def stamp_payload_original_author(raw_payload_json, author: str):

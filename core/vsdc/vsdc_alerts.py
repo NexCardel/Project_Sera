@@ -102,11 +102,10 @@ def stamp_device_name(payload):
 
 def stamp_original_author(payload, is_live=True, author=None):
     """
-    Records which PC filed the return and captured the ARN live: "original_author" at the top level
+    Records which PC filed/captured the return: "original_author" at the top level
     and inside "raw_payload".
 
-    If the return was filed and captured live (is_live=True), records that PC's name (author or device_name()).
-    If the capture was from history (is_live=False), does NOT record this PC as the original author.
+    If the return carries an ARN (whether live or from history), records that PC's name (author or device_name()).
     An existing original_author is never overwritten. Returns the payload.
     """
     if not isinstance(payload, dict):
@@ -120,7 +119,9 @@ def stamp_original_author(payload, is_live=True, author=None):
             payload["raw_payload"]["original_author"] = existing
         return payload
 
-    if is_live:
+    arn = str(payload.get("arn") or payload.get("ack_number") or "").strip().upper()
+    has_arn = bool(arn and arn not in ("N/A", "NA", "", "UNKNOWN", "NONE"))
+    if has_arn or is_live:
         orig = str(author or device_name()).strip()
         payload["original_author"] = orig
         raw = payload.get("raw_payload")

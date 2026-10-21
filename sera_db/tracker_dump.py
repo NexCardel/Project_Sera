@@ -407,6 +407,17 @@ class TrackerDumpMixin:
                 if del_cur.rowcount > 0:
                     is_replaced = True
 
+            # If the dataset is completed (has an ARN), ensure original_author is filled with device_name()
+            # if not already established by an earlier capture or incoming payload. Once filled, immutable.
+            if is_filed_dataset(status, arn_number) and isinstance(p_obj, dict):
+                if not payload_original_author(p_obj):
+                    from core.vsdc.vsdc_alerts import device_name
+                    dev_author = device_name()
+                    p_obj["original_author"] = dev_author
+                    if isinstance(p_obj.get("raw_payload"), dict):
+                        p_obj["raw_payload"]["original_author"] = dev_author
+                    raw_payload_json = json.dumps(p_obj, ensure_ascii=False)
+
             # Unsubmitted Draft Supersession Guard:
             # Only ONE unsubmitted draft can exist per (assessee, portal, period).
             # If an unsubmitted draft arrives, check if a submitted return already exists

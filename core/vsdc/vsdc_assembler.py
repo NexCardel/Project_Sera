@@ -989,11 +989,9 @@ class VisualSessionAssembler:
     def _build_payload(self, record: FilingRecord, crosshair_id: str) -> Dict[str, Any]:
         """Builds the canonical master payload envelope expected by database.py."""
         cm = record.capture_method or f"VSDC_{crosshair_id}"
-        cm_lower = cm.lower()
-        is_history = "history" in cm_lower or "audit" in cm_lower or "calendar" in cm_lower or "view_filed" in cm_lower
-        is_complete = self._is_dataset_complete(record)
-        is_live_completed = is_complete and not is_history
-        orig_author = device_name() if is_live_completed else None
+        arn_val = record.arn or record.ack_number
+        has_arn = bool(arn_val and str(arn_val).strip().upper() not in ("N/A", "NA", "", "UNKNOWN"))
+        orig_author = device_name() if has_arn else None
         return {
             "source": "vsdc_optical",
             "session_id": self.session_id,
@@ -1150,6 +1148,8 @@ class VisualSessionAssembler:
 
         self._flushed = True
         primary = valid_records[0]
+        has_arn = bool(primary.arn and str(primary.arn).strip().upper() not in ("N/A", "NA", "", "UNKNOWN"))
+        orig_author = device_name() if has_arn else None
 
         master_payload = {
             "source": "vsdc_optical",
@@ -1171,6 +1171,7 @@ class VisualSessionAssembler:
             "status": primary.status,
             "raw_text": primary.raw_text,
             "capture_method": primary.capture_method,
+            "original_author": orig_author,
             "raw_payload": {
                 "source": {
                     "protocol": primary.portal,
@@ -1184,6 +1185,7 @@ class VisualSessionAssembler:
                 "trade_name": primary.trade_name,
                 "assembler_captures": [r.to_dict() for r in valid_records],
                 "timeline": list(self.session.steps),
+                "original_author": orig_author,
             },
         }
 

@@ -12,8 +12,8 @@
 - **Original Author Tracking (`original_author`)**:
   - Attached exclusively to completed return dataset payloads (`payload["original_author"]` and `raw_payload["original_author"]`) representing the office member workstation (`device_name()`).
   - Completely decoupled from VSDC247 (must NOT be present inside `vsdc247-v` verification blocks or OCR ledgers).
-  - History/retrospective scans (`gst_returns_calendar`, `gst_track_return_status`, `itr_filed_returns_history`, `itr_dataset_cards`) must NOT stamp `original_author` (must remain `None`).
-  - Once established by a live filing, `original_author` is immutable and must NEVER be overwritten or cleared by subsequent history captures, deduplication, sync, or tracker dump updates.
+  - Stamped with `device_name()` whenever a valid ARN appears (whether from live filing or history capture), unless an author already exists.
+  - Once established, `original_author` is immutable and must NEVER be overwritten or cleared by subsequent history captures, deduplication, sync, or tracker dump updates.
 - **Root Cause First Workflow (Diagnose Before Fixing)**: Whenever the user reports a bug, error, or issue, ALWAYS investigate and determine the root cause first. Report the cause, findings, and proposed fix clearly to the user, and wait for their confirmation/instruction before applying any code fixes or modifying code.
 - **Running the Test Suite (`live_tf`)**:
   - Whenever running the full test suite, use the live T/F/S plugin instead of plain `pytest`:

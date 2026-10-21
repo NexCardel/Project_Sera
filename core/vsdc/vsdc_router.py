@@ -1259,19 +1259,14 @@ class VSDCRouter:
             return sgt_row
 
         arn = (sgt_row.get("arn") or "").strip().upper()
-        is_real_arn = bool(arn and arn not in ("N/A", "NONE", ""))
+        is_real_arn = bool(arn and arn not in ("N/A", "NONE", "", "UNKNOWN"))
 
         # Ensure original_author on dataset payload
         raw_p = sgt_row.get("raw_payload", {}) if isinstance(sgt_row.get("raw_payload"), dict) else {}
-        record = raw_p.get("source", {}).get("record", "")
-        is_history = record in ("gst_returns_calendar", "gst_track_return_status", "itr_filed_returns_history", "itr_dataset_cards")
-        status = str(sgt_row.get("status") or "").lower()
-        is_live = not is_history and is_real_arn and status in ("submitted", "submitted & verified", "verified")
-
         existing_orig = sgt_row.get("original_author") or raw_p.get("original_author")
         if existing_orig:
             orig_author = existing_orig
-        elif is_live:
+        elif is_real_arn:
             orig_author = device_name()
         else:
             orig_author = None
