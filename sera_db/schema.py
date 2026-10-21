@@ -10,6 +10,8 @@ import os
 import sys
 import shutil
 
+from sera_db.common import is_filed_dataset, payload_original_author, stamp_payload_original_author
+
 
 class SchemaMixin:
 
@@ -252,6 +254,19 @@ class SchemaMixin:
                     t_cols = {r[1] for r in conn.execute("PRAGMA table_info(tracker_dump)").fetchall()}
                     order_sec = "gid DESC" if "gid" in t_cols else "id DESC"
 
+                    # Keep each dataset's first live author: the purge below keeps only the
+                    # newest row, which may be another PC's later re-capture of the same filing.
+                    author_by_key = {}
+                    for d_key_row, r_status, r_arn, p_json in conn.execute(
+                        f"SELECT dataset_key, status, arn_number, raw_payload_json FROM tracker_dump "
+                        f"WHERE dataset_key IS NOT NULL AND dataset_key != '' "
+                        f"AND raw_payload_json LIKE '%original_author%' "
+                        f"ORDER BY created_at ASC, {order_sec}"
+                    ):
+                        author = payload_original_author(p_json)
+                        if author and is_filed_dataset(r_status, r_arn) and d_key_row not in author_by_key:
+                            author_by_key[d_key_row] = author
+
                     # Purge duplicate entries, keeping strictly the newest by (created_at DESC, gid DESC)
                     conn.execute(f"""
                         DELETE FROM tracker_dump 
@@ -266,6 +281,19 @@ class SchemaMixin:
                             ) WHERE rn = 1
                         ) AND dataset_key IS NOT NULL AND dataset_key != '';
                     """)
+
+                    for d_key_row, author in author_by_key.items():
+                        survivor = conn.execute(
+                            f"SELECT id, raw_payload_json FROM tracker_dump WHERE dataset_key = ? "
+                            f"ORDER BY created_at DESC, {order_sec}, id DESC LIMIT 1",
+                            (d_key_row,)
+                        ).fetchone()
+                        if survivor and survivor[1]:
+                            new_json = stamp_payload_original_author(survivor[1], author)
+                            if new_json != survivor[1]:
+                                conn.execute(
+                                    "UPDATE tracker_dump SET raw_payload_json = ? WHERE id = ?",
+                                    (new_json, survivor[0]))
 
                     # Purge legacy non-filing dummy rows (ITR landing page and profile views)
                     conn.execute("""

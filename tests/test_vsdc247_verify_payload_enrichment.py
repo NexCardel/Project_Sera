@@ -457,6 +457,114 @@ class TestVsdc247PayloadEnrichment(unittest.TestCase):
         self.assertEqual(payload["raw_payload"].get("original_author"), "TestPC")
         self.assertNotIn("original_author", payload.get("vsdc247-v", {}))
 
+    @staticmethod
+    def _sgt_live_payload(arn, device, author):
+        return {
+            "source": "sgt",
+            "portal": "GST Portal",
+            "arn": arn,
+            "filing_type": "GSTR-1",
+            "period_label": "September (FY 2026-27)",
+            "status": "Submitted",
+            "capture_method": "SGT_live",
+            "device_name": device,
+            "original_author": author,
+            "raw_payload": {
+                "source": {"engine": "SGT", "record": "gst_submit_success"},
+                "device_name": device,
+                "original_author": author,
+            },
+        }
+
+    def test_live_recapture_from_another_pc_keeps_original_author(self):
+        """A second PC's LIVE capture of the same dataset must not become the original author."""
+        arn = "AA2703260777777"
+        d_key = "GST:TEST:GSTR1:SEP_2026"
+        self.db.insert_tracker_dump(
+            client_id=101, portal="GST Portal", period_label="September (FY 2026-27)",
+            arn_number=arn, capture_method="SGT_live", status="Submitted",
+            raw_payload_json=json.dumps(self._sgt_live_payload(arn, "DESK-PC-1", "DESK-PC-1")),
+            dataset_key=d_key,
+        )
+        self.db.insert_tracker_dump(
+            client_id=101, portal="GST Portal", period_label="September (FY 2026-27)",
+            arn_number=arn, capture_method="SGT_live", status="Submitted",
+            raw_payload_json=json.dumps(self._sgt_live_payload(arn, "LAPTOP-PC-2", "LAPTOP-PC-2")),
+            dataset_key=d_key,
+        )
+        rows = self.db.conn.execute("SELECT raw_payload_json FROM tracker_dump WHERE dataset_key = ?", (d_key,)).fetchall()
+        self.assertEqual(len(rows), 1)
+        payload = json.loads(rows[0][0])
+        self.assertEqual(payload["original_author"], "DESK-PC-1")
+        self.assertEqual(payload["raw_payload"]["original_author"], "DESK-PC-1")
+
+    def test_incomplete_capture_does_not_own_author_of_the_pc_that_files_it(self):
+        """PC1's draft capture must not keep authorship when PC2 submits the same dataset."""
+        arn = "AA2703260666666"
+        d_key = "GST:TEST:GSTR1:SEP_2026_DRAFT"
+        draft = self._sgt_live_payload("", "DESK-PC-1", "DESK-PC-1")
+        draft.update({"arn": "N/A", "status": "Draft"})
+        self.db.insert_tracker_dump(
+            client_id=101, portal="GST Portal", period_label="September (FY 2026-27)",
+            arn_number="N/A", capture_method="SGT_live", status="Draft",
+            raw_payload_json=json.dumps(draft), dataset_key=d_key,
+        )
+        self.db.insert_tracker_dump(
+            client_id=101, portal="GST Portal", period_label="September (FY 2026-27)",
+            arn_number=arn, capture_method="SGT_live", status="Submitted",
+            raw_payload_json=json.dumps(self._sgt_live_payload(arn, "LAPTOP-PC-2", "LAPTOP-PC-2")),
+            dataset_key=d_key,
+        )
+        rows = self.db.conn.execute("SELECT raw_payload_json FROM tracker_dump WHERE dataset_key = ?", (d_key,)).fetchall()
+        self.assertEqual(len(rows), 1)
+        payload = json.loads(rows[0][0])
+        self.assertEqual(payload["original_author"], "LAPTOP-PC-2")
+        self.assertEqual(payload["raw_payload"]["original_author"], "LAPTOP-PC-2")
+
+    def test_peer_tracker_dump_keeps_original_author(self):
+        """A peer-synced newer row for the same dataset keeps the first live author."""
+        arn = "AA2703260888888"
+        d_key = "GST:TEST:GSTR1:SEP_2026_PEER"
+        self.db.insert_tracker_dump(
+            client_id=101, portal="GST Portal", period_label="September (FY 2026-27)",
+            arn_number=arn, capture_method="SGT_live", status="Submitted",
+            raw_payload_json=json.dumps(self._sgt_live_payload(arn, "DESK-PC-1", "DESK-PC-1")),
+            dataset_key=d_key,
+        )
+        self.db.store_peer_tracker_dumps([{
+            "client_id": 101, "portal": "GST Portal", "period_label": "September (FY 2026-27)",
+            "arn_number": arn, "capture_method": "SGT_live", "status": "Submitted",
+            "raw_payload_json": json.dumps(self._sgt_live_payload(arn, "LAPTOP-PC-2", "LAPTOP-PC-2")),
+            "captured_by": "LAPTOP-PC-2", "created_at": "2099-01-01T00:00:00+00:00",
+            "dataset_key": d_key,
+        }])
+        rows = self.db.conn.execute("SELECT raw_payload_json FROM tracker_dump WHERE dataset_key = ?", (d_key,)).fetchall()
+        self.assertEqual(len(rows), 1)
+        payload = json.loads(rows[0][0])
+        self.assertEqual(payload["original_author"], "DESK-PC-1")
+        self.assertEqual(payload["raw_payload"]["original_author"], "DESK-PC-1")
+
+    def test_deduplicate_tracker_dumps_keeps_original_author(self):
+        """Collapsing duplicates must carry the earliest author onto the surviving newest row."""
+        arn = "AA2703260999999"
+        d_key = "GST:TEST:GSTR1:SEP_2026_DEDUP"
+        for created_at, device in (("2026-01-01T00:00:00+00:00", "DESK-PC-1"),
+                                   ("2026-02-01T00:00:00+00:00", "LAPTOP-PC-2")):
+            self.db.conn.execute(
+                """INSERT INTO tracker_dump
+                   (client_id, portal, period_label, arn_number, capture_method, status,
+                    raw_payload_json, captured_by, created_at, dataset_key)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (101, "GST Portal", "September (FY 2026-27)", arn, "SGT_live", "Submitted",
+                 json.dumps(self._sgt_live_payload(arn, device, device)), device, created_at, d_key),
+            )
+        self.db.deduplicate_tracker_dumps()
+        rows = self.db.conn.execute("SELECT raw_payload_json FROM tracker_dump WHERE dataset_key = ?", (d_key,)).fetchall()
+        self.assertEqual(len(rows), 1)
+        payload = json.loads(rows[0][0])
+        self.assertEqual(payload["original_author"], "DESK-PC-1")
+        self.assertEqual(payload["raw_payload"]["original_author"], "DESK-PC-1")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -9,7 +9,14 @@ import json
 import time
 from core.dataset_key import NOT_CARRIER_SQL, compute_dataset_key as _compute_dataset_key
 
-from sera_db.common import SKELETON_NAME_REGEX, is_sgt_capture, payload_device_name, payload_original_author
+from sera_db.common import (
+    SKELETON_NAME_REGEX,
+    is_filed_dataset,
+    is_sgt_capture,
+    payload_device_name,
+    payload_original_author,
+    stamp_payload_original_author,
+)
 
 
 RECOVERED_NAME_MARK = "/-"      # follows the client name of a row the ARN fixer corrected
@@ -280,6 +287,7 @@ class TrackerDumpMixin:
         incoming_pref = ""
         status_correction = False
         user_confirmed = False
+        p_obj = None
         cli_key = f"CLI_{valid_gid}" if valid_gid else (f"CLI_{valid_id}" if valid_id else None)
         taxpayer_id = pan or unassigned_identity or (candidates[0] if candidates else None) or cli_key
         
@@ -387,15 +395,14 @@ class TrackerDumpMixin:
                     # equal status (a dashboard tile "Filed" re-read after the filing carries no ARN).
                     if (not arn_number or arn_number == "N/A") and ex_arn and ex_arn != "N/A" and not status_correction:
                         arn_number = ex_arn
-                    if ex_author and isinstance(p_obj, dict):
-                        cm = str(capture_method or "").lower()
-                        is_history = "history" in cm or "audit" in cm or "calendar" in cm or "view_filed" in cm
-                        in_author = p_obj.get("original_author") or (p_obj.get("raw_payload", {}).get("original_author") if isinstance(p_obj.get("raw_payload"), dict) else None)
-                        if not in_author or is_history:
-                            p_obj["original_author"] = ex_author
-                            if isinstance(p_obj.get("raw_payload"), dict):
-                                p_obj["raw_payload"]["original_author"] = ex_author
-                            raw_payload_json = json.dumps(p_obj, ensure_ascii=False)
+                    if ex_author and is_filed_dataset(ex_status, ex_arn) and isinstance(p_obj, dict):
+                        # The first live filing owns the dataset: any later capture of it - another
+                        # PC's live re-capture included, not only a history scan - keeps that author.
+                        # An in-progress row has no author to lock: the PC that files it becomes one.
+                        p_obj["original_author"] = ex_author
+                        if isinstance(p_obj.get("raw_payload"), dict):
+                            p_obj["raw_payload"]["original_author"] = ex_author
+                        raw_payload_json = json.dumps(p_obj, ensure_ascii=False)
                 del_cur = r_conn.execute("DELETE FROM tracker_dump WHERE dataset_key = ?", (final_dataset_key,))
                 if del_cur.rowcount > 0:
                     is_replaced = True
@@ -541,6 +548,31 @@ class TrackerDumpMixin:
             cols = {r[1] for r in r_conn.execute("PRAGMA table_info(tracker_dump)").fetchall()}
             order_sec = "gid DESC" if "gid" in cols else "id DESC"
 
+            # Remember the first live author of every dataset before collapsing duplicates: the
+            # surviving (newest) row must inherit it, or a later capture from another PC would
+            # become the "original author" of a return that PC never filed.
+            author_by_key = {}
+            for d_key, r_status, r_arn, r_json in r_conn.execute(
+                f"SELECT dataset_key, status, arn_number, raw_payload_json FROM tracker_dump "
+                f"WHERE dataset_key IS NOT NULL AND dataset_key != '' "
+                f"AND dataset_key NOT LIKE '%:UNKNOWN:FORM:CURRENT' "
+                f"AND raw_payload_json LIKE '%original_author%' "
+                f"ORDER BY created_at ASC, {order_sec}"
+            ):
+                author = payload_original_author(r_json)
+                if author and is_filed_dataset(r_status, r_arn) and d_key not in author_by_key:
+                    author_by_key[d_key] = author
+            author_by_arn = {}
+            for portal, arn, r_status, r_json in r_conn.execute(
+                f"SELECT portal, arn_number, status, raw_payload_json FROM tracker_dump "
+                f"WHERE arn_number IS NOT NULL AND arn_number != '' AND arn_number != 'N/A' "
+                f"AND raw_payload_json LIKE '%original_author%' "
+                f"ORDER BY created_at ASC, {order_sec}"
+            ):
+                author = payload_original_author(r_json)
+                if author and is_filed_dataset(r_status, arn) and (portal, arn) not in author_by_arn:
+                    author_by_arn[(portal, arn)] = author
+
             # 1. Deduplicate by non-empty dataset_key (keep newest by created_at, gid)
             cur = r_conn.execute(f"""
                 DELETE FROM tracker_dump
@@ -622,6 +654,33 @@ class TrackerDumpMixin:
             """)
             deleted_count += cur5.rowcount
 
+            # Re-stamp the surviving rows with the dataset's first live author.
+            for d_key, author in author_by_key.items():
+                survivor = r_conn.execute(
+                    f"SELECT id, raw_payload_json FROM tracker_dump WHERE dataset_key = ? "
+                    f"ORDER BY created_at DESC, {order_sec}, id DESC LIMIT 1",
+                    (d_key,)
+                ).fetchone()
+                if survivor and survivor[1]:
+                    new_json = stamp_payload_original_author(survivor[1], author)
+                    if new_json != survivor[1]:
+                        r_conn.execute(
+                            "UPDATE tracker_dump SET raw_payload_json = ? WHERE id = ?",
+                            (new_json, survivor[0]))
+            for (portal, arn), author in author_by_arn.items():
+                survivor = r_conn.execute(
+                    f"SELECT id, raw_payload_json FROM tracker_dump "
+                    f"WHERE portal = ? AND arn_number = ? "
+                    f"ORDER BY created_at DESC, {order_sec}, id DESC LIMIT 1",
+                    (portal, arn)
+                ).fetchone()
+                if survivor and survivor[1]:
+                    new_json = stamp_payload_original_author(survivor[1], author)
+                    if new_json != survivor[1]:
+                        r_conn.execute(
+                            "UPDATE tracker_dump SET raw_payload_json = ? WHERE id = ?",
+                            (new_json, survivor[0]))
+
         if deleted_count > 0:
             print(f"[database] deduplicate_tracker_dumps: Purged {deleted_count} duplicate tracker dump row(s).")
         return deleted_count
@@ -649,7 +708,7 @@ class TrackerDumpMixin:
                 if dataset_key and not dataset_key.endswith(":UNKNOWN:FORM:CURRENT"):
                     td_cols = {r[1] for r in r_conn.execute("PRAGMA table_info(tracker_dump)").fetchall()}
                     order_sec = "gid DESC" if "gid" in td_cols else "id DESC"
-                    cur = r_conn.execute(f"SELECT id, created_at, status, arn_number FROM tracker_dump WHERE dataset_key = ? ORDER BY created_at DESC, {order_sec}, id DESC", (dataset_key,))
+                    cur = r_conn.execute(f"SELECT id, created_at, status, arn_number, raw_payload_json FROM tracker_dump WHERE dataset_key = ? ORDER BY created_at DESC, {order_sec}, id DESC", (dataset_key,))
                     existing = cur.fetchall()
                     if existing:
                         # A complete dataset here is not replaced by a lower view of it from another PC, however
@@ -665,6 +724,18 @@ class TrackerDumpMixin:
                         existing_newest_created = existing[0][1] or ""
                         # If incoming record is newer or same timestamp, purge older duplicates and replace
                         if str(created_at or "") >= str(existing_newest_created):
+                            # Keep the dataset's first live author (existing rows are newest-first),
+                            # but only if that row is an actual filing.
+                            ex_author = ""
+                            for e in reversed(existing):
+                                if not is_filed_dataset(e[2], e[3]):
+                                    continue
+                                ex_author = payload_original_author(e[4])
+                                if ex_author:
+                                    break
+                            if ex_author:
+                                d["raw_payload_json"] = stamp_payload_original_author(
+                                    d.get("raw_payload_json"), ex_author)
                             r_conn.execute("DELETE FROM tracker_dump WHERE dataset_key = ?", (dataset_key,))
                         else:
                             # Incoming snapshot is older than what we already have

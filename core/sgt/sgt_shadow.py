@@ -1600,7 +1600,13 @@ class SgtShadow:
                        else datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         default_form = "GST Return" if "gst" in (s.portal or "").lower() else "ITR"
         is_history_record = slot.record in ("gst_returns_calendar", "gst_track_return_status", "itr_filed_returns_history", "itr_dataset_cards")
-        orig_author = None if is_history_record else device_name()
+        arn_value = str(v.get("arn") or "").strip().upper()
+        is_filed = bool(arn_value and arn_value not in ("N/A", "NA", "UNKNOWN")
+                        and submit_level(status) >= 2)
+        # original_author marks the PC that FILED the return: only a complete filing (ARN + at
+        # least submitted) gets one. An in-progress row (draft / form selected) must not, or the
+        # PC that merely opened the form would own the author when another PC submits it.
+        orig_author = None if (is_history_record or not is_filed) else device_name()
         payload = {
             "source": "sgt",
             "session_id": f"SGT-{s.session_id}",
