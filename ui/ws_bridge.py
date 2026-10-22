@@ -38,6 +38,7 @@ scheme itself cannot be forged by web content), so it is a strict improvement ov
 """
 
 import json
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -140,6 +141,7 @@ class WSBridge(QObject):
         # sends carries one); the socket itself never goes into a message dict, so nothing here
         # risks being json.dumps()'d by a signal handler that logs/echoes the message it received.
         self._pending_replies: dict[str, QWebSocket] = {}
+        self._last_sca_arm: Optional[dict] = None
         # The server may be started before the app has connected its signal handlers; messages
         # received in that window are held here and replayed by mark_ready().
         self._ready = False
@@ -294,6 +296,7 @@ class WSBridge(QObject):
             self._kinds[sock] = self._browser_kind(sock, origin)
             sock.textMessageReceived.connect(lambda text, s=sock: self._on_text_message(s, text))
             sock.disconnected.connect(lambda s=sock: self._on_disconnected(s))
+            self._replay_sca_arm(sock)
 
     @staticmethod
     def _browser_kind(sock: QWebSocket, origin: str) -> str:
@@ -395,6 +398,35 @@ class WSBridge(QObject):
 
     # ------------------------------------------------------------------ sending
 
+    def _remember_sca_arm(self, payload: dict):
+        """Cache (or clear) the live SCA arm for _replay_sca_arm(). Runs on the Qt thread."""
+        mtype = payload.get("type")
+        if mtype == "SCA_ARM_REQUEST":
+            arm = payload.get("arm")
+            expires_at = arm.get("expires_at") if isinstance(arm, dict) else None
+            live = (isinstance(expires_at, (int, float))
+                    and not isinstance(expires_at, bool)
+                    and expires_at > time.time() * 1000)
+            self._last_sca_arm = payload if live else None
+        elif mtype == "SCA_DISARM_REQUEST":
+            self._last_sca_arm = None
+
+    def _replay_sca_arm(self, sock: QWebSocket):
+        """Arms a browser that connects after arm_sca() broadcast (its service worker may have
+        been asleep while another browser acknowledged the arm and stopped the retry loop)."""
+        payload = self._last_sca_arm
+        if not payload:
+            return
+        arm = payload.get("arm")
+        try:
+            expires_at = float((arm or {}).get("expires_at") or 0)
+        except (TypeError, ValueError):
+            expires_at = 0
+        if expires_at <= time.time() * 1000:
+            self._last_sca_arm = None
+            return
+        self._send(sock, payload)
+
     def _send(self, sock: QWebSocket, payload: dict):
         try:
             sock.sendTextMessage(json.dumps(payload))
@@ -432,6 +464,7 @@ class WSBridge(QObject):
         every QWebSocket in self._sockets belongs to the Qt thread - so the actual send is
         marshalled there via _call_on_qt_thread if this isn't already that thread."""
         def _do():
+            self._remember_sca_arm(payload)
             sent = 0
             for sock in list(self._sockets):
                 self._send(sock, payload)

@@ -224,6 +224,59 @@ def test_send_first_with_nobody_connected(bridge):
     assert bridge.send_first({"type": "autofill"}) is False
 
 
+# ------------------------------------------------------------------ late SCA arm replay
+def _live_arm(cmd="cmd-late", ttl_ms=60_000):
+    return {"type": "SCA_ARM_REQUEST", "command_id": cmd, "sent_at": int(time.time() * 1000),
+            "arm": {"expires_at": int(time.time() * 1000) + ttl_ms}}
+
+
+def test_a_browser_connecting_late_still_receives_the_live_sca_arm(bridge):
+    assert bridge.broadcast(_live_arm()) == 0
+    late = MagicMock()
+    bridge._replay_sca_arm(late)
+    late.sendTextMessage.assert_called_once()
+    assert json.loads(late.sendTextMessage.call_args[0][0])["command_id"] == "cmd-late"
+
+
+def test_a_new_socket_is_armed_as_soon_as_it_connects(bridge):
+    bridge.broadcast(_live_arm("cmd-connect"))
+    sock = MagicMock()
+    sock.origin.return_value = "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+    server = MagicMock()
+    server.hasPendingConnections.side_effect = [True, False]
+    server.nextPendingConnection.return_value = sock
+    bridge._server = server
+
+    bridge._on_new_connection()
+
+    sock.sendTextMessage.assert_called_once()
+    assert json.loads(sock.sendTextMessage.call_args[0][0])["command_id"] == "cmd-connect"
+
+
+def test_an_expired_sca_arm_is_not_replayed(bridge):
+    bridge.broadcast(_live_arm(ttl_ms=-1))
+    late = MagicMock()
+    bridge._replay_sca_arm(late)
+    late.sendTextMessage.assert_not_called()
+    assert bridge._last_sca_arm is None
+
+
+def test_a_disarm_forgets_the_cached_sca_arm(bridge):
+    bridge.broadcast(_live_arm())
+    bridge.broadcast({"type": "SCA_DISARM_REQUEST"})
+    late = MagicMock()
+    bridge._replay_sca_arm(late)
+    late.sendTextMessage.assert_not_called()
+
+
+def test_other_broadcasts_keep_the_cached_sca_arm(bridge):
+    bridge.broadcast(_live_arm())
+    bridge.broadcast({"type": "update_settings", "sca_enabled": True})
+    late = MagicMock()
+    bridge._replay_sca_arm(late)
+    late.sendTextMessage.assert_called_once()
+
+
 # ------------------------------------------------------------------ cross-thread safety
 # automation.py calls broadcast()/send_first() from plain threading.Thread workers (autofill
 # push, SCA arming, extension settings pushes - see _attempt_send/arm_sca/

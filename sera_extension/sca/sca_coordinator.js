@@ -21,6 +21,7 @@
   const STORE_KEY = "scaArmV2";
   const REQUEST_TIMEOUT_MS = 15000;
   const FIELD_WAIT_MS = 90000;   // Income Tax: PAN page, Continue, then the password page
+  const CANDIDATE_REPLAY_MS = 15000;   // how long a paste waits for a late arm (worker wake)
   const UID_SHAPE = /^(?:[A-Z]{5}[0-9]{4}[A-Z]|[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]|[A-Z0-9][A-Z0-9._@:/-]{2,79})$/;
 
   // ---------------------------------------------------------------- pure helpers (tested)
@@ -246,6 +247,7 @@
     let loaded = false;
     const pending = new Map();      // request_id -> {tabId, frameId, service, key, timer}
     const busy = new Set();         // arm:tab:frame:service with a request/fill under way or done
+    const candidates = new Map();   // tab:frame -> {candidate, sender, at}, see rememberCandidate
     const seenCommands = [];
 
     function remember(cmdId) {
@@ -289,6 +291,31 @@
       if (old) report({ type: "SCA_STATE", arm_id: old.arm_id, state: state || "IDLE" });
     }
 
+    // A woken-up service worker (or a desktop app that is still starting) has no arm yet when
+    // the page's paste arrives: the arm retry lands a moment later. Keep the id the user
+    // already entered for a few seconds so the arm can still act on it, instead of losing the
+    // first paste after every Windows/app start (the second paste always worked).
+    function rememberCandidate(req, sender) {
+      const frameId = typeof sender.frameId === "number" ? sender.frameId : 0;
+      const key = `${sender.tab.id}:${frameId}`;
+      candidates.set(key, {
+        candidate: req.candidate, at: now(),
+        sender: { tab: { id: sender.tab.id, url: sender.tab.url }, frameId, url: sender.url },
+      });
+      const cutoff = now() - CANDIDATE_REPLAY_MS;
+      for (const [k, v] of candidates) if (v.at < cutoff) candidates.delete(k);
+      while (candidates.size > 16) candidates.delete(candidates.keys().next().value);
+    }
+
+    async function replayCandidates() {
+      const cutoff = now() - CANDIDATE_REPLAY_MS;
+      for (const [key, entry] of Array.from(candidates)) {
+        candidates.delete(key);
+        if (entry.at < cutoff) continue;
+        try { await onCandidate({ candidate: entry.candidate }, entry.sender, true); } catch (_) {}
+      }
+    }
+
     // Desktop -> extension. Returns true when the message was an SCA one.
     async function handleDesktopMessage(msg) {
       if (!msg || typeof msg.type !== "string" || !msg.type.startsWith("SCA_")) return false;
@@ -308,6 +335,7 @@
           busy.clear();
           await saveArm();
           report({ type: "SCA_STATE", arm_id: arm.arm_id, state: "ARMED" });
+          await replayCandidates();
           return true;
         }
         case "SCA_DISARM_REQUEST":
@@ -396,15 +424,21 @@
     }
 
     // Page -> extension: something shaped like an id was entered. Returns a short status (tests).
-    async function onCandidate(req, sender) {
+    async function onCandidate(req, sender, replayed) {
       if (!sender || !sender.tab || typeof sender.tab.id !== "number") return "no-tab";
       const settings = await env.getSettings();
       if (settings.scaEnabled === false) return "disabled";
       // An SMTI/MECP card open in THIS tab keeps SCA quiet here only; other tabs work normally.
       if (settings.assistTabs && settings.assistTabs[sender.tab.id]) return "assist-open-in-tab";
       const a = await loadArm();
-      if (!a) return "not-armed";
-      if (!candidateMatches(a, req.candidate)) return "not-this-client";
+      if (!a) {
+        if (!replayed) rememberCandidate(req, sender);
+        return "not-armed";
+      }
+      if (!candidateMatches(a, req.candidate)) {
+        if (!replayed) rememberCandidate(req, sender);
+        return "not-this-client";
+      }
       const frameHost = hostOf(sender.url || sender.tab.url);
       const frameId = typeof sender.frameId === "number" ? sender.frameId : 0;
       const service = pickService(a, frameHost, settings.allowedDomains);

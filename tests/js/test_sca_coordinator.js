@@ -117,6 +117,50 @@ test("another client's id does nothing", async () => {
   assert.strictEqual(await c.onCandidate({ candidate: "XYZAB9876C" }, portalTab()), "not-this-client");
 });
 
+// A woken-up worker (or a desktop app still starting) has no arm when the first paste arrives.
+// The arm retry follows a moment later; the id the user already entered must still be acted on.
+test("an id pasted while unarmed is handled when the arm arrives a moment later", async () => {
+  const env = makeEnv();
+  const c = SCA.createCoordinator(env);
+  assert.strictEqual(await c.onCandidate({ candidate: "ABCPD1234E" }, portalTab()), "not-armed");
+  assert.ok(!env.native.some(m => m.type === "SCA_PASSWORD_REQUEST"));
+  await c.handleDesktopMessage({ type: "SCA_ARM_REQUEST", command_id: "cmd_late", arm: makeArm() });
+  const req = env.native.find(m => m.type === "SCA_PASSWORD_REQUEST");
+  assert.ok(req, "the late arm should act on the id the user already pasted");
+  assert.strictEqual(req.service_id, 1);
+});
+
+test("a late arm for a different client does not act on the pasted id", async () => {
+  const env = makeEnv();
+  const c = SCA.createCoordinator(env);
+  await c.onCandidate({ candidate: "ABCPD1234E" }, portalTab());
+  await c.handleDesktopMessage({ type: "SCA_ARM_REQUEST", command_id: "cmd_late_other",
+    arm: makeArm({ arm_id: "arm_other", matched_uid: "XYZAB9876C", candidate_uids: ["XYZAB9876C"] }) });
+  assert.ok(!env.native.some(m => m.type === "SCA_PASSWORD_REQUEST"));
+});
+
+test("an old pasted id is not replayed when an arm arrives much later", async () => {
+  const env = makeEnv();
+  let t = 1000000;
+  env.now = () => t;
+  const c = SCA.createCoordinator(env);
+  await c.onCandidate({ candidate: "ABCPD1234E" }, portalTab());
+  t += 16000;
+  await c.handleDesktopMessage({ type: "SCA_ARM_REQUEST", command_id: "cmd_stale", arm: makeArm() });
+  assert.ok(!env.native.some(m => m.type === "SCA_PASSWORD_REQUEST"));
+});
+
+test("a replayed id shows the widget in widget mode, and repeating the paste asks only once", async () => {
+  const env = makeEnv({ scaMode: "widget" });
+  const c = SCA.createCoordinator(env);
+  assert.strictEqual(await c.onCandidate({ candidate: "ABCPD1234E" }, portalTab()), "not-armed");
+  await c.handleDesktopMessage({ type: "SCA_ARM_REQUEST", command_id: "cmd_late_widget",
+    arm: makeArm({ arm_id: "arm_widget", sca_mode: "widget" }) });
+  assert.ok(env.scripts.some(s => s.func === SCA.showWidgetInPage));
+  assert.ok(!env.native.some(m => m.type === "SCA_PASSWORD_REQUEST"));
+  assert.strictEqual(await c.onCandidate({ candidate: "ABCPD1234E" }, portalTab()), "already-handled");
+});
+
 test("an expired arm does nothing", async () => {
   const env = makeEnv();
   const c = await armed(env, makeArm({ expires_at: Date.now() + 5 }));
