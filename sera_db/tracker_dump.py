@@ -1396,6 +1396,20 @@ class TrackerDumpMixin:
                     "UPDATE tracker_dump SET notes = ?, screenshot_path = ?, screenshot_path_2 = ? WHERE id = ?",
                     (notes, screenshot_path, screenshot_path_2, dump_id)
                 )
+
+            # Also store notes inside raw_payload_json so it connects seamlessly to DRS and sync
+            try:
+                row = conn.execute("SELECT raw_payload_json FROM tracker_dump WHERE id = ?", (dump_id,)).fetchone()
+                if row and row[0]:
+                    payload = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                    if isinstance(payload, dict):
+                        payload["notes"] = notes
+                        conn.execute(
+                            "UPDATE tracker_dump SET raw_payload_json = ? WHERE id = ?",
+                            (json.dumps(payload), dump_id)
+                        )
+            except Exception:
+                pass
             return cur.rowcount > 0
 
     def delete_tracker_dump(self, dump_id: int) -> bool:

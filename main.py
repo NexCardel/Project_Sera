@@ -1215,6 +1215,11 @@ class SeraApp:
                 _ltt_monthly.schedule_export(self.db)
             except Exception:
                 pass
+            try:
+                from core.drs.export import schedule_drs_export
+                schedule_drs_export(self.db)
+            except Exception:
+                pass
 
             return results[0] if len(results) == 1 else {"datasets": results, "count": len(results)}
         except Exception as e:
@@ -1781,6 +1786,7 @@ class SeraApp:
         sidebar.action_import_csv.connect(self.admin_win._on_import_csv)
         sidebar.action_manage_clients.connect(self._show_manage_clients)
         sidebar.action_tracker_dump.connect(self._show_tracker_dump)
+        sidebar.action_open_drs.connect(self._show_drs_dialog)
         sidebar.action_audit_log.connect(self.admin_win._on_view_audit_log)
         sidebar.action_manage_staff.connect(self.admin_win._on_open_sera_sync)
         sidebar.action_open_sera_sync.connect(self.admin_win._on_open_sera_sync)
@@ -2319,6 +2325,11 @@ class SeraApp:
             QTimer.singleShot(0, self._load_tracker_after_switch)
         self.shell.slide_panel.slide_out()
 
+    def _show_drs_dialog(self):
+        from ui.dialogs.drs_config_dialog import DRSConfigDialog
+        dlg = DRSConfigDialog(self.db, self.shell)
+        dlg.exec()
+
     def _load_tracker_after_switch(self):
         from core.memlog import timed
         with timed("loading the tracker"):
@@ -2444,6 +2455,11 @@ class SeraApp:
                 # and tracker list read are a local cache of tracker_dump that sync does not touch:
                 # rebuild them, rewrite the LTT sheet, then refresh the windows with the new data.
                 try:
+                    try:
+                        from core.drs.export import schedule_drs_export
+                        schedule_drs_export(self.db)
+                    except Exception:
+                        pass
                     from core.ltt import monthly as _ltt_monthly
                     _ltt_monthly.refresh_after_sync(
                         db, on_done=lambda: self.sync_bridge.engine_synced_signal.emit(

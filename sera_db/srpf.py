@@ -880,6 +880,8 @@ class SrpfMixin:
                     except Exception:
                         pass
 
+            success = False
+
             # 1. Primary write to client_container_notes
             try:
                 conn.execute("""
@@ -892,20 +894,38 @@ class SrpfMixin:
                         screenshot_path_2 = CASE WHEN ? = 1 THEN client_container_notes.screenshot_path_2 ELSE excluded.screenshot_path_2 END,
                         updated_at = excluded.updated_at
                 """, (identity_key, client_id, notes, screenshot_path, slot2_value, now_str, keep_slot2))
+                success = True
             except Exception as e:
                 print(f"[database] Warning: Failed to write client_container_notes: {e}")
 
-            # 2. Compatibility mirror to client_raw_containers and client_raw_container_light
+            # 2. Compatibility mirror to client_raw_containers, its light cache, and the
+            #    filing_history JSON so notes also travel through sync and DRS.
             try:
-                conn.execute(
-                    "UPDATE client_raw_containers SET notes = ?, screenshot_path = ?, "
-                    "screenshot_path_2 = CASE WHEN ? = 1 THEN screenshot_path_2 ELSE ? END WHERE identity_key = ?",
-                    (notes, screenshot_path, keep_slot2, slot2_value, identity_key)
-                )
+                row = conn.execute("SELECT filing_history FROM client_raw_containers WHERE identity_key = ?", (identity_key,)).fetchone()
+                hist = None
+                if row and row[0]:
+                    hist = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                if isinstance(hist, list) and hist:
+                    hist[-1]["notes"] = notes
+                    new_hist_json = json.dumps(hist)
+                    cur = conn.execute(
+                        "UPDATE client_raw_containers SET notes = ?, screenshot_path = ?, "
+                        "screenshot_path_2 = CASE WHEN ? = 1 THEN screenshot_path_2 ELSE ? END, "
+                        "filing_history = ? WHERE identity_key = ?",
+                        (notes, screenshot_path, keep_slot2, slot2_value, new_hist_json, identity_key)
+                    )
+                else:
+                    cur = conn.execute(
+                        "UPDATE client_raw_containers SET notes = ?, screenshot_path = ?, "
+                        "screenshot_path_2 = CASE WHEN ? = 1 THEN screenshot_path_2 ELSE ? END "
+                        "WHERE identity_key = ?",
+                        (notes, screenshot_path, keep_slot2, slot2_value, identity_key)
+                    )
                 conn.execute("UPDATE client_raw_container_light SET notes = ? WHERE identity_key = ?", (notes, identity_key))
+                success = success or cur.rowcount > 0
             except Exception:
                 pass
-            return True
+            return success
 
     # ---------------- Capture -> MCL mapping (client record enrichment) ----------------
 

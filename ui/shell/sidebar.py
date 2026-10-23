@@ -133,6 +133,7 @@ class Sidebar(QFrame):
     action_display_scale = Signal()
     action_manage_clients = Signal()
     action_tracker_dump = Signal()
+    action_open_drs = Signal()
     action_audit_log = Signal()
     action_manage_staff = Signal()
     
@@ -272,6 +273,7 @@ class Sidebar(QFrame):
             "Manage Clients", self.action_manage_clients, parent_layout=self.l_clients
         )
         self.btn_tracker_dump = self._create_sub_nav_button("Tracker Dump", self.action_tracker_dump, parent_layout=self.l_clients)
+        self.btn_drs_system = self._create_sub_nav_button("DRS System", self.action_open_drs, parent_layout=self.l_clients)
         self.btn_audit = self._create_admin_sub_nav_button("Audit Log", self.action_audit_log, parent_layout=self.l_clients)
 
         # --- Other Tabs ---
