@@ -970,6 +970,9 @@ class SeraApp:
 
     def _process_extension_result(self, msg: dict):
         print(f"[main._handle_extension_result] Processing incoming message: {msg}")
+        # VSDC247 hands over the frame it read as evidence. It must never be stored inside the
+        # payload (it is a temp file path); it is copied into Notes & Media below.
+        evidence_path = msg.pop("_evidence_screenshot", None)
         # Every stored capture says which PC produced it (the name from this PC's
         # device_identity.txt), inside its own payload.
         try:
@@ -1192,6 +1195,19 @@ class SeraApp:
                     filing_type=dataset_filing_type,
                     dataset_key=dataset_msg.get("dataset_key") or dataset_raw.get("dataset_key")
                 )
+                if evidence_path:
+                    try:
+                        from core.vsdc.vsdc247_evidence import attach_capture_evidence
+                        rel = attach_capture_evidence(
+                            self.db, evidence_path, result.get("id"),
+                            client_id=result.get("client_id"),
+                            unassigned_identity=result.get("unassigned_identity"),
+                            arn=dataset_arn,
+                        )
+                        if rel:
+                            print(f"[VSDC247] evidence screenshot saved to {rel}")
+                    except Exception as e:
+                        print(f"[VSDC247] evidence screenshot could not be attached: {e}")
                 results.append(result)
             print(f"[main._handle_extension_result] Successfully inserted {len(results)} tracker_dump dataset row(s): {results}")
             try:

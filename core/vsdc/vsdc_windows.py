@@ -158,6 +158,17 @@ def _rect(user32, dwmapi, hwnd: int) -> Rect:
     return rc.left, rc.top, rc.right, rc.bottom
 
 
+def window_rect(hwnd: int) -> Rect:
+    """The whole window as drawn on screen, for callers that need the browser frame too
+    (evidence screenshots include the title bar, tabs and address bar, not just the page)."""
+    user32 = ctypes.windll.user32
+    try:
+        dwmapi = ctypes.windll.dwmapi
+    except OSError:
+        dwmapi = None
+    return _rect(user32, dwmapi, int(hwnd))
+
+
 def _cloaked(dwmapi, hwnd: int) -> bool:
     if dwmapi is None:
         return False

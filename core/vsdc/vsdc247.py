@@ -331,6 +331,7 @@ class Detection:
     has_success_wording: bool = False
     usual_shape: bool = True        # False: an ARN-labelled number that breaks the usual ARN shape
     page_url: str = ""              # where it was seen (query string stripped); set by the router
+    evidence_screenshot: str = ""   # temp PNG of the frame that was read; set by the router
 
     @property
     def evidence(self) -> Dict[str, Any]:

@@ -9,9 +9,12 @@ the SDC crosshair catalog, and delegates to the visual OCR and assembler pipelin
 import ctypes
 from ctypes import wintypes
 import os
+import tempfile
 import time
 import re
 from typing import Dict, List, Optional, Tuple, Any, Callable
+
+from PIL import Image
 
 import comtypes.client
 from .vsdc_crosshairs import match_url_crosshair, CrosshairDefinition, ALL_CROSSHAIRS, get_crosshair
@@ -295,6 +298,8 @@ class VSDCRouter:
         # Identifiers already announced as merely "possible", so a probable candidate that
         # stays on screen prompts once, not on every tick.
         self._prompted_ids: Dict[str, float] = {}
+        # hwnd -> username whose login frame was already saved as evidence (second Notes & Media slot).
+        self._login_evidence: Dict[int, str] = {}
         # One screenshot per tick, shared by the route handlers and VSDC247.
         self._tick_capture: Optional[Tuple[int, Any]] = None
         self._scope_ok_this_tick: bool = False
@@ -730,6 +735,16 @@ class VSDCRouter:
             )
             if obs.get("page_kind") == "gst_login":
                 self._verifier_stats["logins"] += 1
+                login_user = obs.get("username") or ""
+                if login_user:
+                    # The frame read at the moment the Username field is filled is the login
+                    # evidence. Save it once per (window, username); a refined/OCR-changed
+                    # username replaces the earlier auto frame. No password is read or logged.
+                    if self._login_evidence.get(hwnd) != login_user:
+                        self._capture_login_evidence(hwnd, login_user, img, obs.get("client_id"))
+                        self._login_evidence[hwnd] = login_user
+                else:
+                    self._login_evidence.pop(hwnd, None)
                 if obs.get("status") == "login_linked":
                     user = obs.get("username") or (self._verifier.client_for_window(hwnd) if self._verifier else "") or ""
                     key = f"verifier_login:{hwnd}:{user}"
@@ -743,6 +758,9 @@ class VSDCRouter:
                     if key not in self._prompted_ids:
                         self._prompted_ids[key] = now
                         print(f"[VSDC247-V] GST login username '{cand_user}' seen on window {hwnd} (awaiting second frame)")
+            else:
+                # Left the login page: a later login in this window is a new session.
+                self._login_evidence.pop(hwnd, None)
             if obs.get("status") == "saved":
                 self._verifier_stats["arns_seen"] += 1
 
@@ -973,12 +991,93 @@ class VSDCRouter:
                     self._prompted_ids[key] = time.time()
                     print(f"[VSDC247] not a submission ({'; '.join(det.vetoes)}): {det.identifier}")
             else:
-                payload = self._handle_247_detection(det)
+                payload = self._handle_247_detection(det, img, hwnd)
         if payload is None:
             payload = self._attribute_pending_247_orphans()
         return payload
 
-    def _handle_247_detection(self, det) -> Optional[Dict[str, Any]]:
+    def _save_login_evidence(self, username: str, img, hwnd: int = 0) -> str:
+        """Saves the exact login frame that was OCR'd (username filled, password not read)."""
+        try:
+            if not isinstance(img, Image.Image):
+                return ""
+            out_dir = os.path.join(tempfile.gettempdir(), "sera_vsdc247_evidence")
+            os.makedirs(out_dir, exist_ok=True)
+            cutoff = time.time() - 24 * 3600
+            try:
+                for name in os.listdir(out_dir):
+                    old = os.path.join(out_dir, name)
+                    if os.path.isfile(old) and os.path.getmtime(old) < cutoff:
+                        os.remove(old)
+            except OSError:
+                pass
+            stem = re.sub(r"[^A-Za-z0-9]+", "", str(username or ""))[:40] or "login"
+            path = os.path.join(out_dir, f"login_{stem}_{int(time.time() * 1000)}.png")
+            img.save(path, "PNG")
+            return path
+        except Exception as e:
+            print(f"[VSDC247-V] login evidence screenshot could not be saved: {e}")
+            return ""
+
+    def _capture_login_evidence(self, hwnd: int, username: str, img, client_id=None) -> str:
+        """Copies the login frame into Notes & Media slot 2 for the matched client. Never logs
+        the password (only the username and the saved path)."""
+        path = self._save_login_evidence(username, img, hwnd)
+        if not path:
+            return ""
+        rel_path = ""
+        db = getattr(self, "db", None)
+        if db is not None:
+            try:
+                from .vsdc247_evidence import attach_login_evidence
+                rel_path = attach_login_evidence(db, path, client_id=client_id, username=username)
+            except Exception as e:
+                vsdc_diag.note(f"[VSDC247-V] login evidence could not be attached: {e}")
+        if rel_path:
+            vsdc_diag.note(f"[VSDC247-V] login screenshot for '{username}': {rel_path}")
+        else:
+            vsdc_diag.note(f"[VSDC247-V] login screenshot for '{username}' kept at {path}")
+        return rel_path
+
+    def _save_247_evidence(self, identifier: str, img, hwnd: int) -> str:
+        """
+        Writes the frame VSDC247 actually read to a temp PNG and returns its path. The whole
+        browser window is preferred (title bar, tabs and address bar included): that is the
+        evidence the Notes & Media tab shows. Falls back to the frame handed to the scanner.
+        The main thread copies this into the app's media folder and records it on the capture.
+        """
+        try:
+            shot = None
+            try:
+                if hwnd:
+                    shot = self.ocr.capture_window_full(hwnd)
+            except Exception:
+                shot = None
+            if not isinstance(shot, Image.Image):
+                shot = img
+            if not isinstance(shot, Image.Image):
+                return ""
+
+            out_dir = os.path.join(tempfile.gettempdir(), "sera_vsdc247_evidence")
+            os.makedirs(out_dir, exist_ok=True)
+            cutoff = time.time() - 24 * 3600
+            try:
+                for name in os.listdir(out_dir):
+                    old = os.path.join(out_dir, name)
+                    if os.path.isfile(old) and os.path.getmtime(old) < cutoff:
+                        os.remove(old)
+            except OSError:
+                pass
+
+            stem = re.sub(r"[^A-Za-z0-9]+", "", str(identifier or ""))[:40] or "capture"
+            path = os.path.join(out_dir, f"{stem}_{int(time.time() * 1000)}.png")
+            shot.save(path, "PNG")
+            return path
+        except Exception as e:
+            print(f"[VSDC247] evidence screenshot could not be saved: {e}")
+            return ""
+
+    def _handle_247_detection(self, det, img=None, hwnd: int = 0) -> Optional[Dict[str, Any]]:
         now = time.time()
         ident = det.identifier
         source_tag = " • VSDC247 (Visual)"
@@ -1002,8 +1101,13 @@ class VSDCRouter:
                                      f"{ident} • confidence {det.score}% • check it in the tracker{source_tag}")
             return None
 
-        # CERTAIN: save it, whatever else is or is not known yet.
+        # CERTAIN: save it, whatever else is or is not known yet. Keep the frame that was read
+        # as evidence; the main thread copies it into Notes & Media once the row is in the DB.
+        shot = self._save_247_evidence(ident, img, hwnd)
+        det.evidence_screenshot = shot
         payload = self.assembler.build_247_payload(det)
+        if shot:
+            payload["_evidence_screenshot"] = shot
         self._dispatched_ids[ident] = now
         print(f"[VSDC247] captured {det.kind} {ident} score={det.score} ({'; '.join(det.reasons)})")
         who = self.assembler.client_name or self.assembler.client_pan or ""
@@ -1031,6 +1135,9 @@ class VSDCRouter:
         ident, det = next(iter(self._pending_247_orphans.items()))
         del self._pending_247_orphans[ident]
         payload = self.assembler.build_247_payload(det)
+        shot = getattr(det, "evidence_screenshot", "") or ""
+        if shot and os.path.exists(shot):
+            payload["_evidence_screenshot"] = shot
         if not payload.get("identity_resolved"):
             return None
         print(f"[VSDC247] attributed {ident} to {self.assembler.client_name or self.assembler.client_pan}")

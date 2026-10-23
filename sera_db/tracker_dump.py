@@ -363,9 +363,32 @@ class TrackerDumpMixin:
                         "capture_method": capture_method, "status": status, "created_at": now, "duplicate": True
                     }
 
+            preserved_raw_notes = None
+            preserved_raw_screenshot = None
+            preserved_raw_screenshot_2 = None
+            media_source_ids = []
+
             # Exact Dataset Matching: Unconditionally purge ALL older duplicates for this dataset_key
             # Monotonicity Guard: A submitted status must NEVER demote back to 'Not Submitted'!
             if final_dataset_key and not final_dataset_key.endswith(":UNKNOWN:FORM:CURRENT"):
+                # Snapshot user notes/screenshots before purging duplicate rows
+                try:
+                    for m_id, m_notes, m_spath, m_spath2 in r_conn.execute(
+                        f"SELECT id, notes, screenshot_path, screenshot_path_2 FROM tracker_dump WHERE dataset_key = ? "
+                        f"AND ((notes IS NOT NULL AND notes != '') OR (screenshot_path IS NOT NULL AND screenshot_path != '') "
+                        f"OR (screenshot_path_2 IS NOT NULL AND screenshot_path_2 != '')) "
+                        f"ORDER BY created_at DESC, {order_sec}, id DESC",
+                        (final_dataset_key,)
+                    ).fetchall():
+                        media_source_ids.append(m_id)
+                        if preserved_raw_notes is None and m_notes:
+                            preserved_raw_notes = m_notes
+                        if preserved_raw_screenshot is None and m_spath:
+                            preserved_raw_screenshot = m_spath
+                        if preserved_raw_screenshot_2 is None and m_spath2:
+                            preserved_raw_screenshot_2 = m_spath2
+                except Exception:
+                    pass
                 ex_row = r_conn.execute(
                     f"SELECT status, arn_number, raw_payload_json FROM tracker_dump WHERE dataset_key = ? ORDER BY created_at DESC, {order_sec}, id DESC LIMIT 1",
                     (final_dataset_key,)
@@ -442,6 +465,30 @@ class TrackerDumpMixin:
                                 "duplicate": True, "dataset_key": filed_row[4]
                             }
 
+                    # Snapshot notes/screenshots from drafts about to be purged
+                    try:
+                        purge_media_sql = f"""
+                            SELECT id, notes, screenshot_path, screenshot_path_2 FROM tracker_dump
+                            WHERE portal = ?
+                              AND period_label = ?
+                              AND (status IN ('Not Submitted', 'Draft', 'Visited / In Progress', 'Draft / Personal Info', 'Form Selected', 'Pending') OR status IS NULL OR status = '')
+                              AND ({' OR '.join(assessee_conds)})
+                              AND {same_engine}
+                              AND ((notes IS NOT NULL AND notes != '') OR (screenshot_path IS NOT NULL AND screenshot_path != '')
+                                   OR (screenshot_path_2 IS NOT NULL AND screenshot_path_2 != ''))
+                            ORDER BY created_at DESC, {order_sec}, id DESC
+                        """
+                        for m_id, m_notes, m_spath, m_spath2 in r_conn.execute(purge_media_sql, assessee_params).fetchall():
+                            media_source_ids.append(m_id)
+                            if preserved_raw_notes is None and m_notes:
+                                preserved_raw_notes = m_notes
+                            if preserved_raw_screenshot is None and m_spath:
+                                preserved_raw_screenshot = m_spath
+                            if preserved_raw_screenshot_2 is None and m_spath2:
+                                preserved_raw_screenshot_2 = m_spath2
+                    except Exception:
+                        pass
+
                     # Purge prior unsubmitted drafts for this assessee & period
                     purge_sql = f"""
                         DELETE FROM tracker_dump
@@ -476,6 +523,18 @@ class TrackerDumpMixin:
                                 c_raw = c_obj.get("raw_payload") if isinstance(c_obj.get("raw_payload"), dict) else {}
                                 c_url = c_obj.get("page_key") or c_obj.get("url") or c_raw.get("page_key") or c_raw.get("url")
                                 if c_url and c_url.strip().split("?")[0].rstrip("/").lower() == page_url_norm:
+                                    try:
+                                        m_row = r_conn.execute("SELECT notes, screenshot_path, screenshot_path_2 FROM tracker_dump WHERE id = ?", (r_id,)).fetchone()
+                                        if m_row:
+                                            media_source_ids.append(r_id)
+                                            if preserved_raw_notes is None and m_row[0]:
+                                                preserved_raw_notes = m_row[0]
+                                            if preserved_raw_screenshot is None and m_row[1]:
+                                                preserved_raw_screenshot = m_row[1]
+                                            if preserved_raw_screenshot_2 is None and m_row[2]:
+                                                preserved_raw_screenshot_2 = m_row[2]
+                                    except Exception:
+                                        pass
                                     r_conn.execute("DELETE FROM tracker_dump WHERE id = ?", (r_id,))
                                     is_replaced = True
                                     break
@@ -489,6 +548,17 @@ class TrackerDumpMixin:
                 (valid_id, unassigned_identity, service_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, now, final_dataset_key)
             )
             dump_id = cur.lastrowid
+
+            if (preserved_raw_notes is not None or preserved_raw_screenshot is not None
+                    or preserved_raw_screenshot_2 is not None):
+                upd_cur = r_conn.execute(
+                    "UPDATE tracker_dump SET notes = COALESCE(?, notes), screenshot_path = COALESCE(?, screenshot_path), "
+                    "screenshot_path_2 = COALESCE(?, screenshot_path_2) WHERE id = ?",
+                    (preserved_raw_notes, preserved_raw_screenshot, preserved_raw_screenshot_2, dump_id)
+                )
+                if upd_cur.rowcount == 0:
+                    print(f"[database] insert_tracker_dump: WARNING media could not be re-applied to new row id={dump_id} "
+                          f"for dataset_key={final_dataset_key!r} (old source ids={media_source_ids})")
 
             # Update SRPF Unified Container (Key normalized by client_id if registered)
             if valid_id:
@@ -901,16 +971,30 @@ class TrackerDumpMixin:
 
         # 3. Update tracker_dump and rebuild client_raw_containers cleanly
         with self._connect_raw() as r_conn:
-            # notes/screenshot_path are user-entered, not derived from tracker_dump,
-            # so the DELETE below must not lose them (they're re-applied by identity_key
-            # once the rebuild is done).
-            preserved_notes = {
-                row[0]: (row[1], row[2])
+            # notes/screenshots are user-entered, not derived from tracker_dump.
+            # Preserve from client_container_notes (stable primary table) and client_raw_containers (cache).
+            preserved_notes = {}
+            try:
                 for row in r_conn.execute(
-                    "SELECT identity_key, notes, screenshot_path FROM client_raw_containers "
-                    "WHERE notes IS NOT NULL OR screenshot_path IS NOT NULL"
-                ).fetchall()
-            }
+                    "SELECT identity_key, notes, screenshot_path, screenshot_path_2, client_id FROM client_container_notes "
+                    "WHERE (notes IS NOT NULL AND notes != '') OR (screenshot_path IS NOT NULL AND screenshot_path != '') "
+                    "OR (screenshot_path_2 IS NOT NULL AND screenshot_path_2 != '')"
+                ).fetchall():
+                    preserved_notes[row[0]] = (row[1], row[2], row[3], row[4])
+            except Exception:
+                pass
+
+            try:
+                for row in r_conn.execute(
+                    "SELECT identity_key, notes, screenshot_path, screenshot_path_2, client_id FROM client_raw_containers "
+                    "WHERE (notes IS NOT NULL AND notes != '') OR (screenshot_path IS NOT NULL AND screenshot_path != '') "
+                    "OR (screenshot_path_2 IS NOT NULL AND screenshot_path_2 != '')"
+                ).fetchall():
+                    if row[0] not in preserved_notes:
+                        preserved_notes[row[0]] = (row[1], row[2], row[3], row[4])
+            except Exception:
+                pass
+
             r_conn.execute("DELETE FROM client_raw_containers")
             r_conn.execute("DELETE FROM client_raw_container_light")
             for d in resolved_dumps:
@@ -934,6 +1018,9 @@ class TrackerDumpMixin:
                     )
                     updated_count += 1
 
+                # Prior container key before re-resolution
+                old_ckey = f"CLI-{d['client_id']:05d}" if d.get("client_id") else (d.get("unassigned_identity") or f"UNASSIGNED_{d['id']}")
+
                 # Container key: single key per registered client or candidate
                 if new_cid:
                     c_key = f"CLI-{new_cid:05d}"
@@ -941,6 +1028,31 @@ class TrackerDumpMixin:
                     c_key = cands[0]
                 else:
                     c_key = new_unassigned or f"UNASSIGNED_{d['id']}"
+
+                # Key migration in client_container_notes: if container key changed (e.g. PAN -> CLI-00005)
+                # and old key had notes/media while new key has none, carry over to new key.
+                if old_ckey != c_key and old_ckey in preserved_notes:
+                    old_n, old_s, old_s2, _ = preserved_notes.pop(old_ckey)
+                    if c_key not in preserved_notes:
+                        preserved_notes[c_key] = (old_n, old_s, old_s2, new_cid)
+                    from datetime import datetime
+                    now_iso = datetime.now().isoformat()
+                    try:
+                        r_conn.execute("DELETE FROM client_container_notes WHERE identity_key = ?", (old_ckey,))
+                        r_conn.execute("""
+                            INSERT INTO client_container_notes (identity_key, client_id, notes, screenshot_path, screenshot_path_2, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(identity_key) DO UPDATE SET
+                                client_id = COALESCE(excluded.client_id, client_container_notes.client_id),
+                                notes = CASE WHEN client_container_notes.notes IS NULL OR client_container_notes.notes = '' THEN excluded.notes ELSE client_container_notes.notes END,
+                                screenshot_path = CASE WHEN client_container_notes.screenshot_path IS NULL OR client_container_notes.screenshot_path = '' THEN excluded.screenshot_path ELSE client_container_notes.screenshot_path END,
+                                screenshot_path_2 = CASE WHEN client_container_notes.screenshot_path_2 IS NULL OR client_container_notes.screenshot_path_2 = '' THEN excluded.screenshot_path_2 ELSE client_container_notes.screenshot_path_2 END,
+                                updated_at = excluded.updated_at
+                        """, (c_key, new_cid, old_n, old_s, old_s2, now_iso))
+                        print(f"[database] re_resolve_all_tracker_dumps: notes/screenshot for identity_key={old_ckey!r} "
+                              f"could not be carried over under the old key (migrated to {c_key}); preserved in client_container_notes.")
+                    except Exception:
+                        pass
 
                 self._update_srpf_container(
                     r_conn,
@@ -958,21 +1070,33 @@ class TrackerDumpMixin:
                     }
                 )
 
-            for identity_key, (notes, screenshot_path) in preserved_notes.items():
+            from datetime import datetime
+            now_iso = datetime.now().isoformat()
+            for identity_key, val in preserved_notes.items():
+                notes, screenshot_path, screenshot_path_2 = val[0], val[1], val[2]
+                cid = val[3] if len(val) > 3 else None
+                try:
+                    r_conn.execute("""
+                        INSERT INTO client_container_notes (identity_key, client_id, notes, screenshot_path, screenshot_path_2, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(identity_key) DO UPDATE SET
+                            client_id = COALESCE(excluded.client_id, client_container_notes.client_id),
+                            notes = CASE WHEN client_container_notes.notes IS NULL OR client_container_notes.notes = '' THEN excluded.notes ELSE client_container_notes.notes END,
+                            screenshot_path = CASE WHEN client_container_notes.screenshot_path IS NULL OR client_container_notes.screenshot_path = '' THEN excluded.screenshot_path ELSE client_container_notes.screenshot_path END,
+                            screenshot_path_2 = CASE WHEN client_container_notes.screenshot_path_2 IS NULL OR client_container_notes.screenshot_path_2 = '' THEN excluded.screenshot_path_2 ELSE client_container_notes.screenshot_path_2 END,
+                            updated_at = excluded.updated_at
+                    """, (identity_key, cid, notes, screenshot_path, screenshot_path_2, now_iso))
+                except Exception:
+                    pass
+
                 cur = r_conn.execute(
-                    "UPDATE client_raw_containers SET notes = ?, screenshot_path = ? WHERE identity_key = ?",
-                    (notes, screenshot_path, identity_key)
+                    "UPDATE client_raw_containers SET notes = ?, screenshot_path = ?, screenshot_path_2 = ? WHERE identity_key = ?",
+                    (notes, screenshot_path, screenshot_path_2, identity_key)
                 )
                 r_conn.execute("UPDATE client_raw_container_light SET notes = ? WHERE identity_key = ?", (notes, identity_key))
                 if cur.rowcount == 0:
-                    # The identity_key this note was filed under no longer exists after
-                    # the rebuild (e.g. the underlying dumps re-resolved to a client, so
-                    # the container moved from an unassigned key to "CLI-00005"). There's
-                    # no reliable way to know which new row inherited it, so it's dropped;
-                    # this is logged rather than silent so support can trace a lost note.
-                    print(f"[database] re_resolve_all_tracker_dumps: notes/screenshot for "
-                          f"identity_key={identity_key!r} could not be carried over (no "
-                          f"container has that key after the rebuild); the note was lost.")
+                    print(f"[database] re_resolve_all_tracker_dumps: notes/screenshot for identity_key={identity_key!r} "
+                          f"could not be carried over (no container has that key after the rebuild); safely preserved in client_container_notes.")
 
         return updated_count
 
@@ -1124,15 +1248,27 @@ class TrackerDumpMixin:
 
     def get_tracker_dump_media(self, dump_id: int) -> dict:
         with self._connect_raw() as conn:
-            cur = conn.execute("SELECT notes, screenshot_path FROM tracker_dump WHERE id = ?", (dump_id,))
+            cur = conn.execute("SELECT notes, screenshot_path, screenshot_path_2 FROM tracker_dump WHERE id = ?", (dump_id,))
             row = cur.fetchone()
             if row:
-                return {"notes": row[0] or "", "screenshot_path": row[1] or ""}
-            return {"notes": "", "screenshot_path": ""}
+                return {"notes": row[0] or "", "screenshot_path": row[1] or "", "screenshot_path_2": row[2] or ""}
+            return {"notes": "", "screenshot_path": "", "screenshot_path_2": ""}
 
-    def save_tracker_dump_media(self, dump_id: int, notes: str, screenshot_path: str) -> bool:
+    def save_tracker_dump_media(self, dump_id: int, notes: str, screenshot_path: str,
+                                screenshot_path_2: str | None = None) -> bool:
+        """Saves notes and up to two screenshots. `screenshot_path_2=None` preserves the existing
+        second screenshot (so older callers cannot wipe it); pass "" to clear it."""
         with self._connect_raw() as conn:
-            cur = conn.execute("UPDATE tracker_dump SET notes = ?, screenshot_path = ? WHERE id = ?", (notes, screenshot_path, dump_id))
+            if screenshot_path_2 is None:
+                cur = conn.execute(
+                    "UPDATE tracker_dump SET notes = ?, screenshot_path = ? WHERE id = ?",
+                    (notes, screenshot_path, dump_id)
+                )
+            else:
+                cur = conn.execute(
+                    "UPDATE tracker_dump SET notes = ?, screenshot_path = ?, screenshot_path_2 = ? WHERE id = ?",
+                    (notes, screenshot_path, screenshot_path_2, dump_id)
+                )
             return cur.rowcount > 0
 
     def delete_tracker_dump(self, dump_id: int) -> bool:

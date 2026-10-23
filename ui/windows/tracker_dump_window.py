@@ -825,6 +825,540 @@ class AddClientFromCaptureDialog(QDialog):
             QMessageBox.critical(self, "Client Creation Failed", f"Could not create client: {e}")
 
 
+class NotesAndMediaDialog(QDialog):
+    """
+    Dedicated modal dialog for viewing, editing, and managing
+    client/filing notes and attached media screenshots.
+    """
+    def __init__(self, item_data: dict, db=None, is_container: bool = False, parent=None):
+        super().__init__(parent)
+        self.db = db
+        self.item_data = item_data
+        self.is_container = is_container or bool(item_data.get("filing_history"))
+
+        client_name = (
+            item_data.get("display_name")
+            or item_data.get("client_name")
+            or item_data.get("company_name")
+            or item_data.get("proprietor_name")
+            or "Client"
+        )
+        entity_key = item_data.get("identity_key") or item_data.get("pan") or item_data.get("arn_number") or ""
+        self.setWindowTitle(f"Notes & Media — {client_name}")
+        self.resize(880, 580)
+        self.setMinimumSize(720, 480)
+
+        self.setStyleSheet("""
+            QDialog { background-color: #171717; color: #F0F6FC; font-family: 'Segoe UI', sans-serif; }
+            QLabel { color: #F0F6FC; background: transparent; border: none; }
+            QLabel#DialogTitle { font-size: 16px; font-weight: 700; color: #FFFFFF; }
+            QLabel#DialogSubtitle { font-size: 11px; color: #8B949E; }
+            QLabel#SectionHeader { font-size: 11px; font-weight: 700; color: #8B949E; letter-spacing: 0.8px; }
+            QFrame#PaneFrame { background-color: #1E1E1E; border: 1px solid #2B2B2B; border-radius: 8px; }
+            QTextEdit {
+                background-color: #121212; color: #E6EDF3; font-size: 13px;
+                border: 1px solid #2B2B2B; border-radius: 6px; padding: 10px;
+                selection-background-color: #1A382B; selection-color: #FFFFFF;
+            }
+            QTextEdit:focus { border: 1px solid #2E9B5F; }
+            QPushButton {
+                background-color: #2E9B5F; color: #FFFFFF; font-weight: 600; font-size: 12px;
+                border: 1px solid #2E9B5F; border-radius: 6px; padding: 6px 14px;
+            }
+            QPushButton:hover { background-color: #34B76D; }
+            QPushButton.SecondaryBtn {
+                background-color: #202020; color: #E6EDF3; border: 1px solid #333333; font-weight: 500;
+            }
+            QPushButton.SecondaryBtn:hover {
+                background-color: #2A2A2A; border-color: #555555;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(12)
+
+        # 1. Header Banner
+        header = QHBoxLayout()
+        header_icon = QLabel()
+        header_icon.setPixmap(_safe_qta_icon("mdi.note-text-outline", "#00D2FF").pixmap(28, 28))
+        header.addWidget(header_icon)
+
+        title_v = QVBoxLayout()
+        title_v.setSpacing(2)
+        lbl_title = QLabel(client_name)
+        lbl_title.setObjectName("DialogTitle")
+        title_v.addWidget(lbl_title)
+
+        sub_parts = []
+        if entity_key: sub_parts.append(f"Key: {entity_key}")
+        portal = item_data.get("portal") or item_data.get("service_name")
+        if portal: sub_parts.append(portal)
+        period = item_data.get("period_label") or item_data.get("latest_period")
+        if period: sub_parts.append(period)
+        arn = item_data.get("arn_number") or item_data.get("latest_arn")
+        if arn and arn != "N/A": sub_parts.append(f"ARN: {arn}")
+
+        lbl_sub = QLabel(" • ".join(sub_parts))
+        lbl_sub.setObjectName("DialogSubtitle")
+        title_v.addWidget(lbl_sub)
+        header.addLayout(title_v, stretch=1)
+
+        self.lbl_save_status = QLabel("")
+        self.lbl_save_status.setStyleSheet("color: #4CF9B7; font-size: 12px; font-weight: bold;")
+        header.addWidget(self.lbl_save_status)
+
+        layout.addLayout(header)
+
+        # Separator line
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("color: #262626; background: #262626; max-height: 1px;")
+        layout.addWidget(sep)
+
+        # 2. Main 2-Pane Content Area
+        content_layout = QHBoxLayout()
+        content_layout.setSpacing(14)
+
+        # LEFT PANE: Notes Editor
+        left_frame = QFrame()
+        left_frame.setObjectName("PaneFrame")
+        left_layout = QVBoxLayout(left_frame)
+        left_layout.setContentsMargins(14, 12, 14, 12)
+        left_layout.setSpacing(8)
+
+        left_header = QHBoxLayout()
+        lbl_notes_hdr = QLabel("CLIENT NOTES & REMARKS")
+        lbl_notes_hdr.setObjectName("SectionHeader")
+        left_header.addWidget(lbl_notes_hdr)
+        left_header.addStretch()
+        left_layout.addLayout(left_header)
+
+        self.txt_notes = QTextEdit()
+        self.txt_notes.setPlaceholderText("Write client notes, audit observations, or filing remarks here...\n(Changes are automatically saved)")
+        left_layout.addWidget(self.txt_notes, stretch=1)
+
+        notes_hint = QLabel("💡 Changes auto-saved • WinRT OCR scans directly here")
+        notes_hint.setStyleSheet("color: #6E7681; font-size: 11px;")
+        left_layout.addWidget(notes_hint)
+
+        content_layout.addWidget(left_frame, stretch=5)
+
+        # RIGHT PANE: Attached Media / Screenshots
+        right_frame = QFrame()
+        right_frame.setObjectName("PaneFrame")
+        right_layout = QVBoxLayout(right_frame)
+        right_layout.setContentsMargins(14, 12, 14, 12)
+        right_layout.setSpacing(8)
+
+        right_header = QHBoxLayout()
+        lbl_media_hdr = QLabel("ATTACHED SCREENSHOTS / MEDIA")
+        lbl_media_hdr.setObjectName("SectionHeader")
+        right_header.addWidget(lbl_media_hdr)
+        right_header.addStretch()
+        right_layout.addLayout(right_header)
+
+        self.media_tabs = QTabWidget()
+        self.media_tabs.setDocumentMode(True)
+        self.media_tabs.setStyleSheet("""
+            QTabWidget::pane { border: 1px solid #2B2B2B; border-radius: 6px; background: #1A1A1A; }
+            QTabBar::tab {
+                background: #202020; color: #8B949E; padding: 6px 14px;
+                border: 1px solid #2B2B2B; border-bottom: none;
+                border-top-left-radius: 6px; border-top-right-radius: 6px;
+            }
+            QTabBar::tab:selected { background: #2E9B5F; color: #FFFFFF; border-color: #2E9B5F; }
+            QTabBar::tab:hover:!selected { background: #2A2A2A; color: #E6EDF3; }
+        """)
+        self._slot_buttons = []
+        self._slot_previews = []
+        self.current_screenshot_paths = ["", ""]
+        self._saved_screenshot_raws = ["", ""]
+        self._image_cleareds = [False, False]
+        self._media_slot_pages = []
+        for slot_index, slot_title in enumerate(("Screenshot 1", "Screenshot 2")):
+            page = self._build_media_slot(slot_index, slot_title)
+            self._media_slot_pages.append(page)
+            self.media_tabs.addTab(page, slot_title)
+        right_layout.addWidget(self.media_tabs, stretch=1)
+
+        # Backwards-compatible aliases for the first slot.
+        self.lbl_image_preview = self._slot_previews[0]
+        self.btn_attach_img = self._slot_buttons[0]["attach"]
+        self.btn_paste_img = self._slot_buttons[0]["paste"]
+        self.btn_ocr_img = self._slot_buttons[0]["ocr"]
+        self.btn_expand_img = self._slot_buttons[0]["expand"]
+        self.btn_clear_img = self._slot_buttons[0]["clear"]
+
+        content_layout.addWidget(right_frame, stretch=5)
+
+        layout.addLayout(content_layout, stretch=1)
+
+        # 3. Bottom Action Bar
+        bottom_box = QHBoxLayout()
+        lbl_hint = QLabel("💡 Tip: Ctrl+V pastes into the selected screenshot tab")
+        lbl_hint.setStyleSheet("color: #6E7681; font-size: 11px;")
+        bottom_box.addWidget(lbl_hint)
+        bottom_box.addStretch()
+
+        btn_close = QPushButton("Done")
+        btn_close.setIcon(_safe_qta_icon("mdi.check", "#FFFFFF"))
+        btn_close.clicked.connect(self.accept)
+        btn_close.setFixedWidth(100)
+        bottom_box.addWidget(btn_close)
+
+        layout.addLayout(bottom_box)
+
+        # Connect signals
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(1000)
+        self._save_timer.timeout.connect(self._save_notes)
+        self.txt_notes.textChanged.connect(self._on_notes_changed)
+
+        QTimer.singleShot(0, self._load_notes_and_media)
+
+    def _build_media_slot(self, index: int, title: str) -> QWidget:
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(8, 8, 8, 8)
+        page_layout.setSpacing(8)
+
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(6)
+
+        btn_attach = QPushButton("Attach")
+        btn_attach.setIcon(_safe_qta_icon("mdi.paperclip", "#FFFFFF"))
+        btn_attach.setToolTip(f"Select an image file for {title.lower()}")
+        btn_attach.setProperty("class", "SecondaryBtn")
+        btn_attach.setFixedHeight(30)
+
+        btn_paste = QPushButton("Paste")
+        btn_paste.setIcon(_safe_qta_icon("mdi.content-paste", "#4CF9B7"))
+        btn_paste.setToolTip(f"Paste a screenshot into {title.lower()} (Ctrl+V)")
+        btn_paste.setProperty("class", "SecondaryBtn")
+        btn_paste.setFixedHeight(30)
+
+        btn_ocr = QPushButton("OCR")
+        btn_ocr.setIcon(_safe_qta_icon("mdi.text-recognition", "#58A6FF"))
+        btn_ocr.setToolTip(f"Scan text from {title.lower()} into notes")
+        btn_ocr.setProperty("class", "SecondaryBtn")
+        btn_ocr.setFixedHeight(30)
+
+        btn_expand = QPushButton()
+        btn_expand.setIcon(_safe_qta_icon("mdi.fullscreen", "#FFFFFF"))
+        btn_expand.setToolTip("View full resolution image")
+        btn_expand.setProperty("class", "SecondaryBtn")
+        btn_expand.setFixedSize(30, 30)
+
+        btn_clear = QPushButton()
+        btn_clear.setIcon(_safe_qta_icon("mdi.close-circle-outline", "#FF6B6B"))
+        btn_clear.setToolTip(f"Remove {title.lower()}")
+        btn_clear.setStyleSheet("""
+            QPushButton { background-color: #201414; border: 1px solid #5A2626; border-radius: 6px; }
+            QPushButton:hover { border-color: #FF6B6B; background-color: #2D1818; }
+        """)
+        btn_clear.setFixedSize(30, 30)
+
+        toolbar.addWidget(btn_attach)
+        toolbar.addWidget(btn_paste)
+        toolbar.addWidget(btn_ocr)
+        toolbar.addStretch()
+        toolbar.addWidget(btn_expand)
+        toolbar.addWidget(btn_clear)
+        page_layout.addLayout(toolbar)
+
+        preview = QLabel()
+        preview.setAlignment(Qt.AlignCenter)
+        preview.setStyleSheet("""
+            QLabel {
+                border: 1px dashed #3A3A3A;
+                border-radius: 8px;
+                color: #6E7681;
+                font-size: 12px;
+                background-color: #121212;
+            }
+        """)
+        preview.setMinimumHeight(220)
+        page_layout.addWidget(preview, stretch=1)
+
+        self._slot_previews.append(preview)
+        self._slot_buttons.append({
+            "attach": btn_attach, "paste": btn_paste, "ocr": btn_ocr,
+            "expand": btn_expand, "clear": btn_clear,
+        })
+        self._set_slot_empty(index)
+
+        btn_attach.clicked.connect(lambda _=False, i=index: self._attach_image(i))
+        btn_paste.clicked.connect(lambda _=False, i=index: self._paste_image(i))
+        btn_ocr.clicked.connect(lambda _=False, i=index: self._trigger_ocr_manually(i))
+        btn_expand.clicked.connect(lambda _=False, i=index: self._expand_image(i))
+        btn_clear.clicked.connect(lambda _=False, i=index: self._clear_image(i))
+        return page
+
+    def _default_slot_text(self, index: int) -> str:
+        if index == 1:
+            return ("Screenshot 2\n\nLogin evidence\n\n"
+                    "Attach or press Ctrl+V to paste from clipboard")
+        return ("Screenshot 1\n\nFiling / submission evidence\n\n"
+                "Attach or press Ctrl+V to paste from clipboard")
+
+    def _set_slot_empty(self, index: int, text: str = ""):
+        label = self._slot_previews[index]
+        label.setPixmap(QPixmap())
+        label.setText(text or self._default_slot_text(index))
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_V and (event.modifiers() & Qt.ControlModifier):
+            clipboard = QGuiApplication.clipboard()
+            if clipboard.mimeData().hasImage():
+                index = self.media_tabs.currentIndex()
+                self._paste_image(index if index >= 0 else 0)
+                return
+        super().keyPressEvent(event)
+
+    def _get_media_dir(self) -> str:
+        db_path = getattr(self.db, "raw_db_path", None) or getattr(self.db, "db_path", None)
+        if db_path:
+            base_dir = os.path.dirname(os.path.abspath(db_path))
+        else:
+            base_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data"))
+        media_dir = os.path.join(base_dir, "media")
+        os.makedirs(media_dir, exist_ok=True)
+        return media_dir
+
+    def _resolve_media_path(self, raw_path: str) -> str:
+        if not raw_path:
+            return ""
+        if os.path.isabs(raw_path):
+            if os.path.exists(raw_path):
+                return os.path.abspath(raw_path)
+            candidate = os.path.join(self._get_media_dir(), os.path.basename(raw_path))
+            if os.path.exists(candidate):
+                return candidate
+            return raw_path
+
+        media_dir = self._get_media_dir()
+        user_data_dir = os.path.dirname(media_dir)
+        p1 = os.path.join(user_data_dir, raw_path)
+        if os.path.exists(p1):
+            return os.path.abspath(p1)
+        p2 = os.path.join(media_dir, os.path.basename(raw_path))
+        if os.path.exists(p2):
+            return os.path.abspath(p2)
+        legacy_media_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "media"))
+        p3 = os.path.join(legacy_media_dir, os.path.basename(raw_path))
+        if os.path.exists(p3):
+            return os.path.abspath(p3)
+        return os.path.abspath(p1)
+
+    def _write_media_to_db(self, notes: str, final_path: str, final_path_2: str):
+        if self.is_container:
+            ikey = self.item_data.get('identity_key')
+            cid = self.item_data.get('client_id')
+            if ikey and hasattr(self.db, 'save_srpf_container_media'):
+                self.db.save_srpf_container_media(
+                    ikey, notes, final_path, client_id=cid, screenshot_path_2=final_path_2
+                )
+        else:
+            uid = self.item_data.get('id')
+            if uid and hasattr(self.db, 'save_tracker_dump_media'):
+                self.db.save_tracker_dump_media(
+                    uid, notes, final_path, screenshot_path_2=final_path_2
+                )
+
+    def _load_notes_and_media(self):
+        if not self.db: return
+        try:
+            self._image_cleareds = [False, False]
+            notes = ""
+            raw_paths = ["", ""]
+            if self.is_container:
+                ikey = self.item_data.get('identity_key')
+                if ikey and hasattr(self.db, 'get_srpf_container_media'):
+                    media_data = self.db.get_srpf_container_media(ikey)
+                    notes = media_data.get("notes", "")
+                    raw_paths = [media_data.get("screenshot_path", ""),
+                                 media_data.get("screenshot_path_2", "")]
+            else:
+                uid = self.item_data.get('id')
+                if uid and hasattr(self.db, 'get_tracker_dump_media'):
+                    media_data = self.db.get_tracker_dump_media(uid)
+                    notes = media_data.get("notes", "")
+                    raw_paths = [media_data.get("screenshot_path", ""),
+                                 media_data.get("screenshot_path_2", "")]
+
+            self._saved_screenshot_raws = list(raw_paths)
+            if notes:
+                self.txt_notes.setPlainText(notes)
+
+            migrated = False
+            for index, spath in enumerate(raw_paths):
+                if spath:
+                    resolved = self._resolve_media_path(spath)
+                    self.current_screenshot_paths[index] = resolved
+                    if resolved and os.path.exists(resolved):
+                        self._show_preview(index, resolved)
+                        media_dir = self._get_media_dir()
+                        if os.path.isabs(spath) and not os.path.abspath(resolved).startswith(media_dir):
+                            try:
+                                fname = os.path.basename(resolved)
+                                dest_file = os.path.join(media_dir, fname)
+                                if not os.path.exists(dest_file):
+                                    shutil.copy2(resolved, dest_file)
+                                rel_path = f"media/{fname}"
+                                self.current_screenshot_paths[index] = dest_file
+                                self._saved_screenshot_raws[index] = rel_path
+                                migrated = True
+                            except Exception as ex:
+                                print(f"[media] Migration of legacy media file failed: {ex}")
+                    else:
+                        self.current_screenshot_paths[index] = ""
+                        self._set_slot_empty(index, f"Image file not found:\n{spath}")
+                        print(f"[media] Screenshot path stored in DB ({spath}) but file not found on disk.")
+                else:
+                    self.current_screenshot_paths[index] = ""
+                    self._set_slot_empty(index)
+            if migrated:
+                self._write_media_to_db(
+                    notes, self._saved_screenshot_raws[0], self._saved_screenshot_raws[1]
+                )
+        except Exception as e:
+            print(f"Error loading media: {e}")
+
+    def _show_preview(self, index: int, path):
+        pixmap = QPixmap(path)
+        label = self._slot_previews[index]
+        if not pixmap.isNull():
+            scaled_pixmap = pixmap.scaled(400, 260, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            label.setPixmap(scaled_pixmap)
+            label.setText("")
+        else:
+            label.setText("Failed to load image")
+
+    def _on_notes_changed(self):
+        self.lbl_save_status.setText("Saving...")
+        self.lbl_save_status.setStyleSheet("color: #F1E05A; font-size: 12px; font-weight: bold;")
+        self._save_timer.start()
+
+    def _clear_image(self, index: int = 0):
+        self._image_cleareds[index] = True
+        self.current_screenshot_paths[index] = ""
+        self._saved_screenshot_raws[index] = ""
+        self._set_slot_empty(index)
+        self._save_notes()
+
+    def _expand_image(self, index: int = 0):
+        path = self.current_screenshot_paths[index]
+        if path and os.path.exists(path):
+            try:
+                os.startfile(path)
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"Could not open image: {e}")
+
+    def _attach_image(self, index: int = 0):
+        file_path, _ = QFileDialog.getOpenFileName(self, "Select Image", "", "Images (*.png *.jpg *.jpeg *.bmp)")
+        if file_path:
+            self._image_cleareds[index] = False
+            self.current_screenshot_paths[index] = file_path
+            self._show_preview(index, file_path)
+            self._save_notes()
+            self._run_ocr(file_path)
+
+    def _paste_image(self, index: int = 0):
+        clipboard = QGuiApplication.clipboard()
+        mime_data = clipboard.mimeData()
+        if mime_data.hasImage():
+            image = clipboard.image()
+            if not image.isNull():
+                self._image_cleareds[index] = False
+                temp_path = os.path.join(
+                    os.path.expanduser("~"),
+                    f"temp_sera_paste_{index}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png"
+                )
+                image.save(temp_path, "PNG")
+                self.current_screenshot_paths[index] = temp_path
+                self._show_preview(index, temp_path)
+                self._save_notes()
+                self._run_ocr(temp_path)
+        else:
+            QMessageBox.information(self, "No Image", "No image found in clipboard.")
+
+    def _trigger_ocr_manually(self, index: int = 0):
+        path = self.current_screenshot_paths[index]
+        if path and os.path.exists(path):
+            self._run_ocr(path)
+        else:
+            QMessageBox.information(self, "No Image", "Please attach or paste an image first to scan text.")
+
+    def _run_ocr(self, img_path):
+        from ui.utils.ocr_worker import OCRWorker
+        self.lbl_save_status.setText("Scanning OCR...")
+        self.lbl_save_status.setStyleSheet("color: #58A6FF; font-size: 12px; font-weight: bold;")
+        self.ocr_thread = OCRWorker(img_path)
+        self.ocr_thread.finished.connect(self._on_ocr_finished)
+        self.ocr_thread.start()
+
+    def _on_ocr_finished(self, text):
+        if text and not text.startswith("OCR Error") and not text.startswith("OCR Failed") and not text.startswith("OCR Engine"):
+            current_text = self.txt_notes.toPlainText()
+            if text.strip() not in current_text:
+                new_text = f"{current_text}\n\n--- OCR Extracted Text ---\n{text}".strip()
+                self.txt_notes.setPlainText(new_text)
+                self._save_notes()
+        else:
+            self.lbl_save_status.setText("OCR Failed")
+            self.lbl_save_status.setStyleSheet("color: #FF6B6B; font-size: 12px; font-weight: bold;")
+            QTimer.singleShot(2500, lambda: self.lbl_save_status.setText(""))
+
+    def _finalize_slot_path(self, index: int) -> str:
+        if self._image_cleareds[index]:
+            return ""
+        current = self.current_screenshot_paths[index]
+        saved_raw = self._saved_screenshot_raws[index]
+        if not current:
+            return saved_raw or ""
+        if not os.path.exists(current):
+            # Guard against deleting stored pointer when file is missing
+            return saved_raw or ""
+
+        media_dir = self._get_media_dir()
+        resolved_abs = os.path.abspath(current)
+        if not resolved_abs.startswith(media_dir):
+            ext = os.path.splitext(current)[1]
+            if not ext:
+                ext = ".png"
+            prefix = "screenshot" if index == 0 else "screenshot_2"
+            filename = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}{ext}"
+            dest_file = os.path.join(media_dir, filename)
+            shutil.copy2(current, dest_file)
+            self.current_screenshot_paths[index] = dest_file
+            final_path = f"media/{filename}"
+        else:
+            final_path = f"media/{os.path.basename(current)}"
+        self._saved_screenshot_raws[index] = final_path
+        return final_path
+
+    def _save_notes(self):
+        if not self.db: return
+        notes = self.txt_notes.toPlainText()
+        try:
+            final_paths = [self._finalize_slot_path(0), self._finalize_slot_path(1)]
+        except Exception as e:
+            self.lbl_save_status.setText("Failed to save image")
+            self.lbl_save_status.setStyleSheet("color: #FF6B6B; font-size: 12px; font-weight: bold;")
+            return
+
+        try:
+            self._write_media_to_db(notes, final_paths[0], final_paths[1])
+            self.lbl_save_status.setText("✓ Saved!")
+            self.lbl_save_status.setStyleSheet("color: #4CF9B7; font-size: 12px; font-weight: bold;")
+            QTimer.singleShot(2500, lambda: self.lbl_save_status.setText(""))
+        except Exception as e:
+            self.lbl_save_status.setText("Failed to save to database")
+            self.lbl_save_status.setStyleSheet("color: #FF6B6B; font-size: 12px; font-weight: bold;")
+
+
 class PayloadInspectorDialog(QDialog):
     """Modal dialog displaying formatted profile details, filing history, and raw technical JSON."""
     def __init__(self, item_data: dict, db=None, is_container: bool = False, parent=None):
@@ -1165,88 +1699,6 @@ class PayloadInspectorDialog(QDialog):
         json_layout.addWidget(self.txt_json)
         tabs.addTab(tab_json, "Raw JSON")
 
-        # Tab 3: Notes & Media
-        tab_notes = QWidget()
-        notes_layout = QVBoxLayout(tab_notes)
-        notes_layout.setContentsMargins(0, 14, 0, 0)
-        notes_layout.setSpacing(10)
-
-        self.txt_notes = QTextEdit()
-        self.txt_notes.setPlaceholderText("Write notes here...")
-
-        media_toolbar = QHBoxLayout()
-        
-        self.btn_attach_img = QPushButton()
-        self.btn_attach_img.setToolTip("Attach Image")
-        self.btn_attach_img.setIcon(_safe_qta_icon("mdi.paperclip", "#FFFFFF"))
-        self.btn_attach_img.setFixedSize(36, 36)
-        self.btn_attach_img.setProperty("class", "SecondaryBtn")
-        
-        self.btn_paste_img = QPushButton()
-        self.btn_paste_img.setToolTip("Paste Image")
-        self.btn_paste_img.setIcon(_safe_qta_icon("mdi.content-paste", "#4CF9B7"))
-        self.btn_paste_img.setFixedSize(36, 36)
-        self.btn_paste_img.setProperty("class", "SecondaryBtn")
-        
-        self.btn_ocr_img = QPushButton()
-        self.btn_ocr_img.setToolTip("Scan Text (OCR)")
-        self.btn_ocr_img.setIcon(_safe_qta_icon("mdi.text-recognition", "#58A6FF"))
-        self.btn_ocr_img.setFixedSize(36, 36)
-        self.btn_ocr_img.setProperty("class", "SecondaryBtn")
-        
-        self.btn_clear_img = QPushButton()
-        self.btn_clear_img.setToolTip("Clear Image")
-        self.btn_clear_img.setIcon(_safe_qta_icon("mdi.close-circle-outline", "#FF6B6B"))
-        self.btn_clear_img.setStyleSheet("QPushButton { background-color: #201414; border: 1px solid #5A2626; border-radius: 6px; }"
-                                         "QPushButton:hover { border-color: #FF6B6B; }")
-        self.btn_clear_img.setFixedSize(36, 36)
-        
-        media_toolbar.addWidget(self.btn_attach_img)
-        media_toolbar.addWidget(self.btn_paste_img)
-        media_toolbar.addWidget(self.btn_ocr_img)
-        media_toolbar.addWidget(self.btn_clear_img)
-        media_toolbar.addStretch()
-
-        self.lbl_save_status = QLabel("")
-        self.lbl_save_status.setStyleSheet("color: #4CF9B7; font-size: 12px; font-weight: bold;")
-        media_toolbar.addWidget(self.lbl_save_status)
-        
-        self.btn_expand_img = QPushButton()
-        self.btn_expand_img.setToolTip("View Full Image")
-        self.btn_expand_img.setIcon(_safe_qta_icon("mdi.fullscreen", "#FFFFFF"))
-        self.btn_expand_img.setProperty("class", "SecondaryBtn")
-        self.btn_expand_img.setFixedSize(36, 36)
-        media_toolbar.addWidget(self.btn_expand_img)
-
-        self.lbl_image_preview = QLabel("No image attached")
-        self.lbl_image_preview.setAlignment(Qt.AlignCenter)
-        self.lbl_image_preview.setStyleSheet("border: 1px dashed #3A3A3A; border-radius: 8px; color: #6F6E6A;")
-        self.lbl_image_preview.setMinimumHeight(200)
-
-        notes_layout.addWidget(self.txt_notes, stretch=1)
-        notes_layout.addLayout(media_toolbar)
-        notes_layout.addWidget(self.lbl_image_preview)
-
-        tabs.addTab(tab_notes, "Notes && Media")  # && = a literal & in tab text
-
-        # Connect signals
-        self.current_screenshot_path = ""
-        self.btn_attach_img.clicked.connect(self._attach_image)
-        self.btn_paste_img.clicked.connect(self._paste_image)
-        self.btn_ocr_img.clicked.connect(self._trigger_ocr_manually)
-        self.btn_clear_img.clicked.connect(self._clear_image)
-        self.btn_expand_img.clicked.connect(self._expand_image)
-        
-        # Auto-save setup
-        self._save_timer = QTimer(self)
-        self._save_timer.setSingleShot(True)
-        self._save_timer.setInterval(1000)
-        self._save_timer.timeout.connect(self._save_notes)
-        self.txt_notes.textChanged.connect(self._on_notes_changed)
-        
-        # Load existing data
-        QTimer.singleShot(0, self._load_notes_and_media)
-
         layout.addWidget(tabs, stretch=1)
 
         # Actions Box
@@ -1263,8 +1715,13 @@ class PayloadInspectorDialog(QDialog):
         btn_copy = QPushButton("Copy Container Summary")
         btn_copy.setProperty("class", "SecondaryBtn")
 
+        btn_notes = QPushButton("Notes & Media")
+        btn_notes.setIcon(_safe_qta_icon("mdi.note-text-outline", "#4CF9B7"))
+        btn_notes.setProperty("class", "SecondaryBtn")
+        btn_notes.clicked.connect(self._open_notes_dialog)
+        btn_box.addWidget(btn_notes)
+
         def _on_tab_changed(idx):
-            btn_copy.setVisible(idx != 2)
             if idx == 0:
                 btn_copy.setText("Copy Container Summary")
             elif idx == 1:
@@ -1309,9 +1766,56 @@ class PayloadInspectorDialog(QDialog):
         btn_box.addWidget(btn_close)
         layout.addLayout(btn_box)
 
+    def _get_media_dir(self) -> str:
+        db_path = getattr(self.db, "raw_db_path", None) or getattr(self.db, "db_path", None)
+        if db_path:
+            base_dir = os.path.dirname(os.path.abspath(db_path))
+        else:
+            base_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data"))
+        media_dir = os.path.join(base_dir, "media")
+        os.makedirs(media_dir, exist_ok=True)
+        return media_dir
+
+    def _resolve_media_path(self, raw_path: str) -> str:
+        if not raw_path:
+            return ""
+        if os.path.isabs(raw_path):
+            if os.path.exists(raw_path):
+                return os.path.abspath(raw_path)
+            candidate = os.path.join(self._get_media_dir(), os.path.basename(raw_path))
+            if os.path.exists(candidate):
+                return candidate
+            return raw_path
+
+        media_dir = self._get_media_dir()
+        user_data_dir = os.path.dirname(media_dir)
+        p1 = os.path.join(user_data_dir, raw_path)
+        if os.path.exists(p1):
+            return os.path.abspath(p1)
+        p2 = os.path.join(media_dir, os.path.basename(raw_path))
+        if os.path.exists(p2):
+            return os.path.abspath(p2)
+        legacy_media_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "media"))
+        p3 = os.path.join(legacy_media_dir, os.path.basename(raw_path))
+        if os.path.exists(p3):
+            return os.path.abspath(p3)
+        return os.path.abspath(p1)
+
+    def _write_media_to_db(self, notes: str, final_path: str):
+        if self.is_container:
+            ikey = self.item_data.get('identity_key')
+            cid = self.item_data.get('client_id')
+            if ikey and hasattr(self.db, 'save_srpf_container_media'):
+                self.db.save_srpf_container_media(ikey, notes, final_path, client_id=cid)
+        else:
+            uid = self.item_data.get('id')
+            if uid and hasattr(self.db, 'save_tracker_dump_media'):
+                self.db.save_tracker_dump_media(uid, notes, final_path)
+
     def _load_notes_and_media(self):
         if not self.db: return
         try:
+            self._image_cleared = False
             notes = ""
             spath = ""
             if self.is_container:
@@ -1327,11 +1831,35 @@ class PayloadInspectorDialog(QDialog):
                     notes = media_data.get("notes", "")
                     spath = media_data.get("screenshot_path", "")
             
+            self._saved_screenshot_raw = spath or ""
             if notes:
                 self.txt_notes.setPlainText(notes)
-            if spath and os.path.exists(spath):
-                self.current_screenshot_path = spath
-                self._show_preview(spath)
+            if spath:
+                resolved = self._resolve_media_path(spath)
+                self.current_screenshot_path = resolved
+                if resolved and os.path.exists(resolved):
+                    self._show_preview(resolved)
+                    media_dir = self._get_media_dir()
+                    if os.path.isabs(spath) and not os.path.abspath(resolved).startswith(media_dir):
+                        try:
+                            fname = os.path.basename(resolved)
+                            dest_file = os.path.join(media_dir, fname)
+                            if not os.path.exists(dest_file):
+                                shutil.copy2(resolved, dest_file)
+                            rel_path = f"media/{fname}"
+                            self.current_screenshot_path = dest_file
+                            self._saved_screenshot_raw = rel_path
+                            self._write_media_to_db(notes, rel_path)
+                        except Exception as ex:
+                            print(f"[media] Migration of legacy media file failed: {ex}")
+                else:
+                    self.lbl_image_preview.setPixmap(QPixmap())
+                    self.lbl_image_preview.setText(f"Image file not found:\n{spath}")
+                    print(f"[media] Screenshot path stored in DB ({spath}) but file not found on disk.")
+            else:
+                self.current_screenshot_path = ""
+                self.lbl_image_preview.setPixmap(QPixmap())
+                self.lbl_image_preview.setText("No image attached")
         except Exception as e:
             print(f"Error loading media: {e}")
 
@@ -1368,7 +1896,9 @@ class PayloadInspectorDialog(QDialog):
         self._save_timer.start()
 
     def _clear_image(self):
+        self._image_cleared = True
         self.current_screenshot_path = ""
+        self._saved_screenshot_raw = ""
         self.lbl_image_preview.setPixmap(QPixmap())
         self.lbl_image_preview.setText("No image attached")
         self._save_notes()
@@ -1383,6 +1913,7 @@ class PayloadInspectorDialog(QDialog):
     def _attach_image(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Select Image", "", "Images (*.png *.jpg *.jpeg *.bmp)")
         if file_path:
+            self._image_cleared = False
             self.current_screenshot_path = file_path
             self._show_preview(file_path)
             self._save_notes()
@@ -1394,6 +1925,7 @@ class PayloadInspectorDialog(QDialog):
         if mime_data.hasImage():
             image = clipboard.image()
             if not image.isNull():
+                self._image_cleared = False
                 temp_path = os.path.join(os.path.expanduser("~"), "temp_sera_paste.png")
                 image.save(temp_path, "PNG")
                 self.current_screenshot_path = temp_path
@@ -1434,36 +1966,39 @@ class PayloadInspectorDialog(QDialog):
         notes = self.txt_notes.toPlainText()
         final_path = ""
         
-        if self.current_screenshot_path and os.path.exists(self.current_screenshot_path):
+        image_cleared = getattr(self, "_image_cleared", False)
+        saved_raw = getattr(self, "_saved_screenshot_raw", "")
+
+        if image_cleared:
+            final_path = ""
+        elif not self.current_screenshot_path:
+            final_path = saved_raw or ""
+        elif not os.path.exists(self.current_screenshot_path):
+            # Guard against deleting stored pointer when file is missing
+            final_path = saved_raw or ""
+        else:
             try:
-                media_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "media"))
-                os.makedirs(media_dir, exist_ok=True)
-                
-                # Copy file if it's not already in the media directory
-                if not self.current_screenshot_path.startswith(media_dir):
+                media_dir = self._get_media_dir()
+                resolved_abs = os.path.abspath(self.current_screenshot_path)
+                if not resolved_abs.startswith(media_dir):
                     ext = os.path.splitext(self.current_screenshot_path)[1]
                     if not ext: ext = ".png"
                     filename = f"screenshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
-                    final_path = os.path.join(media_dir, filename)
-                    shutil.copy2(self.current_screenshot_path, final_path)
-                    self.current_screenshot_path = final_path
+                    dest_file = os.path.join(media_dir, filename)
+                    shutil.copy2(self.current_screenshot_path, dest_file)
+                    self.current_screenshot_path = dest_file
+                    final_path = f"media/{filename}"
                 else:
-                    final_path = self.current_screenshot_path
+                    filename = os.path.basename(self.current_screenshot_path)
+                    final_path = f"media/{filename}"
+                self._saved_screenshot_raw = final_path
             except Exception as e:
                 self.lbl_save_status.setText("Failed to save image")
                 self.lbl_save_status.setStyleSheet("color: #FF6B6B; font-size: 12px; font-weight: bold;")
                 return
-        
+
         try:
-            if self.is_container:
-                ikey = self.item_data.get('identity_key')
-                if ikey and hasattr(self.db, 'save_srpf_container_media'):
-                    self.db.save_srpf_container_media(ikey, notes, final_path)
-            else:
-                uid = self.item_data.get('id')
-                if uid and hasattr(self.db, 'save_tracker_dump_media'):
-                    self.db.save_tracker_dump_media(uid, notes, final_path)
-                    
+            self._write_media_to_db(notes, final_path)
             self.lbl_save_status.setText("✓ Saved!")
             self.lbl_save_status.setStyleSheet("color: #4CF9B7; font-size: 12px; font-weight: bold;")
             QTimer.singleShot(2500, lambda: self.lbl_save_status.setText(""))
@@ -1477,6 +2012,14 @@ class PayloadInspectorDialog(QDialog):
         dlg = AddClientFromCaptureDialog(self.db, self.item_data, self)
         if dlg.exec() == QDialog.Accepted:
             self.accept()
+
+    def _open_notes_dialog(self):
+        dlg = NotesAndMediaDialog(self.item_data, db=self.db, is_container=self.is_container, parent=self)
+        dlg.exec()
+
+    def _get_media_dir(self) -> str:
+        return NotesAndMediaDialog._get_media_dir(self)
+
 
 
 class _DatapointScanThread(QThread):
@@ -2529,6 +3072,8 @@ class TrackerDumpWindow(QWidget):
         if is_grouped:
             act_inspect = menu.addAction(_safe_qta_icon("mdi.eye", "#4CF9B7"), "Inspect Client Container")
             act_inspect.triggered.connect(lambda: self._show_container_dialog(item))
+            act_notes = menu.addAction(_safe_qta_icon("mdi.note-text-outline", "#00D2FF"), "Notes & Media")
+            act_notes.triggered.connect(lambda: self._show_notes_dialog(item, is_grouped=True))
             if item.get('is_unassigned'):
                 act_create = menu.addAction(_safe_qta_icon("mdi.account-plus", "#2E9B5F"), "+ Create Client")
                 act_create.triggered.connect(lambda: self._create_client_from_capture(item))
@@ -2537,6 +3082,8 @@ class TrackerDumpWindow(QWidget):
         else:
             act_inspect = menu.addAction(_safe_qta_icon("mdi.code-json", "#4CF9B7"), "View Raw Payload")
             act_inspect.triggered.connect(lambda: self._show_payload_dialog(item))
+            act_notes = menu.addAction(_safe_qta_icon("mdi.note-text-outline", "#00D2FF"), "Notes & Media")
+            act_notes.triggered.connect(lambda: self._show_notes_dialog(item, is_grouped=False))
             if item.get('is_unassigned') or not item.get('client_id'):
                 act_create = menu.addAction(_safe_qta_icon("mdi.account-plus", "#2E9B5F"), "+ Create Client")
                 act_create.triggered.connect(lambda: self._create_client_from_capture(item))
@@ -2863,7 +3410,7 @@ class TrackerDumpWindow(QWidget):
         the row's current item up when clicked.
         """
         cell = self.table.cellWidget(row_idx, self.COL_ACTIONS)
-        if cell is None or cell.findChild(QPushButton, "act_view") is None or cell.findChild(QPushButton, "act_autofill") is None:
+        if cell is None or cell.findChild(QPushButton, "act_view") is None or cell.findChild(QPushButton, "act_autofill") is None or cell.findChild(QPushButton, "act_notes") is None:
             cell = self._build_action_cell(item, is_grouped)
             self.table.setCellWidget(row_idx, self.COL_ACTIONS, cell)
         cell.setProperty("row", row_idx)
@@ -2874,6 +3421,39 @@ class TrackerDumpWindow(QWidget):
             btn_view.setToolTip(f"Inspect ({tot} capture{'s' if tot != 1 else ''})")
         else:
             btn_view.setToolTip("View Payload")
+        btn_notes = cell.findChild(QPushButton, "act_notes")
+        if btn_notes is not None:
+            has_notes = bool(item.get("notes") or item.get("screenshot_path"))
+            if has_notes:
+                btn_notes.setIcon(_safe_qta_icon("mdi.note-text", "#04141C"))
+                btn_notes.setToolTip("Notes & Media (Content attached)")
+                btn_notes.setStyleSheet("""
+                    QPushButton {
+                        background-color: #00D2FF;
+                        border: 1.5px solid #00D2FF;
+                        border-radius: 4px;
+                        padding: 3px 0px;
+                    }
+                    QPushButton:hover {
+                        background-color: #38E1FF;
+                        border: 1.5px solid #38E1FF;
+                    }
+                """)
+            else:
+                btn_notes.setIcon(_safe_qta_icon("mdi.note-text-outline", "#00D2FF"))
+                btn_notes.setToolTip("Notes & Media")
+                btn_notes.setStyleSheet("""
+                    QPushButton {
+                        background-color: #081E29;
+                        border: 1.5px solid #00D2FF;
+                        border-radius: 4px;
+                        padding: 3px 0px;
+                    }
+                    QPushButton:hover {
+                        background-color: #0E2E3E;
+                        border: 1.5px solid #5CE1E6;
+                    }
+                """)
         needs_create = item.get('is_unassigned') or (not is_grouped and not item.get('client_id'))
         btn_create = cell.findChild(QPushButton, "act_create")
         if btn_create is not None:
@@ -2889,15 +3469,15 @@ class TrackerDumpWindow(QWidget):
                     action_specs = {
                         automation.ACTION_AUTOFILL: (
                             "Fast Autofill", "mdi.flash", "#FFFFFF",
-                            "QPushButton { background-color: #FF4D4D; border: none; border-radius: 6px; padding: 3px 0px; } QPushButton:hover { background-color: #E63939; }"
+                            "QPushButton { background-color: #FF4D4D; border: none; border-radius: 4px; padding: 3px 0px; } QPushButton:hover { background-color: #E63939; }"
                         ),
                         automation.ACTION_SMTI: (
                             "SMTI Manual Assist", "mdi.clipboard-account-outline", "#FF4D4D",
-                            "QPushButton { background-color: #1A1A1A; border: 1.5px solid #FF4D4D; border-radius: 6px; padding: 3px 0px; } QPushButton:hover { background-color: rgba(255, 77, 77, 0.2); }"
+                            "QPushButton { background-color: #1A1A1A; border: 1.5px solid #FF4D4D; border-radius: 4px; padding: 3px 0px; } QPushButton:hover { background-color: rgba(255, 77, 77, 0.2); }"
                         ),
                         automation.ACTION_MECP: (
                             "MECP Manual Copy", "mdi.content-copy", "#FF4D4D",
-                            "QPushButton { background-color: #1A1A1A; border: 1.5px solid #FF4D4D; border-radius: 6px; padding: 3px 0px; } QPushButton:hover { background-color: rgba(255, 77, 77, 0.2); }"
+                            "QPushButton { background-color: #1A1A1A; border: 1.5px solid #FF4D4D; border-radius: 4px; padding: 3px 0px; } QPushButton:hover { background-color: rgba(255, 77, 77, 0.2); }"
                         ),
                     }
                     action_label, action_icon, icon_color, btn_style = action_specs.get(mode_1, action_specs[automation.ACTION_AUTOFILL])
@@ -2907,7 +3487,7 @@ class TrackerDumpWindow(QWidget):
                 else:
                     portal_name = item.get("service_name") or item.get("portal") or "Portal"
                     btn_autofill.setIcon(_safe_qta_icon("mdi.flash", "#FFFFFF"))
-                    btn_autofill.setStyleSheet("QPushButton { background-color: #FF4D4D; border: none; border-radius: 6px; padding: 3px 0px; } QPushButton:hover { background-color: #E63939; }")
+                    btn_autofill.setStyleSheet("QPushButton { background-color: #FF4D4D; border: none; border-radius: 4px; padding: 3px 0px; } QPushButton:hover { background-color: #E63939; }")
                     btn_autofill.setToolTip(f"Fast Autofill: {portal_name}")
 
     def _on_action_create(self, cell: QWidget) -> None:
@@ -2991,6 +3571,33 @@ class TrackerDumpWindow(QWidget):
         else:
             self._show_payload_dialog(item)
 
+    def _on_action_notes(self, cell: QWidget) -> None:
+        item = self._action_cell_item(cell)
+        if item is None:
+            return
+        row = cell.property("row")
+        if row is not None:
+            col = self.table.currentColumn() if self.table.currentColumn() >= 0 else 0
+            self.table.setCurrentCell(int(row), col)
+        self._show_notes_dialog(item, bool(cell.property("grouped")))
+
+    def _show_notes_dialog(self, item: dict, is_grouped: bool):
+        item = self._full_container(item)
+        saved_page = getattr(self, "_current_page", 1)
+        curr_row = self.table.currentRow()
+        curr_col = self.table.currentColumn()
+        v_val = self.table.verticalScrollBar().value()
+        h_val = self.table.horizontalScrollBar().value()
+        dlg = NotesAndMediaDialog(item, db=self.db, is_container=is_grouped, parent=self)
+        try:
+            dlg.exec()
+            self.load_data(reset_page=False)
+        finally:
+            self._restore_table_position(
+                saved_page, curr_row, curr_col, v_val, h_val,
+                item.get("identity_key") if is_grouped else item.get("id")
+            )
+
     def _on_action_more(self, cell: QWidget, anchor: QPushButton) -> None:
         item = self._action_cell_item(cell)
         if item is not None:
@@ -3010,23 +3617,24 @@ class TrackerDumpWindow(QWidget):
         widget.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Minimum)
         widget.setStyleSheet("background: transparent;")
         layout = QHBoxLayout(widget)
-        layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(4)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.setAlignment(Qt.AlignCenter)
 
         # Built once per table row and reused (see _set_action_cell); the handlers find the
         # row's current item when clicked instead of holding a copy of it.
         btn_autofill = QPushButton()
         btn_autofill.setObjectName("act_autofill")
         btn_autofill.setCursor(Qt.PointingHandCursor)
-        btn_autofill.setFixedSize(34, 26)
-        btn_autofill.setIconSize(QSize(16, 16))
+        btn_autofill.setFixedSize(24, 26)
+        btn_autofill.setIconSize(QSize(14, 14))
         btn_autofill.setIcon(_safe_qta_icon("mdi.flash", "#FFFFFF"))
         btn_autofill.setToolTip("Automation 1 (Fast Autofill)")
         btn_autofill.setStyleSheet("""
             QPushButton {
                 background-color: #FF4D4D;
                 border: none;
-                border-radius: 6px;
+                border-radius: 4px;
                 padding: 3px 0px;
             }
             QPushButton:hover {
@@ -3040,7 +3648,8 @@ class TrackerDumpWindow(QWidget):
         btn_view.setObjectName("act_view")
         btn_view.clicked.connect(lambda _=False, c=widget: self._on_action_view(c))
         btn_view.setIcon(_safe_qta_icon("mdi.eye-outline", "#8FA6C2"))
-        btn_view.setFixedWidth(30)
+        btn_view.setFixedSize(24, 26)
+        btn_view.setIconSize(QSize(14, 14))
         # Styled inline rather than via the QSS class selector: buttons embedded through
         # setCellWidget() don't reliably repolish dynamic-property selectors in Qt, so the
         # class-based rule silently falls back to default chrome for these specifically.
@@ -3058,8 +3667,30 @@ class TrackerDumpWindow(QWidget):
         """)
         layout.addWidget(btn_view)
 
+        btn_notes = QPushButton()
+        btn_notes.setObjectName("act_notes")
+        btn_notes.setCursor(Qt.PointingHandCursor)
+        btn_notes.setFixedSize(24, 26)
+        btn_notes.setIconSize(QSize(14, 14))
+        btn_notes.setIcon(_safe_qta_icon("mdi.note-text-outline", "#00D2FF"))
+        btn_notes.setToolTip("Notes & Media")
+        btn_notes.setStyleSheet("""
+            QPushButton {
+                background-color: #081E29;
+                border: 1.5px solid #00D2FF;
+                border-radius: 4px;
+                padding: 3px 0px;
+            }
+            QPushButton:hover {
+                background-color: #0E2E3E;
+                border: 1.5px solid #5CE1E6;
+            }
+        """)
+        btn_notes.clicked.connect(lambda _=False, c=widget: self._on_action_notes(c))
+        layout.addWidget(btn_notes)
+
         btn_more = QPushButton("⋮")
-        btn_more.setFixedWidth(24)
+        btn_more.setFixedSize(20, 26)
         btn_more.setToolTip("More actions (Create Client, Delete)")
         btn_more.setStyleSheet("""
             QPushButton {
@@ -3085,7 +3716,7 @@ class TrackerDumpWindow(QWidget):
         btn_create = QPushButton()
         btn_create.setObjectName("act_create")
         btn_create.setIcon(_safe_qta_icon("mdi.account-plus", "#4CF9B7"))
-        btn_create.setFixedWidth(30)
+        btn_create.setFixedSize(24, 26)
         btn_create.setToolTip("Create a client from this capture")
         btn_create.setStyleSheet("""
             QPushButton {
@@ -3115,6 +3746,9 @@ class TrackerDumpWindow(QWidget):
             needs_create = item.get('is_unassigned')
         else:
             needs_create = item.get('is_unassigned') or not item.get('client_id')
+
+        act_notes = menu.addAction(_safe_qta_icon("mdi.note-text-outline", "#00D2FF"), "Notes & Media")
+        act_notes.triggered.connect(lambda: self._show_notes_dialog(item, is_grouped))
 
         if needs_create:
             act_create = menu.addAction(_safe_qta_icon("mdi.account-plus", "#2E9B5F"), "+ Create Client")

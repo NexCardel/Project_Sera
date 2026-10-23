@@ -46,7 +46,8 @@ _MONTH_OR_QUARTER = re.compile(r"^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|d
 _GSTIN_IN_TEXT = re.compile(r"\b(\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z])\b")
 _FORM = re.compile(r"\bGSTR[-_.\s]?([1Il|]|3[B8])", re.I)     # OCR reads GSTR1 as GSTRI, 3B as 38
 # OCR confusions in a typed username. Each position can read as any character in its class.
-_OCR_CLASSES = {"O": "O0", "0": "O0", "I": "I1lL|", "1": "I1lL|", "l": "I1lL|", "L": "I1lL|", "|": "I1lL|"}
+_OCR_CLASSES = {"O": "O0", "0": "O0", "I": "I1lL|", "1": "I1lL|", "l": "I1lL|", "L": "I1lL|", "|": "I1lL|",
+                "8": "8eB", "e": "e8", "B": "B8"}
 _OCR_VARIANT_CAP = 256
 
 
@@ -267,15 +268,18 @@ class Verifier:
         with self._lock:
             if spec.kind == "gst_login":
                 user = read_login_username(lines)
-                linked = self._links.read_login(hwnd, user, now)
-                if user and not linked and self._client_lookup:
+                info = None
+                match = None
+                if user and self._client_lookup:
                     info, match = lookup_client(self._client_lookup, user)
-                    if info and match == "exact":
-                        self._links.promote_candidate(hwnd, user, now)
-                        linked = True
+                linked = self._links.read_login(hwnd, user, now)
+                if user and not linked and info and match == "exact":
+                    self._links.promote_candidate(hwnd, user, now)
+                    linked = True
                 return {"status": "login_linked" if linked else ("login_seen" if user else "login_empty"),
                         "page_kind": spec.kind,
-                        "username": user}
+                        "username": user,
+                        "client_id": (info or {}).get("client_id")}
             self._links.touch(hwnd, now)
             return self._observe_filing(hwnd, url, lines, spec, now, today, green_boxes, words)
 
