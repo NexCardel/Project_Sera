@@ -169,6 +169,11 @@ def _client_block(links_user: Optional[str], lines: Sequence[str],
     """Who the ARN is for, and how sure we are. Page identity (GSTIN) beats the username link."""
     block: Dict[str, Any] = {"username": links_user, "client_id": None, "link": None, "agreement": "unknown",
                              "match": None}
+    page = _page_gstins(lines)
+    # A single GSTIN on the confirmation page identifies the filing even when the portal login
+    # username is unreadable; it is what the reconciler's identity fallback matches SGT rows on.
+    if len(page) == 1:
+        block["page_gstin"] = next(iter(page))
     if not links_user:
         return block
     info, match = lookup_client(client_lookup, links_user)
@@ -177,7 +182,6 @@ def _client_block(links_user: Optional[str], lines: Sequence[str],
         return block
     block["client_id"] = info.get("client_id")
     block["match"] = match                          # "exact" or "ocr_variant" (lower confidence)
-    page = _page_gstins(lines)
     if not page:
         return block
     client_gstin, client_pan = (info.get("gstin") or ""), (info.get("pan") or "")
@@ -357,8 +361,11 @@ from .vsdc247_reconciler import (
     build_flagged_row,
     build_vsdc247_block,
     compare_clients,
+    find_sgt_by_identity,
     find_sgt_in_db,
     find_sgt_in_router,
+    find_sgt_in_router_by_identity,
+    mark_warning_resolved,
 )
 
 

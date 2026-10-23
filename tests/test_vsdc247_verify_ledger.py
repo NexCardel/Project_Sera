@@ -224,6 +224,12 @@ class WindowLink(unittest.TestCase):
         _observe(v2, 9, "gstr1_submit_success_02.json")
         self.assertIsNone(sink2.rows[0]["client"]["username"])
 
+    def test_page_gstin_is_kept_when_no_username_is_readable(self):
+        v, sink = _verifier()
+        _observe(v, 9, "gstr1_submit_success_01.json")
+        _observe(v, 9, "gstr1_submit_success_02.json")
+        self.assertEqual(sink.rows[0]["client"]["page_gstin"], GSTIN)
+
     def test_link_belongs_to_its_window_only(self):
         v, sink = _verifier()
         self._login_twice(v, 1)

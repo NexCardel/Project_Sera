@@ -99,6 +99,51 @@ class TrackerDumpMixin:
                 updated += 1
         return updated
 
+    def attach_arn_to_sgt_row(self, row_id: int, arn: str, block: dict = None) -> int:
+        """Plan 6.5 fallback: SGT stored a filed return under its identity but without an ARN
+        (the returns calendar row carries 'N/A'). Fill that missing ARN in place, so the OCR
+        ledger's ARN and the SGT row become one dataset and later ARN lookups resolve. A row that
+        already holds a real ARN is never overwritten. Returns 1 when the row was updated."""
+        clean_arn = (arn or "").strip().upper()
+        if not row_id or not clean_arn:
+            return 0
+        with self._connect_raw() as r_conn:
+            row = r_conn.execute(
+                "SELECT arn_number, raw_payload_json, capture_method FROM tracker_dump WHERE id = ?",
+                (row_id,),
+            ).fetchone()
+            if not row:
+                return 0
+            current_arn, r_json, capture_method = row
+            if not str(capture_method or "").startswith("SGT") or capture_method == "SGT_sdis_info":
+                return 0
+            current = (current_arn or "").strip().upper()
+            if current and current not in ("N/A", "NA", "NONE", "UNKNOWN"):
+                return 0
+            try:
+                payload = json.loads(r_json) if r_json else {}
+            except Exception:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            if isinstance(block, dict) and block:
+                v_block = dict(block)
+                v_block.setdefault("verified", True)
+                v_block.setdefault("status", "verified")
+                if isinstance(payload.get("raw_payload"), dict):
+                    payload["raw_payload"]["vsdc247"] = dict(v_block)
+                    payload["raw_payload"]["vsdc247-v"] = dict(v_block)
+                payload["vsdc247"] = dict(v_block)
+                payload["vsdc247-v"] = dict(v_block)
+                r_conn.execute(
+                    "UPDATE tracker_dump SET arn_number = ?, raw_payload_json = ? WHERE id = ?",
+                    (clean_arn, json.dumps(payload, ensure_ascii=False), row_id),
+                )
+            else:
+                r_conn.execute(
+                    "UPDATE tracker_dump SET arn_number = ? WHERE id = ?", (clean_arn, row_id))
+            return 1
+
     def insert_vsdc247_flagged_row(self, row_dict: dict) -> int:
         """Inserts or updates an independent flagged row for an ARN missed by SGT (plan 6.5).
         capture_method = 'VSDC247_verify'

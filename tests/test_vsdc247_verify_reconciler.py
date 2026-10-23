@@ -28,8 +28,11 @@ from core.vsdc.vsdc247_reconciler import (
     build_flagged_row,
     build_vsdc247_block,
     compare_clients,
+    find_sgt_by_identity,
     find_sgt_in_db,
     find_sgt_in_router,
+    find_sgt_in_router_by_identity,
+    mark_warning_resolved,
 )
 from core.vsdc.vsdc247_verify import Verifier
 
@@ -255,6 +258,102 @@ class TestSgtLookup(unittest.TestCase):
         self.assertEqual(len(ticks), 1)
         self.assertEqual(ticks[0].outcome, OUTCOME_MATCHED)
         self.assertEqual(ticks[0].sgt_record.source, "tracker_dump")
+
+
+# ── WP3: Identity fallback for GST rows SGT stored without an ARN ─────────────
+class TestSgtIdentityFallback(unittest.TestCase):
+
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.execute("""
+            CREATE TABLE tracker_dump (
+                id INTEGER PRIMARY KEY,
+                dataset_key TEXT,
+                unassigned_identity TEXT,
+                arn_number TEXT,
+                capture_method TEXT,
+                raw_payload_json TEXT,
+                created_at TEXT,
+                client_id INTEGER
+            )
+        """)
+        self.payload = {
+            "filing_type": "GSTR-3B",
+            "period_label": "September - 2026-27",
+            "gstin": GSTIN_A,
+            "pan": PAN_A,
+            "client_name": "EXAMPLE TAXPAYER",
+        }
+        self.conn.execute(
+            "INSERT INTO tracker_dump VALUES (1, ?, ?, 'N/A', 'SGT_live', ?, "
+            "'2026-10-18T12:00:10', 42)",
+            (f"GST:{GSTIN_A}:GSTR3B:AY_2026_27_SEP", "Unassigned", json.dumps(self.payload)),
+        )
+        self.lookup = lambda portal, user: {
+            "client_id": 42, "gstin": GSTIN_A, "pan": PAN_A, "name": "EXAMPLE TAXPAYER",
+        } if user == "EXAMPLEUSER01" else None
+
+    def test_matches_a_return_sgt_stored_without_an_arn(self):
+        entry = _sample_ocr_entry(arn=ARN_1, form="GSTR-3B", period="September - 2026-27")
+        rec = find_sgt_by_identity(self.conn, entry, self.lookup)
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec.row_id, 1)
+        self.assertEqual(rec.source, "tracker_dump_identity")
+
+    def test_calendar_and_confirmation_period_labels_are_the_same_return(self):
+        # SGT key is AY_2026_27_SEP (returns calendar "September - 2026-27"); OCR read "Sep - 2026".
+        entry = _sample_ocr_entry(arn=ARN_1, form="GSTR-3B", period="Sep - 2026")
+        self.assertIsNotNone(find_sgt_by_identity(self.conn, entry, self.lookup))
+
+    def test_page_gstin_alone_is_enough_when_the_username_is_unknown(self):
+        entry = _sample_ocr_entry(arn=ARN_1, username=None, client_id=None,
+                                  agreement="unknown", form="GSTR-3B",
+                                  period="September - 2026-27")
+        entry["client"]["page_gstin"] = GSTIN_A
+        self.assertIsNotNone(find_sgt_by_identity(self.conn, entry, self.lookup))
+
+    def test_unknown_identity_is_never_matched(self):
+        entry = _sample_ocr_entry(arn=ARN_1, username=None, client_id=None,
+                                  agreement="unknown", form="GSTR-3B",
+                                  period="September - 2026-27")
+        self.assertIsNone(find_sgt_by_identity(self.conn, entry, self.lookup))
+
+    def test_a_different_period_is_not_matched(self):
+        entry = _sample_ocr_entry(arn=ARN_1, form="GSTR-3B", period="August - 2026-27")
+        self.assertIsNone(find_sgt_by_identity(self.conn, entry, self.lookup))
+
+    def test_a_different_form_is_not_matched(self):
+        entry = _sample_ocr_entry(arn=ARN_1, form="GSTR-1", period="September - 2026-27")
+        self.assertIsNone(find_sgt_by_identity(self.conn, entry, self.lookup))
+
+    def test_ambiguous_rows_are_not_matched(self):
+        self.conn.execute(
+            "INSERT INTO tracker_dump VALUES (2, ?, ?, 'N/A', 'SGT_live', ?, "
+            "'2026-10-18T12:00:11', 42)",
+            (f"GST:{GSTIN_A}:GSTR3B:AY_2026_27_SEP", "Unassigned", json.dumps(self.payload)),
+        )
+        entry = _sample_ocr_entry(arn=ARN_1, form="GSTR-3B", period="September - 2026-27")
+        self.assertIsNone(find_sgt_by_identity(self.conn, entry, self.lookup))
+
+    def test_sdis_carrier_rows_are_never_matched(self):
+        # Carriers hold profile values, not a filing, even when their payload echoes form/period.
+        self.conn.execute("DELETE FROM tracker_dump")
+        self.conn.execute(
+            "INSERT INTO tracker_dump VALUES (2, '', ?, 'N/A', 'SGT_sdis_info', ?, "
+            "'2026-10-18T12:00:11', 42)",
+            (GSTIN_A, json.dumps(self.payload)),
+        )
+        entry = _sample_ocr_entry(arn=ARN_1, form="GSTR-3B", period="September - 2026-27")
+        self.assertIsNone(find_sgt_by_identity(self.conn, entry, self.lookup))
+
+    def test_reconciler_matches_a_row_sgt_stored_without_an_arn(self):
+        reconciler = Reconciler(db=self.conn, client_lookup=self.lookup, clock=lambda: 1000.0)
+        entry = _sample_ocr_entry(arn=ARN_1, seen_epoch=1000.0,
+                                  form="GSTR-3B", period="September - 2026-27")
+        res = reconciler.observe_arn(entry, now=1000.0)
+        self.assertEqual(res.outcome, OUTCOME_MATCHED)
+        self.assertEqual(res.sgt_record.row_id, 1)
+        self.assertFalse(reconciler.is_pending(ARN_1))
 
 
 # ── WP3: Client Comparison Tests ───────────────────────────────────────────────
@@ -606,6 +705,67 @@ class TestAccountantReconciliationLog(unittest.TestCase):
         self.assertIn("[RESOLVED] SGT LATE ARRIVAL", content)
         self.assertIn("145 seconds", content)
         self.assertIn("cleared automatically", content)
+
+    def test_a_resolved_warning_is_annotated_in_place(self):
+        from core.vsdc.vsdc247_reconciler import append_accountant_reconciliation_log
+        append_accountant_reconciliation_log(
+            outcome=OUTCOME_MISSED,
+            arn="AA290121009125S",
+            form="GSTR-1",
+            period="September - 2026-27",
+            client_name="ABC Enterprises",
+            filing_pc="Office-PC-1",
+            path=self.log_file,
+        )
+        self.assertTrue(mark_warning_resolved(self.log_file, "AA290121009125S",
+                                              "2026-10-23 10:00:00"))
+        content = self.log_file.read_text(encoding="utf-8")
+        self.assertIn("[WARNING] SGT MISSED RETURN", content)
+        self.assertIn("Resolution:      RESOLVED on 2026-10-23 10:00:00", content)
+        self.assertEqual(content.count("Resolution:"), 1)
+        # Idempotent: a second pass does not stack resolution notes.
+        self.assertFalse(mark_warning_resolved(self.log_file, "AA290121009125S",
+                                               "2026-10-23 10:05:00"))
+        self.assertEqual(self.log_file.read_text(encoding="utf-8").count("Resolution:"), 1)
+
+    def test_late_identity_match_resolves_the_warning_in_the_log(self):
+        conn = sqlite3.connect(":memory:")
+        conn.execute("""
+            CREATE TABLE tracker_dump (
+                id INTEGER PRIMARY KEY, dataset_key TEXT, unassigned_identity TEXT,
+                arn_number TEXT, capture_method TEXT,
+                raw_payload_json TEXT, created_at TEXT, client_id INTEGER
+            )
+        """)
+        lookup = lambda portal, user: {
+            "client_id": 42, "gstin": GSTIN_A, "pan": PAN_A, "name": "EXAMPLE TAXPAYER",
+        } if user == "EXAMPLEUSER01" else None
+        reconciler = Reconciler(db=conn, client_lookup=lookup, grace_sec=30.0,
+                                clock=self.clock, accountant_log_path=self.log_file)
+        entry = _sample_ocr_entry(arn="AA290121009125S", seen_epoch=self.clock.t,
+                                  form="GSTR-3B", period="September - 2026-27")
+        reconciler.observe_arn(entry, now=self.clock.t)
+
+        self.clock.advance(35.0)
+        reconciler.check_pending(now=self.clock.t)
+        self.assertIn("[WARNING] SGT MISSED RETURN",
+                      self.log_file.read_text(encoding="utf-8"))
+
+        conn.execute(
+            "INSERT INTO tracker_dump VALUES (1, ?, ?, 'N/A', 'SGT_live', ?, "
+            "'2026-10-18T12:00:10', 42)",
+            (f"GST:{GSTIN_A}:GSTR3B:AY_2026_27_SEP", "Unassigned",
+             json.dumps({"filing_type": "GSTR-3B", "gstin": GSTIN_A, "pan": PAN_A})),
+        )
+        self.clock.advance(5.0)
+        results = reconciler.check_pending(now=self.clock.t)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].outcome, OUTCOME_MATCHED)
+        self.assertTrue(results[0].late)
+
+        content = self.log_file.read_text(encoding="utf-8")
+        self.assertIn("[RESOLVED] SGT LATE ARRIVAL", content)
+        self.assertIn("Resolution:      RESOLVED on", content)
 
     def test_reconciler_writes_to_accountant_log_automatically(self):
         reconciler = Reconciler(

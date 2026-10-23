@@ -26,3 +26,12 @@ def _diag_log_in_tmp(monkeypatch, tmp_path):
     """The capture engine's diagnostics log (core/vsdc/vsdc_diag) goes to the test's own folder,
     never to the real ~/AmanAssociates_Sera/logs/vsdc.log."""
     monkeypatch.setenv("VSDC_DIAG_LOG", str(tmp_path / "vsdc.log"))
+
+
+@pytest.fixture(autouse=True)
+def _reconciliation_log_in_tmp(monkeypatch, tmp_path):
+    """The accountant reconciliation log (core/vsdc/vsdc247_reconciler) goes to the test's own
+    folder, never to the real ~/AmanAssociates_Sera/logs/gst_reconciliation.txt."""
+    monkeypatch.setenv("VSDC_ACCOUNTANT_LOG", str(tmp_path / "gst_reconciliation.txt"))
+    monkeypatch.delenv("GST_RECONCILIATION_LOG", raising=False)
+

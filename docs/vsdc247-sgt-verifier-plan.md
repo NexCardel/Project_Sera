@@ -104,6 +104,15 @@ After a **grace period** (default 90 s, configurable; SGT may wait for a status 
 SGT's answer for the ARN in this order: SGT's own outbox/slots for sessions still open (cheap, in memory);
 then `tracker_dump` rows with `capture_method LIKE 'SGT%'` and the same `arn_number`. Read-only.
 
+**Fallback for GST returns-calendar rows.** SGT's GST captures come from the returns calendar, which stores
+`arn_number = 'N/A'`; the ARN exists only on the portal confirmation page the OCR reads. When the ARN lookup
+finds nothing, look for exactly one SGT row with the same client identity (page GSTIN/PAN from the
+confirmation page, or the resolved portal username's client) + form + return period. Period labels are
+canonicalised so `AY_2026_27_SEP` (calendar FY label) and `SEP_2026` (confirmation page) compare equal. An
+unknown identity, a different form/period, or more than one candidate is never matched. The matched row gets
+the OCR ARN written into its empty `arn_number` (`attach_arn_to_sgt_row`), so later lookups resolve by ARN,
+and the `Pending_<ARN>` row is removed.
+
 ### 6.3 Outcomes
 
 | Outcome | Meaning | What is written |
@@ -124,8 +133,10 @@ touching those keys:
  "sgt_delay_sec": 12, "page_url": "...", "verifier_version": 1}
 ```
 
-It is written by a **new targeted function in `sera_db/tracker_dump.py`** (`annotate_vsdc247(arn, block)`:
-merge one key into `raw_payload_json`, idempotent, no other column changed). It must **not** go through
+It is written by targeted functions in `sera_db/tracker_dump.py` (`annotate_vsdc247(arn, block)`:
+merge one key into `raw_payload_json`, idempotent, no other column changed; and
+`attach_arn_to_sgt_row(row_id, arn, block)` for the identity fallback: it fills an empty `arn_number` and
+merges the same block, never overwriting a real ARN). They must **not** go through
 `insert_tracker_dump` (that function purges and de-duplicates by dataset key, status rank and drafts, none of
 which may be triggered by a checker).
 

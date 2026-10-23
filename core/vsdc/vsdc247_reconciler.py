@@ -27,6 +27,8 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+from core.dataset_key import compute_dataset_key
+
 from .vsdc_alerts import device_name
 
 DEFAULT_GRACE_SEC = 90.0
@@ -38,6 +40,59 @@ ACCOUNTANT_LOG_ENV = "VSDC_ACCOUNTANT_LOG"
 def _default_accountant_log_path() -> Path:
     env = os.environ.get(ACCOUNTANT_LOG_ENV) or os.environ.get("GST_RECONCILIATION_LOG")
     return Path(env) if env else Path.home() / "AmanAssociates_Sera" / "logs" / "gst_reconciliation.txt"
+
+
+_LOG_LOCK = threading.Lock()
+_LOG_ENTRY_SPLIT = re.compile(
+    r"(?m)^(?=\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] \[[A-Z]+\])"
+)
+
+
+def mark_warning_resolved(path: Optional[Union[str, Path]], arn: str,
+                          when_str: Optional[str] = None) -> bool:
+    """Annotates the stale '[WARNING] SGT MISSED RETURN' block(s) for arn as resolved in place.
+
+    The log stays an audit trail: the original warning text is never removed, a 'Resolution' line is
+    added to it so an accountant reading the file top to bottom is not left with a contradiction when
+    SGT's capture (stored without an ARN) is reconciled later. Best effort, never raises.
+    """
+    try:
+        target = Path(path) if path else _default_accountant_log_path()
+        clean_arn = (arn or "").strip().upper()
+        if not clean_arn or not target.exists():
+            return False
+        stamp = when_str or datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        arn_re = re.compile(r"(?m)^\s*ARN:\s*" + re.escape(clean_arn) + r"\s*$")
+        note = (f"  Resolution:      RESOLVED on {stamp} - SGT captured this return later; "
+                f"no action needed.\n")
+        with _LOG_LOCK:
+            text = target.read_text(encoding="utf-8")
+            blocks = _LOG_ENTRY_SPLIT.split(text)
+            changed = False
+            for i, block in enumerate(blocks):
+                if ("[WARNING] SGT MISSED RETURN" not in block
+                        or "Resolution:" in block
+                        or not arn_re.search(block)):
+                    continue
+                lines = block.splitlines(keepends=True)
+                at = None
+                for j in range(len(lines) - 1, -1, -1):
+                    if re.match(r"^-{10,}\s*$", lines[j].strip()):
+                        at = j
+                        break
+                if at is None:
+                    lines.append(("" if block.endswith("\n") else "\n") + note)
+                else:
+                    lines.insert(at, note)
+                blocks[i] = "".join(lines)
+                changed = True
+            if changed:
+                tmp = target.with_name(target.name + ".tmp")
+                tmp.write_text("".join(blocks), encoding="utf-8")
+                os.replace(str(tmp), str(target))
+            return changed
+    except Exception:
+        return False
 
 OUTCOME_MATCHED = "matched"
 OUTCOME_MATCHED_CLIENT_DIFFERS = "matched_client_differs"
@@ -183,8 +238,9 @@ def append_accountant_reconciliation_log(
             lines.append("")
 
         if lines:
-            with target_path.open("a", encoding="utf-8") as fh:
-                fh.write("\n".join(lines) + "\n")
+            with _LOG_LOCK:
+                with target_path.open("a", encoding="utf-8") as fh:
+                    fh.write("\n".join(lines) + "\n")
             return True
         return False
     except Exception:
@@ -279,6 +335,70 @@ def _build_sgt_record_from_session_slot(s: Any, slot: Any, source: str) -> SgtRe
     )
 
 
+_SGT_ROW_COLUMNS = ("id, dataset_key, unassigned_identity, arn_number, capture_method, "
+                    "raw_payload_json, created_at, client_id")
+
+
+def _record_from_db_row(row: Any, source: str = "tracker_dump") -> SgtRecord:
+    """Builds an SgtRecord from a tracker_dump row selected by the SGT lookup queries."""
+    (row_id, dataset_key, unassigned_identity, arn_number,
+     capture_method, raw_payload_json, created_at, client_id) = row
+
+    raw_payload: Dict[str, Any] = {}
+    if raw_payload_json:
+        try:
+            raw_payload = json.loads(raw_payload_json) if isinstance(raw_payload_json, str) else raw_payload_json
+        except Exception:
+            raw_payload = {}
+
+    client_prof: Dict[str, Any] = {}
+    sgt_d: Dict[str, Any] = {}
+    if isinstance(raw_payload.get("raw_payload"), dict):
+        client_prof = raw_payload["raw_payload"].get("client_profile", {}) or {}
+        sgt_d = raw_payload["raw_payload"].get("sgt_dataset", {}) or {}
+
+    pan = raw_payload.get("pan") or client_prof.get("pan") or unassigned_identity
+    gstin = raw_payload.get("gstin") or client_prof.get("gstin") or unassigned_identity
+    client_name = raw_payload.get("client_name") or client_prof.get("name")
+
+    form = raw_payload.get("filing_type") or sgt_d.get("form")
+    period = raw_payload.get("period_label") or sgt_d.get("period")
+
+    cap_time = None
+    if created_at:
+        try:
+            cap_time = datetime.datetime.fromisoformat(created_at).timestamp()
+        except Exception:
+            pass
+
+    return SgtRecord(
+        arn=arn_number or "",
+        pan=_extract_pan(pan),
+        gstin=_extract_gstin(gstin),
+        client_name=_clean_str(client_name),
+        client_id=client_id,
+        form=_clean_str(form),
+        period=_clean_str(period),
+        captured_at=cap_time,
+        source=source,
+        row_id=row_id,
+        dataset_key=dataset_key,
+        raw_payload=raw_payload if isinstance(raw_payload, dict) else {},
+    )
+
+
+def _with_raw_connection(db: Any, fn: Callable[[Any], Any]) -> Any:
+    if hasattr(db, "_connect_raw"):
+        cm = db._connect_raw()
+        if hasattr(cm, "__enter__") and hasattr(cm, "__exit__"):
+            with cm as conn:
+                return fn(conn)
+        return fn(cm)
+    elif hasattr(db, "cursor") or hasattr(db, "execute"):
+        return fn(db)
+    return None
+
+
 def find_sgt_in_db(db: Any, arn: str) -> Optional[SgtRecord]:
     """Look up an ARN in tracker_dump rows where capture_method LIKE 'SGT%' (read-only)."""
     if not db or not arn:
@@ -286,72 +406,235 @@ def find_sgt_in_db(db: Any, arn: str) -> Optional[SgtRecord]:
     clean_arn = arn.strip().upper()
 
     def _query(conn):
-
-        cur = conn.execute(
-            "SELECT id, dataset_key, unassigned_identity, arn_number, capture_method, "
-            "raw_payload_json, created_at, client_id "
-            "FROM tracker_dump WHERE capture_method LIKE 'SGT%' AND UPPER(TRIM(arn_number)) = ? "
+        row = conn.execute(
+            f"SELECT {_SGT_ROW_COLUMNS} FROM tracker_dump "
+            "WHERE capture_method LIKE 'SGT%' AND UPPER(TRIM(arn_number)) = ? "
             "ORDER BY id DESC LIMIT 1",
             (clean_arn,),
-        )
-        row = cur.fetchone()
+        ).fetchone()
         if not row:
             return None
+        rec = _record_from_db_row(row)
+        rec.arn = rec.arn or clean_arn
+        return rec
 
-        (row_id, dataset_key, unassigned_identity, arn_number,
-         capture_method, raw_payload_json, created_at, client_id) = row
+    return _with_raw_connection(db, _query)
 
-        raw_payload = {}
-        if raw_payload_json:
-            try:
-                raw_payload = json.loads(raw_payload_json) if isinstance(raw_payload_json, str) else raw_payload_json
-            except Exception:
-                raw_payload = {}
 
-        client_prof = {}
-        sgt_d = {}
-        if isinstance(raw_payload.get("raw_payload"), dict):
-            client_prof = raw_payload["raw_payload"].get("client_profile", {}) or {}
-            sgt_d = raw_payload["raw_payload"].get("sgt_dataset", {}) or {}
+def _canon_form(form: Optional[str]) -> str:
+    parts = compute_dataset_key("GST Portal", "X", form or "", "").split(":")
+    return parts[2] if len(parts) > 2 else "FORM"
 
-        pan = raw_payload.get("pan") or client_prof.get("pan") or unassigned_identity
-        gstin = raw_payload.get("gstin") or client_prof.get("gstin") or unassigned_identity
-        client_name = raw_payload.get("client_name") or client_prof.get("name")
 
-        form = raw_payload.get("filing_type") or sgt_d.get("form")
-        period = raw_payload.get("period_label") or sgt_d.get("period")
+def _canon_period(period: Optional[str]) -> str:
+    parts = compute_dataset_key("GST Portal", "X", "GSTR1", period or "").split(":")
+    return parts[3] if len(parts) > 3 else "CURRENT"
 
-        cap_time = None
-        if created_at:
-            try:
-                cap_time = datetime.datetime.fromisoformat(created_at).timestamp()
-            except Exception:
-                pass
 
-        return SgtRecord(
-            arn=arn_number or clean_arn,
-            pan=_extract_pan(pan),
-            gstin=_extract_gstin(gstin),
-            client_name=_clean_str(client_name),
-            client_id=client_id,
-            form=_clean_str(form),
-            period=_clean_str(period),
-            captured_at=cap_time,
-            source="tracker_dump",
-            row_id=row_id,
-            dataset_key=dataset_key,
-            raw_payload=raw_payload if isinstance(raw_payload, dict) else {},
-        )
-
-    if hasattr(db, "_connect_raw"):
-        cm = db._connect_raw()
-        if hasattr(cm, "__enter__") and hasattr(cm, "__exit__"):
-            with cm as conn:
-                return _query(conn)
-        return _query(cm)
-    elif hasattr(db, "cursor") or hasattr(db, "execute"):
-        return _query(db)
+def _period_year_month(period_canon: str) -> Optional[Tuple[int, str]]:
+    m = re.match(r"^AY_(\d{4})_(\d{2})_([A-Z]{3})$", period_canon or "")
+    if m:
+        fy = int(m.group(1))
+        mon = m.group(3)
+        cal = fy if mon in ("APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC") else fy + 1
+        return (cal, mon)
+    m = re.match(r"^([A-Z]{3})_(\d{4})$", period_canon or "")
+    if m:
+        return (int(m.group(2)), m.group(1))
     return None
+
+
+def _periods_match(left: str, right: str) -> bool:
+    """Compares periods after canonicalisation. 'AY_2026_27_SEP' (returns calendar FY label) and
+    'SEP_2026' (confirmation page label) are the same return period."""
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    a, b = _period_year_month(left), _period_year_month(right)
+    return bool(a and b and a == b)
+
+
+def _entry_identity(entry: Dict[str, Any],
+                    client_lookup: Optional[Callable[[str, str], Optional[dict]]] = None
+                    ) -> Tuple[Optional[Any], set]:
+    """(client_id, GSTIN/PAN candidates) for an OCR ledger entry. A single page GSTIN is
+    authoritative: when it contradicts the linked portal user, the username identity is dropped.
+    No identity is ever invented - callers must not match when both are empty."""
+    client_block = entry.get("client") or {}
+    cid = client_block.get("client_id")
+    ids = set()
+    page_gstin = _extract_gstin(client_block.get("page_gstin") or entry.get("page_gstin"))
+    if page_gstin:
+        ids.add(page_gstin)
+        if len(page_gstin) == 15:
+            ids.add(page_gstin[2:12])
+        if client_block.get("agreement") == "conflict":
+            cid = None
+    elif client_lookup and client_block.get("username"):
+        info = None
+        try:
+            info = client_lookup("GST Portal", client_block["username"])
+        except Exception:
+            info = None
+        if info:
+            gstin = _extract_gstin(info.get("gstin"))
+            pan = _extract_pan(info.get("pan"))
+            if gstin:
+                ids.add(gstin)
+                if len(gstin) == 15:
+                    ids.add(gstin[2:12])
+                    pan = pan or gstin[2:12]
+            if pan:
+                ids.add(pan)
+            if cid is None and info.get("client_id") is not None:
+                cid = info.get("client_id")
+    return cid, ids
+
+
+def _dataset_key_parts(rec: SgtRecord) -> Optional[Tuple[str, str, str]]:
+    parts = (rec.dataset_key or "").split(":")
+    if len(parts) >= 4 and parts[0] == "GST":
+        return (parts[1], parts[2], parts[3])
+    return None
+
+
+def _record_matches_identity(rec: SgtRecord, form: str, period: str,
+                             cid: Optional[Any], ids: set) -> bool:
+    """A candidate SGT row must be an ARN-less capture of the same form/period and, when we have
+    one, the same client identity. Rows already carrying a different real ARN are never matched."""
+    arn = (rec.arn or "").strip().upper()
+    if arn and arn not in ("N/A", "NA", "NONE", "UNKNOWN"):
+        return False
+
+    parts = _dataset_key_parts(rec)
+    rec_form = parts[1] if parts else _canon_form(rec.form)
+    rec_period = parts[2] if parts else _canon_period(rec.period)
+    if rec_form != form or not _periods_match(rec_period, period):
+        return False
+
+    rec_ids = set()
+    for value in (rec.gstin, rec.pan,
+                  (rec.raw_payload or {}).get("gstin"), (rec.raw_payload or {}).get("pan")):
+        gstin = _extract_gstin(value)
+        pan = _extract_pan(value)
+        if gstin:
+            rec_ids.add(gstin)
+            if len(gstin) == 15:
+                rec_ids.add(gstin[2:12])
+        if pan:
+            rec_ids.add(pan)
+    if parts:
+        rec_ids.add(parts[0])
+        gstin = _extract_gstin(parts[0])
+        if gstin and len(gstin) == 15:
+            rec_ids.add(gstin[2:12])
+
+    if ids:
+        return bool(ids & rec_ids)
+    if cid is not None and rec.client_id is not None:
+        return str(cid) == str(rec.client_id)
+    return False
+
+
+def find_sgt_by_identity(db: Any, entry: Dict[str, Any],
+                         client_lookup: Optional[Callable[[str, str], Optional[dict]]] = None
+                         ) -> Optional[SgtRecord]:
+    """Fallback lookup for a GST filing SGT stored without an ARN (the returns calendar row carries
+    'N/A'). Matches the OCR entry's client identity + form + return period, never form + period
+    alone, and only when exactly one SGT row fits. Ambiguity or an unknown identity returns None."""
+    if not db or not isinstance(entry, dict):
+        return None
+    form = _canon_form(entry.get("form"))
+    period = _canon_period(entry.get("period"))
+    if form == "FORM" or period == "CURRENT":
+        return None
+    cid, ids = _entry_identity(entry, client_lookup)
+    if cid is None and not ids:
+        return None
+
+    def _query(conn):
+        clauses: List[str] = []
+        params: List[Any] = []
+        if cid is not None:
+            clauses.append("client_id = ?")
+            params.append(cid)
+        if ids:
+            id_list = sorted(str(i) for i in ids)
+            clauses.append("UPPER(TRIM(unassigned_identity)) IN ({})".format(",".join("?" for _ in id_list)))
+            params.extend(id_list)
+            # The period label differs between SGT's returns calendar (FY form, e.g. AY_2026_27_SEP)
+            # and the portal confirmation page (SEP_2026), so match the identity+form prefix here and
+            # compare the period in Python.
+            prefixes = []
+            for ident in id_list:
+                key = compute_dataset_key("GST Portal", ident, entry.get("form"), "")
+                prefix = ":".join(key.split(":")[:3]) + ":"
+                if prefix not in prefixes:
+                    prefixes.append(prefix)
+            for prefix in prefixes:
+                clauses.append("dataset_key LIKE ?")
+                params.append(prefix + "%")
+
+        rows = conn.execute(
+            f"SELECT {_SGT_ROW_COLUMNS} FROM tracker_dump "
+            "WHERE capture_method LIKE 'SGT%' AND capture_method != 'SGT_sdis_info' "
+            "AND (" + " OR ".join(clauses) + ") "
+            "ORDER BY id DESC",
+            params,
+        ).fetchall()
+
+        found: Dict[Any, SgtRecord] = {}
+        for row in rows:
+            rec = _record_from_db_row(row, source="tracker_dump_identity")
+            if rec.row_id in found or not _record_matches_identity(rec, form, period, cid, ids):
+                continue
+            found[rec.row_id] = rec
+        return next(iter(found.values())) if len(found) == 1 else None
+
+    return _with_raw_connection(db, _query)
+
+
+def find_sgt_in_router_by_identity(sgt_router: Any, entry: Dict[str, Any],
+                                   client_lookup: Optional[Callable[[str, str], Optional[dict]]] = None
+                                   ) -> Optional[SgtRecord]:
+    """Same fallback as find_sgt_by_identity, for a filing still in SGT's in-memory sessions."""
+    if not sgt_router or not isinstance(entry, dict):
+        return None
+    form = _canon_form(entry.get("form"))
+    period = _canon_period(entry.get("period"))
+    if form == "FORM" or period == "CURRENT":
+        return None
+    cid, ids = _entry_identity(entry, client_lookup)
+    if cid is None and not ids:
+        return None
+
+    found: Dict[Any, SgtRecord] = {}
+    seen = set()
+
+    def _consider(s: Any, slot: Any) -> None:
+        key = (id(s), id(slot))
+        if key in seen:
+            return
+        seen.add(key)
+        rec = _build_sgt_record_from_session_slot(s, slot, source="sgt_identity")
+        if _record_matches_identity(rec, form, period, cid, ids):
+            found[key] = rec
+
+    outbox = getattr(sgt_router, "_outbox", None) or {}
+    for s, slot in list(outbox.values()):
+        _consider(s, slot)
+    sessions = list(getattr(sgt_router, "_sessions", {}).values())
+    shelf = getattr(sgt_router, "_shelf", {})
+    if isinstance(shelf, dict):
+        for s_list in shelf.values():
+            if isinstance(s_list, list):
+                sessions.extend(s_list)
+    for s in sessions:
+        for slot in getattr(s, "slots", []):
+            _consider(s, slot)
+
+    return next(iter(found.values())) if len(found) == 1 else None
 
 
 
@@ -380,6 +663,10 @@ def compare_clients(entry: Dict[str, Any], sgt: SgtRecord,
 
     ocr_gstin = _extract_gstin(ocr_info.get("gstin") if ocr_info else None)
     ocr_pan = _extract_pan(ocr_info.get("pan") if ocr_info else None)
+    page_gstin = _extract_gstin(client_block.get("page_gstin") or entry.get("page_gstin"))
+    if page_gstin:
+        ocr_gstin = page_gstin
+        ocr_pan = ocr_pan or (page_gstin[2:12] if len(page_gstin) == 15 else None)
     if not ocr_cid and ocr_info:
         ocr_cid = ocr_info.get("client_id")
 
@@ -549,8 +836,9 @@ class Reconciler:
     def set_db(self, db: Any) -> None:
         self._db = db
 
-    def lookup_sgt(self, arn: str) -> Optional[SgtRecord]:
-        """Query SGT in-memory first, then tracker_dump."""
+    def lookup_sgt(self, arn: str, entry: Optional[Dict[str, Any]] = None) -> Optional[SgtRecord]:
+        """Query SGT in-memory first, then tracker_dump by ARN. When an entry is supplied, fall back
+        to its client identity + form + period for GST filings SGT stored without an ARN."""
         if not arn:
             return None
         if self._sgt_lookup:
@@ -566,6 +854,15 @@ class Reconciler:
             rec = find_sgt_in_db(self._db, arn)
             if rec:
                 return rec
+        if entry is not None:
+            if self._db:
+                rec = find_sgt_by_identity(self._db, entry, self._client_lookup)
+                if rec:
+                    return rec
+            if router:
+                rec = find_sgt_in_router_by_identity(router, entry, self._client_lookup)
+                if rec:
+                    return rec
         return None
 
     def observe_arn(self, entry: Dict[str, Any], now: Optional[float] = None) -> ReconciliationResult:
@@ -582,7 +879,7 @@ class Reconciler:
             if arn in self._reconciled:
                 return self._reconciled[arn]
 
-            sgt = self.lookup_sgt(arn)
+            sgt = self.lookup_sgt(arn, entry)
             if sgt:
                 result = self._resolve_match(entry, sgt, seen_epoch, now, late=False)
                 self._reconciled[arn] = result
@@ -611,7 +908,7 @@ class Reconciler:
         with self._lock:
             # 1. Check pending items awaiting SGT
             for arn, (entry, seen_epoch) in list(self._pending.items()):
-                sgt = self.lookup_sgt(arn)
+                sgt = self.lookup_sgt(arn, entry)
                 if sgt:
                     res = self._resolve_match(entry, sgt, seen_epoch, now, late=False)
                     self._reconciled[arn] = res
@@ -628,7 +925,7 @@ class Reconciler:
 
             # 2. Check missed items for late SGT arrival
             for arn, (entry, seen_epoch) in list(self._missed.items()):
-                sgt = self.lookup_sgt(arn)
+                sgt = self.lookup_sgt(arn, entry)
                 if sgt:
                     # Late delivery!
                     res = self._resolve_match(entry, sgt, seen_epoch, now, late=True)
@@ -741,17 +1038,30 @@ class Reconciler:
 
         alert_needed = (outcome == OUTCOME_MATCHED_CLIENT_DIFFERS)
         alert_kind = "client_differs" if alert_needed else None
+        block["matched_by"] = sgt.source or "unknown"
 
+        # A fallback match (identity + form + period) is an SGT row that stored 'N/A' instead of the
+        # ARN. Fill that ARN in now, so the two sides are one dataset and later ARN lookups work.
+        if sgt.row_id is not None and self._db and hasattr(self._db, "attach_arn_to_sgt_row"):
+            try:
+                self._db.attach_arn_to_sgt_row(sgt.row_id, arn, block)
+            except Exception:
+                pass
         if self._db and hasattr(self._db, "annotate_vsdc247"):
             try:
                 self._db.annotate_vsdc247(arn, block)
             except Exception:
                 pass
-        if late and self._db and hasattr(self._db, "remove_vsdc247_flagged_row"):
+        # Any SGT capture of the filing makes the independent 'Pending_<ARN>' row redundant,
+        # whether it arrived within the grace period or late.
+        if self._db and hasattr(self._db, "remove_vsdc247_flagged_row"):
             try:
                 self._db.remove_vsdc247_flagged_row(arn)
             except Exception:
                 pass
+        # If this ARN ever produced a 'missed' warning (this run or an earlier one), annotate it
+        # now: the warning's claim is no longer true once any SGT capture of the filing is found.
+        mark_warning_resolved(getattr(self, "accountant_log_path", None), arn)
 
         if late or outcome == OUTCOME_MATCHED_CLIENT_DIFFERS:
             append_accountant_reconciliation_log(

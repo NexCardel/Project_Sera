@@ -197,6 +197,92 @@ class TestTrackerDumpWP4(unittest.TestCase):
         ).fetchone()[0]
         self.assertEqual(still_there, 1)
 
+    def test_attach_arn_to_sgt_row_fills_a_missing_arn(self):
+        self.db.conn.execute(
+            """INSERT INTO tracker_dump
+               (client_id, unassigned_identity, portal, period_label, arn_number, capture_method, status, raw_payload_json, dataset_key)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (42, "Unassigned", "GST Portal", "September - 2026-27", "N/A",
+             "SGT_live", "Submitted & Verified",
+             json.dumps({"filing_type": "GSTR-3B", "gstin": "00AAAAA0000A1Z0"}),
+             "GST:00AAAAA0000A1Z0:GSTR3B:AY_2026_27_SEP"),
+        )
+        row_id = self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        block = build_vsdc247_block(result=OUTCOME_MATCHED, arn_seen=self.arn)
+
+        self.assertEqual(self.db.attach_arn_to_sgt_row(row_id, self.arn, block), 1)
+
+        row = self.db.conn.execute(
+            "SELECT arn_number, raw_payload_json, status, dataset_key FROM tracker_dump WHERE id = ?",
+            (row_id,),
+        ).fetchone()
+        self.assertEqual(row[0], self.arn)
+        self.assertEqual(json.loads(row[1])["vsdc247"]["result"], OUTCOME_MATCHED)
+        self.assertEqual(row[2], "Submitted & Verified")       # status untouched
+        self.assertEqual(row[3], "GST:00AAAAA0000A1Z0:GSTR3B:AY_2026_27_SEP")
+
+    def test_attach_arn_never_overwrites_a_real_arn(self):
+        block = build_vsdc247_block(result=OUTCOME_MATCHED, arn_seen=self.other_arn)
+        row_id = self.db.conn.execute(
+            "SELECT id FROM tracker_dump WHERE arn_number = ?", (self.arn,)
+        ).fetchone()[0]
+
+        self.assertEqual(self.db.attach_arn_to_sgt_row(row_id, self.other_arn, block), 0)
+        self.assertEqual(
+            self.db.conn.execute("SELECT arn_number FROM tracker_dump WHERE id = ?", (row_id,)).fetchone()[0],
+            self.arn,
+        )
+
+    def test_attach_arn_refuses_an_sdis_carrier_row(self):
+        self.db.conn.execute(
+            """INSERT INTO tracker_dump
+               (client_id, unassigned_identity, portal, period_label, arn_number, capture_method, status, raw_payload_json, dataset_key)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (42, "00AAAAA0000A1Z0", "GST Portal", "September - 2026-27", "N/A",
+             "SGT_sdis_info", "Submitted & Verified", "{}", ""),
+        )
+        row_id = self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        block = build_vsdc247_block(result=OUTCOME_MATCHED, arn_seen=self.other_arn)
+
+        self.assertEqual(self.db.attach_arn_to_sgt_row(row_id, self.other_arn, block), 0)
+        self.assertEqual(
+            self.db.conn.execute("SELECT arn_number FROM tracker_dump WHERE id = ?", (row_id,)).fetchone()[0],
+            "N/A",
+        )
+
+    def test_reconciler_identity_match_attaches_the_ocr_arn(self):
+        self.db.conn.execute(
+            """INSERT INTO tracker_dump
+               (client_id, unassigned_identity, portal, period_label, arn_number, capture_method, status, raw_payload_json, dataset_key)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (42, "Unassigned", "GST Portal", "September - 2026-27", "N/A",
+             "SGT_live", "Submitted & Verified",
+             json.dumps({"filing_type": "GSTR-3B", "gstin": "00AAAAA0000A1Z0"}),
+             "GST:00AAAAA0000A1Z0:GSTR3B:AY_2026_27_SEP"),
+        )
+        row_id = self.db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        lookup = lambda portal, user: {"client_id": 42, "gstin": "00AAAAA0000A1Z0", "pan": "AAAAA0000A"}
+        clock = lambda: 1_800_000_000.0
+        reconciler = Reconciler(db=self.db, client_lookup=lookup, clock=clock)
+
+        ocr_arn = "AA270826009999X"
+        entry = {
+            "arn": ocr_arn,
+            "form": "GSTR-3B",
+            "period": "Sep - 2026",
+            "seen_epoch": clock(),
+            "client": {"username": "USER42", "client_id": 42, "agreement": "agrees"},
+        }
+        res = reconciler.observe_arn(entry, now=clock())
+
+        self.assertEqual(res.outcome, OUTCOME_MATCHED)
+        self.assertEqual(res.sgt_record.row_id, row_id)
+        row = self.db.conn.execute(
+            "SELECT arn_number, raw_payload_json FROM tracker_dump WHERE id = ?", (row_id,)
+        ).fetchone()
+        self.assertEqual(row[0], ocr_arn)
+        self.assertEqual(json.loads(row[1])["vsdc247"]["result"], OUTCOME_MATCHED)
+
     def test_reconciler_automatic_db_updates(self):
         # When Reconciler is provided db, it automatically annotates on match,
         # inserts flagged row on miss, and removes flagged row on late arrival.
