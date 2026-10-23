@@ -250,7 +250,7 @@ client_raw_container_light = _register(TableSpec(
 client_container_notes = _register(TableSpec(
     "client_container_notes", RAW_DB, LWW, row_key=("identity_key",),
     fk={"client_id": "clients"},
-    pending_creation=True,
+    pending_creation=False,
     notes="Added 2026-09-24 (P3-1 review round 2) as the owner-approved fix "
           "for client_raw_containers being unsafe to sync as a whole row (see "
           "its TableSpec.notes for the full history). This table does NOT "

@@ -354,8 +354,10 @@ class SchemaMixin:
             
             self._ensure_column(conn, "tracker_dump", "notes", "TEXT")
             self._ensure_column(conn, "tracker_dump", "screenshot_path", "TEXT")
+            self._ensure_column(conn, "tracker_dump", "screenshot_path_2", "TEXT")
             self._ensure_column(conn, "client_raw_containers", "notes", "TEXT")
             self._ensure_column(conn, "client_raw_containers", "screenshot_path", "TEXT")
+            self._ensure_column(conn, "client_raw_containers", "screenshot_path_2", "TEXT")
             # What the tracker list reads from a container, kept apart from the big
             # filing_history column (see SrpfMixin._write_container_light). Derived cache.
             conn.execute("""
@@ -369,6 +371,33 @@ class SchemaMixin:
                 );
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_client_raw_container_light_updated ON client_raw_container_light(last_updated DESC);")
+
+            # Stable identity container notes & media (survives container rebuilds & key re-resolutions)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS client_container_notes (
+                    identity_key    TEXT PRIMARY KEY,
+                    client_id       INTEGER,
+                    notes           TEXT,
+                    screenshot_path TEXT,
+                    screenshot_path_2 TEXT,
+                    updated_at      TEXT NOT NULL
+                );
+            """)
+            self._ensure_column(conn, "client_container_notes", "screenshot_path_2", "TEXT")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_client_container_notes_client_id ON client_container_notes(client_id);")
+
+            try:
+                cnt = conn.execute("SELECT COUNT(*) FROM client_container_notes").fetchone()[0]
+                if cnt == 0:
+                    conn.execute("""
+                        INSERT OR IGNORE INTO client_container_notes (identity_key, client_id, notes, screenshot_path, screenshot_path_2, updated_at)
+                        SELECT identity_key, client_id, notes, screenshot_path, screenshot_path_2, COALESCE(last_updated, datetime('now'))
+                        FROM client_raw_containers
+                        WHERE (notes IS NOT NULL AND notes != '') OR (screenshot_path IS NOT NULL AND screenshot_path != '')
+                           OR (screenshot_path_2 IS NOT NULL AND screenshot_path_2 != '')
+                    """)
+            except Exception:
+                pass
             
             conn.execute("CREATE INDEX IF NOT EXISTS idx_sdc_timelines_pan ON sdc_session_timelines(pan);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_sdc_timelines_cid ON sdc_session_timelines(client_id);")

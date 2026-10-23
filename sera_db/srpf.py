@@ -838,17 +838,74 @@ class SrpfMixin:
 
     def get_srpf_container_media(self, identity_key: str) -> dict:
         with self._connect_raw() as conn:
-            cur = conn.execute("SELECT notes, screenshot_path FROM client_raw_containers WHERE identity_key = ?", (identity_key,))
-            row = cur.fetchone()
-            if row:
-                return {"notes": row[0] or "", "screenshot_path": row[1] or ""}
-            return {"notes": "", "screenshot_path": ""}
+            # 1. Primary read from client_container_notes
+            try:
+                cur = conn.execute("SELECT notes, screenshot_path, screenshot_path_2 FROM client_container_notes WHERE identity_key = ?", (identity_key,))
+                row = cur.fetchone()
+                if row and (row[0] or row[1] or row[2]):
+                    return {"notes": row[0] or "", "screenshot_path": row[1] or "", "screenshot_path_2": row[2] or ""}
+            except Exception:
+                pass
 
-    def save_srpf_container_media(self, identity_key: str, notes: str, screenshot_path: str) -> bool:
+            # 2. Compatibility fallback to client_raw_containers
+            try:
+                cur = conn.execute("SELECT notes, screenshot_path, screenshot_path_2 FROM client_raw_containers WHERE identity_key = ?", (identity_key,))
+                row = cur.fetchone()
+                if row:
+                    return {"notes": row[0] or "", "screenshot_path": row[1] or "", "screenshot_path_2": row[2] or ""}
+            except Exception:
+                pass
+            return {"notes": "", "screenshot_path": "", "screenshot_path_2": ""}
+
+    def save_srpf_container_media(self, identity_key: str, notes: str, screenshot_path: str,
+                                  client_id: int | None = None, screenshot_path_2: str | None = None) -> bool:
+        """Saves notes and up to two screenshots. `screenshot_path_2=None` preserves the existing
+        second screenshot (so older callers cannot wipe it); pass "" to clear it."""
+        from datetime import datetime
+        now_str = datetime.now().isoformat()
+        keep_slot2 = 1 if screenshot_path_2 is None else 0
+        slot2_value = "" if screenshot_path_2 is None else screenshot_path_2
         with self._connect_raw() as conn:
-            cur = conn.execute("UPDATE client_raw_containers SET notes = ?, screenshot_path = ? WHERE identity_key = ?", (notes, screenshot_path, identity_key))
-            conn.execute("UPDATE client_raw_container_light SET notes = ? WHERE identity_key = ?", (notes, identity_key))
-            return cur.rowcount > 0
+            if client_id is None:
+                if str(identity_key or "").startswith("CLI-"):
+                    try:
+                        client_id = int(str(identity_key)[4:])
+                    except ValueError:
+                        pass
+                if client_id is None:
+                    try:
+                        row = conn.execute("SELECT client_id FROM client_raw_containers WHERE identity_key = ?", (identity_key,)).fetchone()
+                        if row and row[0] is not None:
+                            client_id = row[0]
+                    except Exception:
+                        pass
+
+            # 1. Primary write to client_container_notes
+            try:
+                conn.execute("""
+                    INSERT INTO client_container_notes (identity_key, client_id, notes, screenshot_path, screenshot_path_2, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(identity_key) DO UPDATE SET
+                        client_id = COALESCE(excluded.client_id, client_container_notes.client_id),
+                        notes = excluded.notes,
+                        screenshot_path = excluded.screenshot_path,
+                        screenshot_path_2 = CASE WHEN ? = 1 THEN client_container_notes.screenshot_path_2 ELSE excluded.screenshot_path_2 END,
+                        updated_at = excluded.updated_at
+                """, (identity_key, client_id, notes, screenshot_path, slot2_value, now_str, keep_slot2))
+            except Exception as e:
+                print(f"[database] Warning: Failed to write client_container_notes: {e}")
+
+            # 2. Compatibility mirror to client_raw_containers and client_raw_container_light
+            try:
+                conn.execute(
+                    "UPDATE client_raw_containers SET notes = ?, screenshot_path = ?, "
+                    "screenshot_path_2 = CASE WHEN ? = 1 THEN screenshot_path_2 ELSE ? END WHERE identity_key = ?",
+                    (notes, screenshot_path, keep_slot2, slot2_value, identity_key)
+                )
+                conn.execute("UPDATE client_raw_container_light SET notes = ? WHERE identity_key = ?", (notes, identity_key))
+            except Exception:
+                pass
+            return True
 
     # ---------------- Capture -> MCL mapping (client record enrichment) ----------------
 

@@ -130,6 +130,77 @@ class VSDCOcrEngine:
 
         return None
 
+    def capture_window_full(self, hwnd: int) -> Optional[Image.Image]:
+        """
+        Captures the WHOLE browser window - title bar, tabs, address bar and page - for
+        evidence. Used by VSDC247 when it saves the frame it read: a screenshot of the
+        confirmation plus the page that carried it is worth more than the page alone.
+
+        A window in front is read straight off the screen (Chromium's real pixels); otherwise
+        PrintWindow is tried. Returns None when neither gives a picture.
+        """
+        if not hwnd or not user32.IsWindow(hwnd):
+            return None
+
+        from .vsdc_windows import window_rect
+        try:
+            left, top, right, bottom = window_rect(hwnd)
+        except Exception:
+            return None
+        w, h = right - left, bottom - top
+        if w <= 0 or h <= 0:
+            return None
+
+        bmi = BITMAPINFOHEADER()
+        bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+        bmi.biWidth = w
+        bmi.biHeight = -h  # top-down DIB
+        bmi.biPlanes = 1
+        bmi.biBitCount = 32
+        bmi.biCompression = 0
+
+        buf = ctypes.create_string_buffer(w * h * 4)
+
+        # 1. Screen pixels while the window is in front - exactly what the user sees.
+        try:
+            screen_hdc = user32.GetDC(0)
+            if screen_hdc:
+                memdc = gdi32.CreateCompatibleDC(screen_hdc)
+                hbmp = gdi32.CreateCompatibleBitmap(screen_hdc, w, h)
+                gdi32.SelectObject(memdc, hbmp)
+                gdi32.BitBlt(memdc, 0, 0, w, h, screen_hdc, left, top, 0x00CC0020)
+                gdi32.GetDIBits(screen_hdc, hbmp, 0, h, buf, ctypes.byref(bmi), 0)
+                gdi32.DeleteObject(hbmp)
+                gdi32.DeleteDC(memdc)
+                user32.ReleaseDC(0, screen_hdc)
+                img = Image.frombuffer("RGBA", (w, h), buf, "raw", "BGRA", 0, 1).convert("RGB")
+                if img and img.getextrema() != ((0, 0), (0, 0), (0, 0)):
+                    return img
+        except Exception:
+            pass
+
+        # 2. PrintWindow fallback for a window that is covered or otherwise not on screen.
+        hdc = user32.GetWindowDC(hwnd)
+        if not hdc:
+            return None
+        try:
+            memdc = gdi32.CreateCompatibleDC(hdc)
+            hbmp = gdi32.CreateCompatibleBitmap(hdc, w, h)
+            gdi32.SelectObject(memdc, hbmp)
+            if not user32.PrintWindow(hwnd, memdc, 2):
+                gdi32.BitBlt(memdc, 0, 0, w, h, hdc, 0, 0, 0x00CC0020)
+            gdi32.GetDIBits(hdc, hbmp, 0, h, buf, ctypes.byref(bmi), 0)
+            gdi32.DeleteObject(hbmp)
+            gdi32.DeleteDC(memdc)
+            img = Image.frombuffer("RGBA", (w, h), buf, "raw", "BGRA", 0, 1).convert("RGB")
+            if img and img.getextrema() != ((0, 0), (0, 0), (0, 0)):
+                return img
+        except Exception:
+            pass
+        finally:
+            user32.ReleaseDC(hwnd, hdc)
+        return None
+
     @staticmethod
     def crop_region(img: Image.Image, region_type: str) -> Image.Image:
         """

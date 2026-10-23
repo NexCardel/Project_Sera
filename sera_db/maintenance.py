@@ -51,6 +51,10 @@ class MaintenanceMixin:
             self._migrate_legacy_peer_logs()
         except Exception as e:
             print(f"[-] Legacy peer_logs migration skipped: {e}")
+        try:
+            self._backfill_legacy_media_paths()
+        except Exception as e:
+            print(f"[-] Legacy media backfill skipped: {e}")
 
     # ─── Material Icon Ligature Noise Cleanup ─────────────────────────────────
     _ICON_LIGATURE_RE = re.compile(
@@ -321,3 +325,89 @@ class MaintenanceMixin:
                 conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
         except Exception as e:
             print(f"[database] rawPayload.db WAL checkpoint notice: {e}")
+
+    def _backfill_legacy_media_paths(self):
+        """Phase 6: Backfill media files from legacy data/media to user data dir and rewrite absolute paths."""
+        import os
+        import shutil
+
+        db_path = getattr(self, "raw_db_path", None) or getattr(self, "db_path", None)
+        if not db_path:
+            return
+        user_data_dir = os.path.dirname(os.path.abspath(db_path))
+        user_media_dir = os.path.join(user_data_dir, "media")
+        try:
+            os.makedirs(user_media_dir, exist_ok=True)
+        except Exception:
+            pass
+
+        app_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        legacy_media_dir = os.path.join(app_root, "data", "media")
+
+        if os.path.exists(legacy_media_dir) and os.path.isdir(legacy_media_dir):
+            try:
+                for entry in os.scandir(legacy_media_dir):
+                    if entry.is_file():
+                        dest = os.path.join(user_media_dir, entry.name)
+                        if not os.path.exists(dest):
+                            try:
+                                shutil.copy2(entry.path, dest)
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+
+        with self._connect_raw() as conn:
+            # 1. tracker_dump
+            try:
+                rows = conn.execute(
+                    "SELECT id, screenshot_path, screenshot_path_2 FROM tracker_dump "
+                    "WHERE (screenshot_path IS NOT NULL AND screenshot_path != '') "
+                    "OR (screenshot_path_2 IS NOT NULL AND screenshot_path_2 != '')"
+                ).fetchall()
+                for r_id, spath, spath2 in rows:
+                    new1 = f"media/{os.path.basename(spath)}" if spath and os.path.isabs(spath) else spath
+                    new2 = f"media/{os.path.basename(spath2)}" if spath2 and os.path.isabs(spath2) else spath2
+                    if new1 != spath or new2 != spath2:
+                        conn.execute(
+                            "UPDATE tracker_dump SET screenshot_path = ?, screenshot_path_2 = ? WHERE id = ?",
+                            (new1, new2, r_id)
+                        )
+            except Exception:
+                pass
+
+            # 2. client_container_notes
+            try:
+                rows = conn.execute(
+                    "SELECT identity_key, screenshot_path, screenshot_path_2 FROM client_container_notes "
+                    "WHERE (screenshot_path IS NOT NULL AND screenshot_path != '') "
+                    "OR (screenshot_path_2 IS NOT NULL AND screenshot_path_2 != '')"
+                ).fetchall()
+                for ikey, spath, spath2 in rows:
+                    new1 = f"media/{os.path.basename(spath)}" if spath and os.path.isabs(spath) else spath
+                    new2 = f"media/{os.path.basename(spath2)}" if spath2 and os.path.isabs(spath2) else spath2
+                    if new1 != spath or new2 != spath2:
+                        conn.execute(
+                            "UPDATE client_container_notes SET screenshot_path = ?, screenshot_path_2 = ? WHERE identity_key = ?",
+                            (new1, new2, ikey)
+                        )
+            except Exception:
+                pass
+
+            # 3. client_raw_containers
+            try:
+                rows = conn.execute(
+                    "SELECT identity_key, screenshot_path, screenshot_path_2 FROM client_raw_containers "
+                    "WHERE (screenshot_path IS NOT NULL AND screenshot_path != '') "
+                    "OR (screenshot_path_2 IS NOT NULL AND screenshot_path_2 != '')"
+                ).fetchall()
+                for ikey, spath, spath2 in rows:
+                    new1 = f"media/{os.path.basename(spath)}" if spath and os.path.isabs(spath) else spath
+                    new2 = f"media/{os.path.basename(spath2)}" if spath2 and os.path.isabs(spath2) else spath2
+                    if new1 != spath or new2 != spath2:
+                        conn.execute(
+                            "UPDATE client_raw_containers SET screenshot_path = ?, screenshot_path_2 = ? WHERE identity_key = ?",
+                            (new1, new2, ikey)
+                        )
+            except Exception:
+                pass

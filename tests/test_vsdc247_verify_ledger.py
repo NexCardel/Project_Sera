@@ -335,6 +335,16 @@ class RealOcrTolerance(unittest.TestCase):
         self.assertIsNone(info)
         self.assertIsNone(match)
 
+    def test_ocr_e_is_matched_to_a_saved_8(self):
+        info, match = lookup_client(
+            lambda p, u: {"client_id": 15} if u == "atki_8838" else None, "atki_883e")
+        self.assertEqual((info["client_id"], match), (15, "ocr_variant"))
+
+    def test_ocr_b_is_matched_to_a_saved_8(self):
+        info, match = lookup_client(
+            lambda p, u: {"client_id": 15} if u == "atki_8838" else None, "atki_883B")
+        self.assertEqual((info["client_id"], match), (15, "ocr_variant"))
+
     def test_exact_match_is_marked_exact(self):
         info, match = lookup_client(lambda p, u: {"client_id": 7} if u == "EXAMPLEUSEROI" else None, "EXAMPLEUSEROI")
         self.assertEqual((info["client_id"], match), (7, "exact"))

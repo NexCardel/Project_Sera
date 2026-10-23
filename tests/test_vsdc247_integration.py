@@ -103,6 +103,33 @@ class TestRunsOnPagesWithNoCrosshair(unittest.TestCase):
         self.assertEqual(p["raw_payload"]["source"]["engine"], "VSDC247")
         self.assertEqual(p["raw_text"], "")
 
+    def test_a_certain_capture_carries_the_frame_it_read_as_evidence(self):
+        h = Harness()
+        h.screen(["Dashboard"], shade=245)
+        h.tick()
+        h.screen(ITR_CONFIRMATION)
+        p = h.run()[0]
+        path = p.get("_evidence_screenshot")
+        try:
+            self.assertTrue(path, "the frame used for the read must be kept")
+            self.assertTrue(os.path.exists(path))
+            with Image.open(path) as frame:
+                self.assertEqual(frame.size, (1366, 768))
+        finally:
+            if path and os.path.exists(path):
+                os.remove(path)
+
+    def test_a_prompt_only_candidate_keeps_no_evidence_frame(self):
+        lines = ["Your return has been filed successfully", f"ARN : {GST_ARN}"]
+        h = Harness(url=PORTAL_GST, title=TITLE_GST)
+        h.screen(["x"], shade=245)
+        h.tick()
+        h.screen(lines)
+        with patch.object(h.router, "_save_247_evidence", return_value="") as save:
+            h.run(1)
+        self.assertEqual(h.events[-1][0], "prompt")
+        save.assert_not_called()
+
     def test_the_same_filing_is_never_sent_twice(self):
         h = Harness()
         h.screen(["x"], shade=245)
