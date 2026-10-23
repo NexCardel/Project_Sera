@@ -1,8 +1,9 @@
 """ui/dialogs/drs_config_dialog.py - DRS Configuration and Column Arrangement Dialog.
 
-Allows users to reorder and toggle MCL columns, fixed DRS status/period columns,
-and tracker dump fields. Matches the visual style of LTT (dark theme, Sera evergreen
-accent #2E9B5F, #0A0A0A background) and the column management UX of the MCL dialog.
+Allows users to configure column arrangement, ordering, and visibility per return form.
+Provides toggles for 'Extract from tracker dump only' (LTT mode) and Client Roster Scope.
+Matches the visual style of LTT (dark theme, Sera evergreen accent #2E9B5F, #0A0A0A background)
+and strictly uses Google Material Design icons (mdi.*).
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QComboBox,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -31,7 +33,10 @@ except Exception:
     qta = None
 
 from core.drs.config import (
-    default_drs_columns,
+    SCOPE_ALL_MCL,
+    SCOPE_SERVICE_ONLY,
+    default_drs_columns_for_form,
+    default_drs_config,
     load_drs_config,
     save_drs_config,
 )
@@ -58,8 +63,8 @@ class DRSConfigDialog(QDialog):
         self.db = db
         self.app_dir = db.app_dir
         self.setWindowTitle("Deadline Reminder System (DRS) — Configuration")
-        self.setMinimumSize(920, 640)
-        self.resize(960, 680)
+        self.setMinimumSize(940, 680)
+        self.resize(980, 720)
 
         self.setStyleSheet("""
             QDialog {
@@ -81,9 +86,33 @@ class DRSConfigDialog(QDialog):
             }
             QLabel#section_hdr {
                 color: #E6EDF3;
-                font-size: 13px;
+                font-size: 12.5px;
                 font-weight: 600;
                 letter-spacing: 0.3px;
+            }
+            QComboBox {
+                background-color: #0F0F0F;
+                border: 1px solid #262626;
+                border-radius: 6px;
+                color: #E6EDF3;
+                font-size: 12.5px;
+                padding: 5px 10px;
+                min-height: 26px;
+            }
+            QComboBox:hover {
+                border-color: #2E9B5F;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #0F0F0F;
+                border: 1px solid #262626;
+                color: #E6EDF3;
+                selection-background-color: #1B2A22;
+                selection-color: #4CF9B7;
+                outline: none;
             }
             QListWidget {
                 background-color: #0F0F0F;
@@ -110,6 +139,7 @@ class DRSConfigDialog(QDialog):
             QCheckBox {
                 color: #E6EDF3;
                 font-size: 12.5px;
+                spacing: 6px;
             }
             QPushButton {
                 background-color: #1F1F1F;
@@ -141,7 +171,10 @@ class DRSConfigDialog(QDialog):
             }
         """)
 
-        self._columns_data: list[dict[str, Any]] = []
+        self._detected_forms: list[dict[str, Any]] = []
+        self._config: dict[str, Any] = {}
+        self._current_form: str = ""
+
         self._build_ui()
         self._load_data()
 
@@ -163,8 +196,8 @@ class DRSConfigDialog(QDialog):
         title_lbl = QLabel("Deadline Reminder System (DRS)")
         title_lbl.setObjectName("title")
         hint_lbl = QLabel(
-            "Configure column arrangement, visibility, and filing form feeds for the live DRS Excel workbook. "
-            "Clients from Master DB are automatically grouped per registered service."
+            "Configure column arrangement, ordering, and live data feeds per return form. "
+            "Master DB client rosters are populated automatically with support for LTT-style tracker extractions."
         )
         hint_lbl.setObjectName("hint")
         hint_lbl.setWordWrap(True)
@@ -179,6 +212,48 @@ class DRSConfigDialog(QDialog):
         divider.setStyleSheet("border: none; border-top: 1px solid #262626; margin: 2px 0;")
         root.addWidget(divider)
 
+        # Top Control Row: Client Population Scope + Return Form Selector
+        ctrl_bar = QHBoxLayout()
+        ctrl_bar.setSpacing(16)
+
+        # Form Selector
+        form_sel_layout = QHBoxLayout()
+        form_sel_layout.setSpacing(8)
+        lbl_form = QLabel("Form Tab:")
+        lbl_form.setObjectName("section_hdr")
+        self.form_combo = QComboBox()
+        self.form_combo.setMinimumWidth(160)
+        self.form_combo.currentIndexChanged.connect(self._on_form_changed)
+        form_sel_layout.addWidget(lbl_form)
+        form_sel_layout.addWidget(self.form_combo)
+        ctrl_bar.addLayout(form_sel_layout)
+
+        # Tracker-only Checkbox for this form
+        self.chk_tracker_only = QCheckBox("Extract from tracker dump only (LTT mode: only clients with captures)")
+        self.chk_tracker_only.setToolTip(
+            "When checked, this return form tab will act like LTT by only displaying clients "
+            "with recorded captures in Tracker Dump. Clients without captures are omitted."
+        )
+        self.chk_tracker_only.toggled.connect(self._on_tracker_only_toggled)
+        ctrl_bar.addWidget(self.chk_tracker_only)
+
+        ctrl_bar.addStretch()
+
+        # Scope Selector (Whole MCL Roster vs Enrolled only)
+        scope_layout = QHBoxLayout()
+        scope_layout.setSpacing(8)
+        lbl_scope = QLabel("Client Roster Scope:")
+        lbl_scope.setObjectName("section_hdr")
+        self.combo_scope = QComboBox()
+        self.combo_scope.addItem("Whole MCL Roster (All Clients)", SCOPE_ALL_MCL)
+        self.combo_scope.addItem("Service-Enrolled Only", SCOPE_SERVICE_ONLY)
+        self.combo_scope.currentIndexChanged.connect(self._on_scope_changed)
+        scope_layout.addWidget(lbl_scope)
+        scope_layout.addWidget(self.combo_scope)
+        ctrl_bar.addLayout(scope_layout)
+
+        root.addLayout(ctrl_bar)
+
         # Main Body: Left Column (Columns Arrangement) + Right Column (Detected Forms & Service Preview)
         body = QHBoxLayout()
         body.setSpacing(18)
@@ -189,9 +264,9 @@ class DRSConfigDialog(QDialog):
         left_box.setSpacing(8)
 
         col_header_row = QHBoxLayout()
-        lbl_cols = QLabel("WORKBOOK COLUMNS (ORDER & VISIBILITY)")
-        lbl_cols.setObjectName("section_hdr")
-        col_header_row.addWidget(lbl_cols)
+        self.lbl_cols_header = QLabel("COLUMNS FOR SELECTED FORM")
+        self.lbl_cols_header.setObjectName("section_hdr")
+        col_header_row.addWidget(self.lbl_cols_header)
         col_header_row.addStretch()
         left_box.addLayout(col_header_row)
 
@@ -216,13 +291,20 @@ class DRSConfigDialog(QDialog):
         self.btn_down.setFixedWidth(40)
         self.btn_down.clicked.connect(lambda: self._move_column(1))
 
-        self.btn_reset = QPushButton("Reset to Defaults")
-        self.btn_reset.setIcon(_safe_icon("mdi.restore", color="#8B949E"))
-        self.btn_reset.clicked.connect(self._reset_defaults)
+        self.btn_reset_form = QPushButton("Reset Form Columns")
+        self.btn_reset_form.setIcon(_safe_icon("mdi.restore", color="#8B949E"))
+        self.btn_reset_form.setToolTip("Reset the currently selected form's columns to defaults")
+        self.btn_reset_form.clicked.connect(self._reset_current_form_defaults)
+
+        self.btn_reset_all = QPushButton("Reset All Forms")
+        self.btn_reset_all.setIcon(_safe_icon("mdi.restore", color="#8B949E"))
+        self.btn_reset_all.setToolTip("Reset all return forms and columns to system defaults")
+        self.btn_reset_all.clicked.connect(self._reset_all_defaults)
 
         btn_order_row.addWidget(self.btn_up)
         btn_order_row.addWidget(self.btn_down)
-        btn_order_row.addWidget(self.btn_reset)
+        btn_order_row.addWidget(self.btn_reset_form)
+        btn_order_row.addWidget(self.btn_reset_all)
         btn_order_row.addStretch()
         left_box.addLayout(btn_order_row)
 
@@ -232,7 +314,7 @@ class DRSConfigDialog(QDialog):
         right_box = QVBoxLayout()
         right_box.setSpacing(8)
 
-        lbl_forms = QLabel("DETECTED FILING FORMS & LINKED SERVICES")
+        lbl_forms = QLabel("DETECTED FILING FORMS & FEED STATUS")
         lbl_forms.setObjectName("section_hdr")
         right_box.addWidget(lbl_forms)
 
@@ -257,13 +339,14 @@ class DRSConfigDialog(QDialog):
         info_card_layout.setContentsMargins(12, 12, 12, 12)
         info_card_layout.setSpacing(6)
 
-        lbl_info_title = QLabel("DRS Live Mechanism")
+        lbl_info_title = QLabel("DRS Multi-Form Engine")
         lbl_info_title.setStyleSheet("color: #4CF9B7; font-weight: 600; font-size: 12.5px;")
         lbl_info_desc = QLabel(
-            "• Feeds automatically refresh when a new entry appears in Tracker Dump.\n"
             "• Each detected return form generates a dedicated tab in Excel.\n"
-            "• All registered clients for that service are listed.\n"
-            "• Uncaptured clients default to 'no captures yet'."
+            "• Columns can be rearranged and toggled independently per form.\n"
+            "• Whole MCL Roster mode includes all clients; uncaptured default to 'no captures yet'.\n"
+            "• 'Extract from tracker dump only' acts like LTT, listing only clients with captures.\n"
+            "• Workbook updates automatically on new capture arrivals without interval polling."
         )
         lbl_info_desc.setStyleSheet("color: #8B949E; font-size: 11.5px; line-height: 1.4;")
         info_card_layout.addWidget(lbl_info_title)
@@ -295,15 +378,53 @@ class DRSConfigDialog(QDialog):
         root.addLayout(bottom_bar)
 
     def _load_data(self):
-        """Loads configuration and renders form detection summary."""
-        cfg = load_drs_config(self.db)
-        self._columns_data = cfg.get("columns", [])
-        self._render_column_list()
+        """Discovers filing forms, loads per-form configs, and updates UI."""
+        self._detected_forms = detect_forms_and_services(self.db)
+        form_names = [f["form"] for f in self._detected_forms] or ["GSTR-3B", "GSTR-1", "ITR"]
+
+        self._config = load_drs_config(self.db, detected_forms=form_names)
+
+        # Populate Scope combobox
+        current_scope = self._config.get("client_roster_scope", SCOPE_ALL_MCL)
+        scope_idx = self.combo_scope.findData(current_scope)
+        if scope_idx >= 0:
+            self.combo_scope.blockSignals(True)
+            self.combo_scope.setCurrentIndex(scope_idx)
+            self.combo_scope.blockSignals(False)
+
+        # Populate Form combobox
+        self.form_combo.blockSignals(True)
+        self.form_combo.clear()
+        for fname in form_names:
+            self.form_combo.addItem(_safe_icon("mdi.file-document-outline", color="#4CF9B7"), fname)
+        self.form_combo.blockSignals(False)
+
+        if form_names:
+            self._current_form = form_names[0]
+            self.form_combo.setCurrentIndex(0)
+            self._render_current_form_columns()
+
         self._render_forms_summary()
 
-    def _render_column_list(self):
+    def _render_current_form_columns(self):
+        """Renders column manager for the currently selected form."""
+        if not self._current_form:
+            return
+
+        self.lbl_cols_header.setText(f"COLUMNS FOR {self._current_form.upper()} (ORDER & VISIBILITY)")
+
+        form_cfg = self._config.get("forms", {}).get(self._current_form, {})
+        cols = form_cfg.get("columns", [])
+        is_tracker_only = bool(form_cfg.get("tracker_only", False))
+
+        self.chk_tracker_only.blockSignals(True)
+        self.chk_tracker_only.setChecked(is_tracker_only)
+        self.chk_tracker_only.blockSignals(False)
+
+        self.col_list.blockSignals(True)
         self.col_list.clear()
-        for idx, col in enumerate(self._columns_data):
+
+        for col in cols:
             label = col.get("label", "Untitled")
             ctype = col.get("type", "")
             enabled = bool(col.get("enabled", True))
@@ -318,69 +439,127 @@ class DRSConfigDialog(QDialog):
                 badge = "[Field]"
 
             item = QListWidgetItem(f"{label}   {badge}")
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             item.setCheckState(Qt.Checked if enabled else Qt.Unchecked)
             item.setData(Qt.UserRole, col.get("key"))
             self.col_list.addItem(item)
 
+        self.col_list.blockSignals(False)
+
     def _render_forms_summary(self):
-        form_defs = detect_forms_and_services(self.db)
-        if not form_defs:
+        """Summarizes all detected forms, portals, services, and LTT/Tracker-only status."""
+        if not self._detected_forms:
             self.lbl_forms_summary.setText("No return forms detected yet in Tracker Dump.")
             return
 
-        lines = ["<b>Active Form Tabs:</b><br>"]
+        lines = ["<b>Active Form Tabs & Feeds:</b><br>"]
         all_clients = self.db.search_clients("", include_archived=False) if hasattr(self.db, "search_clients") else []
+        scope = self._config.get("client_roster_scope", SCOPE_ALL_MCL)
 
-        for fdef in form_defs:
+        for fdef in self._detected_forms:
             fname = fdef["form"]
             portal = fdef["portal"]
             svc = fdef["service"]
             svc_name = svc["name"] if svc else "Unlinked"
             svc_id = svc["id"] if svc else None
-            cnt = sum(1 for c in all_clients if svc_id in c.get("service_ids", [])) if svc_id is not None else len(all_clients)
+
+            f_cfg = self._config.get("forms", {}).get(fname, {})
+            is_ltt = bool(f_cfg.get("tracker_only", False))
+
+            if is_ltt:
+                mode_badge = "<font color='#FFDB70'><b>[Tracker Only / LTT Mode]</b></font>"
+                cnt_str = "Captures only"
+            elif scope == SCOPE_SERVICE_ONLY and svc_id is not None:
+                mode_badge = "<font color='#8B949E'>[Service Enrolled]</font>"
+                cnt = sum(1 for c in all_clients if svc_id in c.get("service_ids", []))
+                cnt_str = f"{cnt} enrolled client{'s' if cnt != 1 else ''}"
+            else:
+                mode_badge = "<font color='#4CF9B7'>[Whole MCL Roster]</font>"
+                cnt = len(all_clients)
+                cnt_str = f"{cnt} total client{'s' if cnt != 1 else ''}"
+
             lines.append(
                 f"• <b>{fname}</b> — Portal: <font color='#4CF9B7'>{portal}</font><br>"
-                f"&nbsp;&nbsp;&nbsp;Service: <i>{svc_name}</i> ({cnt} registered client{'s' if cnt != 1 else ''})<br>"
+                f"&nbsp;&nbsp;&nbsp;Service: <i>{svc_name}</i> &middot; {cnt_str} &middot; {mode_badge}<br>"
             )
 
         self.lbl_forms_summary.setText("".join(lines))
 
+    def _on_form_changed(self, index: int):
+        self._current_form = self.form_combo.currentText()
+        self._render_current_form_columns()
+
+    def _on_tracker_only_toggled(self, checked: bool):
+        if not self._current_form:
+            return
+        self._config.setdefault("forms", {}).setdefault(self._current_form, {})["tracker_only"] = checked
+        self._render_forms_summary()
+
+    def _on_scope_changed(self, index: int):
+        scope = self.combo_scope.currentData()
+        self._config["client_roster_scope"] = scope
+        self._render_forms_summary()
+
     def _on_item_checked(self, item: QListWidgetItem):
+        if not self._current_form:
+            return
         key = item.data(Qt.UserRole)
         is_checked = (item.checkState() == Qt.Checked)
-        for col in self._columns_data:
+        cols = self._config.get("forms", {}).get(self._current_form, {}).get("columns", [])
+        for col in cols:
             if col.get("key") == key:
                 col["enabled"] = is_checked
                 break
 
     def _move_column(self, direction: int):
+        if not self._current_form:
+            return
         cur_row = self.col_list.currentRow()
         if cur_row < 0:
             return
+        cols = self._config.get("forms", {}).get(self._current_form, {}).get("columns", [])
         new_row = cur_row + direction
-        if 0 <= new_row < len(self._columns_data):
-            col = self._columns_data.pop(cur_row)
-            self._columns_data.insert(new_row, col)
-            self._render_column_list()
+        if 0 <= new_row < len(cols):
+            col = cols.pop(cur_row)
+            cols.insert(new_row, col)
+            self._render_current_form_columns()
             self.col_list.setCurrentRow(new_row)
 
-    def _reset_defaults(self):
+    def _reset_current_form_defaults(self):
+        if not self._current_form:
+            return
         if QMessageBox.question(
             self,
-            "Reset Columns",
-            "Reset all columns to their default arrangement and visibility?",
+            "Reset Form Columns",
+            f"Reset columns for '{self._current_form}' to default arrangement and visibility?",
         ) == QMessageBox.Yes:
-            self._columns_data = default_drs_columns(self.db)
-            self._render_column_list()
+            f_cfg = self._config.setdefault("forms", {}).setdefault(self._current_form, {})
+            f_cfg["columns"] = default_drs_columns_for_form(self.db, self._current_form)
+            f_cfg["tracker_only"] = False
+            self._render_current_form_columns()
+            self._render_forms_summary()
+
+    def _reset_all_defaults(self):
+        if QMessageBox.question(
+            self,
+            "Reset All Forms",
+            "Reset all return forms, columns, and scopes to system defaults?",
+        ) == QMessageBox.Yes:
+            form_names = [f["form"] for f in self._detected_forms]
+            self._config = default_drs_config(self.db, form_names)
+            self.combo_scope.blockSignals(True)
+            self.combo_scope.setCurrentIndex(0)
+            self.combo_scope.blockSignals(False)
+            self._render_current_form_columns()
+            self._render_forms_summary()
 
     def _save_current(self):
-        save_drs_config(self.db, {"columns": self._columns_data})
+        save_drs_config(self.db, self._config)
 
     def _on_save_and_refresh(self):
         self._save_current()
         try:
-            xlsx = export_drs(self.db, force_rebuild=True)
+            xlsx = export_drs(self.db, force_rebuild=False)
             QMessageBox.information(
                 self,
                 "DRS Refreshed",

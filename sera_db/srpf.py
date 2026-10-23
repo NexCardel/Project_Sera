@@ -846,6 +846,22 @@ class SrpfMixin:
 
     def save_srpf_container_media(self, identity_key: str, notes: str, screenshot_path: str) -> bool:
         with self._connect_raw() as conn:
+            # Also attach notes to filing_history JSON entries so it travels seamlessly
+            try:
+                row = conn.execute("SELECT filing_history FROM client_raw_containers WHERE identity_key = ?", (identity_key,)).fetchone()
+                if row and row[0]:
+                    hist = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                    if isinstance(hist, list) and hist:
+                        hist[-1]["notes"] = notes
+                        new_hist_json = json.dumps(hist)
+                        cur = conn.execute(
+                            "UPDATE client_raw_containers SET notes = ?, screenshot_path = ?, filing_history = ? WHERE identity_key = ?",
+                            (notes, screenshot_path, new_hist_json, identity_key)
+                        )
+                        conn.execute("UPDATE client_raw_container_light SET notes = ? WHERE identity_key = ?", (notes, identity_key))
+                        return cur.rowcount > 0
+            except Exception:
+                pass
             cur = conn.execute("UPDATE client_raw_containers SET notes = ?, screenshot_path = ? WHERE identity_key = ?", (notes, screenshot_path, identity_key))
             conn.execute("UPDATE client_raw_container_light SET notes = ? WHERE identity_key = ?", (notes, identity_key))
             return cur.rowcount > 0

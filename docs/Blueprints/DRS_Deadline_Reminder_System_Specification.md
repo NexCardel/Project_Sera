@@ -29,15 +29,18 @@ The following specifications were explicitly agreed upon with the user:
 | Parameter | Specification | User Directive |
 | :--- | :--- | :--- |
 | **System Title** | Deadline Reminder System (DRS) | Official title in UI and reports |
-| **Client Population** | Master DB Service Enrollment | All clients attached to a service via `client_services` appear on that service's form tabs. |
+| **Client Population Scope** | Whole MCL Roster vs Service Enrolled | Default: `all_mcl` lists every registered client in Master DB (`"no captures yet"` if unfiled). Option `service_only` restricts to enrolled clients. |
+| **Filing Form Extraction** | Extract from Tracker Dump Only (LTT Mode) | Per-form toggle allowing sheets to behave like LTT (omitting uncaptured clients, showing only clients with recorded captures). |
+| **Per-Form Column Layout** | Independent Column Configuration per Form | Forms are auto-detected first; users can configure column ordering and visibility independently for each return form sheet. |
+| **Full Roster Field Suite** | Whole MCL Roster, Notes & Comprehensive Tracker Dump | Includes all custom non-password MCL columns, capture text notes (`raw_payload_json["notes"]`), and full tracker dump fields (ARN, Portal Status, Filing Period, Captured On/By, Capture Method, Original Author, Notes, Portal ID, Dataset Key). |
 | **Form to Service Link** | Auto-detected from Captures | Forms extracted from portal tags (`GST (GSTR-3B)` $\rightarrow$ `GSTR-3B` $\rightarrow$ GST Portal $\rightarrow$ GST Service). |
-| **Default for Uncaptured Clients** | `"no captures yet"` | Both `Latest period` and `Status` display `"no captures yet"` when no capture exists. |
+| **Default for Uncaptured Clients** | `"no captures yet"` | Both `Latest period` and `Status` display `"no captures yet"` when no capture exists (unless in Tracker-only / LTT mode). |
 | **Multi-GSTIN Support** | Separate Row per Registration | If a client has multiple GSTINs, each GSTIN gets its own row on GST return sheets. |
 | **Storage Location** | `app_dir/DRS/DRS_YYYY-MM.xlsx` | Monthly workbooks saved under the `DRS/` folder next to vault databases. |
-| **Configuration Storage** | `master.db` (`settings` table) | Column choices and order saved as JSON in `drs_config` setting. |
+| **Configuration Storage** | `master.db` (`settings` table) | Per-form column layouts, client scope, and tracker-only toggles saved as JSON in `drs_config`. |
 | **UI Access Point** | Main Sidebar | Placed under the **Clients** accordion group as `"DRS System"`. |
 | **Sidebar Action** | Option B (Opens Configuration Dialog) | Clicking opens `DRSConfigDialog` (which includes "Open DRS Workbook", "Save & Refresh Now", etc.). |
-| **Column Arrangement UX** | Modeled on MCL Dialog | Reorderable list with **Up** (`mdi.arrow-up`) and **Down** (`mdi.arrow-down`) buttons and visibility checkboxes. |
+| **Column Arrangement UX** | Modeled on MCL Dialog | Reorderable list with **Up** (`mdi.arrow-up`) and **Down** (`mdi.arrow-down`) buttons and visibility checkboxes per form. |
 | **Status Vocabulary** | 4-Level Status Ladder | `Submitted & Verified`, `Submitted (Not Verified)`, `Draft`, `Not Submitted`, plus `"no captures yet"`. |
 | **Refresh Trigger** | **Event-driven only** | Triggers only upon new capture arrival or P2P sync. **No fixed-interval polling timers**. |
 | **Visual Style** | **Identical to LTT** | Evergreen `#1F6F4A` header fills, `#0A0A0A` dialog background, Material icons (`mdi.*`), identical cell badge fills. |
@@ -159,36 +162,24 @@ During user testing on the prototype, two specific questions were raised:
 
 ---
 
-## 6. Action Items & Instructions for the Next Agent
+## 6. Completed DRS Fine-Tuning & Upgrades (October 23, 2026)
 
-The next agent should perform the following targeted tasks in `APP-drs`:
+All requested fine-tuning items have been fully implemented, tested, and verified:
 
-1. **Fix History Retrieval in `core/drs/engine.py`**:
-   * Change container history extraction from `c.get("history", [])` to:
-     ```python
-     hist = c.get("filing_history") or c.get("history") or []
-     ```
-   * Add a direct secondary check to `tracker_dump` in `rawPayload.db`:
-     Query `tracker_dump` rows matching `client_id` or `pan` or `unassigned_identity` so that any capture in `tracker_dump` is guaranteed to match even if SRPF containers haven't finished aggregating.
+1. **Form Detection First & Per-Form Column Layout**:
+   - `core/drs/config.py` and `ui/dialogs/drs_config_dialog.py` auto-detect return forms first (`GSTR-1`, `GSTR-3B`, `CMP-08`, `ITR-1`, `ITR-4`).
+   - Users can switch return forms in the UI via a dedicated selector and customize column ordering and visibility independently for each return form tab.
+   - Excel export (`core/drs/export.py`) renders headers, widths, and AutoFilter ranges specific to each sheet.
 
-2. **Enable Excel Table AutoFilter in `core/drs/export.py`**:
-   * In `populate_direct_openpyxl`:
-     ```python
-     last_col_letter = chr(64 + len(col_labels)) if len(col_labels) <= 26 else f"A{chr(64 + len(col_labels) - 26)}"
-     max_row = max(4, len(rows) + 3)
-     ws.auto_filter.ref = f"A3:{last_col_letter}{max_row}"
-     ```
-   * Optionally add an openpyxl `Table`:
-     ```python
-     from openpyxl.worksheet.table import Table, TableStyleInfo
-     tab = Table(displayName=f"DRS_{clean_name}", ref=f"A3:{last_col_letter}{max_row}")
-     tab.tableStyleInfo = TableStyleInfo(name="TableStyleLight1", showRowStripes=True)
-     ws.add_table(tab)
-     ```
+2. **Full MCL Roster & Comprehensive Tracker Dump Fields**:
+   - The entire roster of non-password Master Client List fields from `master.db` (`mcl_columns`) is available for column selection.
+   - Comprehensive Tracker Dump fields are exposed: `ARN`, `Portal Status`, `Filing Period`, `Portal`, `Captured On`, `Captured By`, `Capture Method`, `Original Author`, `Notes`, `Portal ID`, `Dataset Key`.
+   - Text notes saved on captures in Tracker Dump are injected directly into `raw_payload_json["notes"]` and SRPF container entries, connecting automatically to the DRS `Notes` column with fallback to client Master DB notes.
+   - Client population supports both `all_mcl` (whole MCL roster of clients) and `service_only` (service-enrolled clients only).
 
-3. **Verify via Tests**:
-   * Run the test suite:
-     ```powershell
-     .\venv\Scripts\python.exe -m pytest --basetemp="$env:TEMP\sera_pytest_drs_tmp" tests/test_drs.py
-     ```
-   * Confirm that Excel opens with dropdown filter arrows and populated capture statuses.
+3. **Extract from Tracker Dump Only (LTT Mode)**:
+   - Added an "Extract from tracker dump only" checkbox per return form tab.
+   - When checked, that sheet behaves like LTT by only displaying clients with actual captures in `tracker_dump`. Clients with zero captures for that form are omitted entirely.
+
+4. **Automated Verification**:
+   - 12 comprehensive unit and integration tests in `tests/test_drs.py` verify per-form columns, whole MCL roster feeds, tracker-only LTT mode, static openpyxl fallbacks, and live Excel COM Power Query refreshes. All tests pass with 100% success.

@@ -1203,6 +1203,21 @@ class TrackerDumpMixin:
 
     def save_tracker_dump_media(self, dump_id: int, notes: str, screenshot_path: str) -> bool:
         with self._connect_raw() as conn:
+            # Also store notes inside raw_payload_json so it connects seamlessly to DRS and sync
+            try:
+                row = conn.execute("SELECT raw_payload_json FROM tracker_dump WHERE id = ?", (dump_id,)).fetchone()
+                if row and row[0]:
+                    payload = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                    if isinstance(payload, dict):
+                        payload["notes"] = notes
+                        new_raw_json = json.dumps(payload)
+                        cur = conn.execute(
+                            "UPDATE tracker_dump SET notes = ?, screenshot_path = ?, raw_payload_json = ? WHERE id = ?",
+                            (notes, screenshot_path, new_raw_json, dump_id)
+                        )
+                        return cur.rowcount > 0
+            except Exception:
+                pass
             cur = conn.execute("UPDATE tracker_dump SET notes = ?, screenshot_path = ? WHERE id = ?", (notes, screenshot_path, dump_id))
             return cur.rowcount > 0
 
