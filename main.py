@@ -973,6 +973,10 @@ class SeraApp:
         # VSDC247 hands over the frame it read as evidence. It must never be stored inside the
         # payload (it is a temp file path); it is copied into Notes & Media below.
         evidence_path = msg.pop("_evidence_screenshot", None)
+        # The GST UID/login frame read before this capture (slot 2), carried by the router so it
+        # lands beside the ARN instead of staying orphaned in %TEMP%.
+        login_evidence_path = msg.pop("_login_evidence_screenshot", None)
+        login_evidence_user = msg.pop("_login_evidence_username", "")
         # Every stored capture says which PC produced it (the name from this PC's
         # device_identity.txt), inside its own payload.
         try:
@@ -1208,6 +1212,19 @@ class SeraApp:
                             print(f"[VSDC247] evidence screenshot saved to {rel}")
                     except Exception as e:
                         print(f"[VSDC247] evidence screenshot could not be attached: {e}")
+                if login_evidence_path:
+                    try:
+                        from core.vsdc.vsdc247_evidence import attach_login_evidence_to_capture
+                        rel_login = attach_login_evidence_to_capture(
+                            self.db, login_evidence_path, result.get("id"),
+                            client_id=result.get("client_id"),
+                            unassigned_identity=result.get("unassigned_identity"),
+                            username=login_evidence_user,
+                        )
+                        if rel_login:
+                            print(f"[VSDC247-V] login evidence saved to {rel_login}")
+                    except Exception as e:
+                        print(f"[VSDC247-V] login evidence could not be attached: {e}")
                 results.append(result)
             print(f"[main._handle_extension_result] Successfully inserted {len(results)} tracker_dump dataset row(s): {results}")
             try:

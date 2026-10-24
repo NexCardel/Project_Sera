@@ -113,3 +113,49 @@ def attach_login_evidence(db, source_path: str, client_id=None, username: str = 
         screenshot_path_2=rel_path,
     )
     return rel_path
+
+
+def attach_login_evidence_to_capture(db, source_path: str, dump_id=None, client_id=None,
+                                     unassigned_identity=None, username: str = "") -> str:
+    """
+    Copies the GST login frame captured before an ARN into the media folder and stores it in the
+    second screenshot slot of BOTH the capture row and its client container, so the ARN row shows
+    the UID/login evidence beside the filing evidence.
+
+    An empty slot or an earlier automatic login frame is replaced; a screenshot the user attached
+    by hand is never touched (neither slot 1 nor slot 2). Returns the relative path, or "" when
+    the source is missing or both second slots already hold user media.
+    """
+    if not source_path or not os.path.isfile(source_path):
+        return ""
+
+    row_media = db.get_tracker_dump_media(dump_id) if dump_id else {"notes": "", "screenshot_path": ""}
+    row_current = row_media.get("screenshot_path_2", "")
+    row_take = bool(dump_id) and (not row_current or _is_login_auto(row_current))
+
+    key = _container_key(client_id, unassigned_identity)
+    container_media = db.get_srpf_container_media(key) if key else {"notes": "", "screenshot_path": ""}
+    container_current = container_media.get("screenshot_path_2", "")
+    container_take = bool(key) and (not container_current or _is_login_auto(container_current))
+
+    if not (row_take or container_take):
+        return ""
+
+    # Reuse the automatic login frame the client already holds instead of copying it again for
+    # every ARN filed in the same login session.
+    if container_take and _is_login_auto(container_current):
+        rel_path = container_current
+    else:
+        rel_path = _copy_to_media(db, source_path, LOGIN_PREFIX, username or "login")
+
+    if row_take:
+        db.save_tracker_dump_media(
+            dump_id, row_media.get("notes", ""), row_media.get("screenshot_path", ""),
+            screenshot_path_2=rel_path,
+        )
+    if container_take:
+        db.save_srpf_container_media(
+            key, container_media.get("notes", ""), container_media.get("screenshot_path", ""),
+            client_id=client_id, screenshot_path_2=rel_path,
+        )
+    return rel_path

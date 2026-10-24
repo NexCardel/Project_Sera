@@ -300,6 +300,10 @@ class VSDCRouter:
         self._prompted_ids: Dict[str, float] = {}
         # hwnd -> username whose login frame was already saved as evidence (second Notes & Media slot).
         self._login_evidence: Dict[int, str] = {}
+        # hwnd -> {"username", "path", "saved_at"}: the last GST login frame read in this window.
+        # Kept after the login page is left so an ARN read later in the same session can carry it
+        # into Notes & Media (the UID screenshot must arrive with the ARN capture).
+        self._login_frames: Dict[int, Dict[str, Any]] = {}
         # One screenshot per tick, shared by the route handlers and VSDC247.
         self._tick_capture: Optional[Tuple[int, Any]] = None
         self._scope_ok_this_tick: bool = False
@@ -737,14 +741,7 @@ class VSDCRouter:
                 self._verifier_stats["logins"] += 1
                 login_user = obs.get("username") or ""
                 if login_user:
-                    # The frame read at the moment the Username field is filled is the login
-                    # evidence. Save it once per (window, username); a refined/OCR-changed
-                    # username replaces the earlier auto frame. No password is read or logged.
-                    if self._login_evidence.get(hwnd) != login_user:
-                        self._capture_login_evidence(hwnd, login_user, img, obs.get("client_id"))
-                        self._login_evidence[hwnd] = login_user
-                else:
-                    self._login_evidence.pop(hwnd, None)
+                    self._record_login_frame(hwnd, login_user, img, "GST Portal", client_id=obs.get("client_id"))
                 if obs.get("status") == "login_linked":
                     user = obs.get("username") or (self._verifier.client_for_window(hwnd) if self._verifier else "") or ""
                     key = f"verifier_login:{hwnd}:{user}"
@@ -1019,10 +1016,11 @@ class VSDCRouter:
             print(f"[VSDC247-V] login evidence screenshot could not be saved: {e}")
             return ""
 
-    def _capture_login_evidence(self, hwnd: int, username: str, img, client_id=None) -> str:
+    def _capture_login_evidence(self, hwnd: int, username: str, img, client_id=None,
+                                path: str = "") -> str:
         """Copies the login frame into Notes & Media slot 2 for the matched client. Never logs
         the password (only the username and the saved path)."""
-        path = self._save_login_evidence(username, img, hwnd)
+        path = path or self._save_login_evidence(username, img, hwnd)
         if not path:
             return ""
         rel_path = ""
@@ -1038,6 +1036,92 @@ class VSDCRouter:
         else:
             vsdc_diag.note(f"[VSDC247-V] login screenshot for '{username}' kept at {path}")
         return rel_path
+
+    _LOGIN_FRAME_TTL_SEC = 12 * 3600
+
+    def _record_login_frame(self, hwnd: int, username: str, img, portal: str = "", client_id=None) -> str:
+        """Saves the exact login frame (UID typed in) and records it for this window session."""
+        if not hwnd or not username or not isinstance(img, Image.Image):
+            return ""
+        clean_user = str(username).strip().upper()
+        now = time.time()
+        prev = self._login_frames.get(hwnd)
+        if prev and prev.get("username") == clean_user and prev.get("path") and os.path.isfile(prev.get("path")):
+            return prev.get("path")
+
+        path = self._save_login_evidence(clean_user, img, hwnd)
+        if not path:
+            return ""
+        self._login_frames[hwnd] = {
+            "username": clean_user,
+            "path": path,
+            "saved_at": now,
+            "portal": portal,
+        }
+        cutoff = now - self._LOGIN_FRAME_TTL_SEC
+        for stale_hwnd in [h for h, f in list(self._login_frames.items())
+                           if float(f.get("saved_at") or 0) < cutoff]:
+            self._login_frames.pop(stale_hwnd, None)
+
+        self._capture_login_evidence(hwnd, clean_user, img, client_id=client_id, path=path)
+        self._login_evidence[hwnd] = clean_user
+        print(f"[VSDC247] Recorded {portal or 'portal'} login frame for UID '{clean_user}' in window {hwnd}")
+        return path
+
+    def _pending_login_frame(self, hwnd) -> Optional[Dict[str, Any]]:
+        """The last GST or ITR login frame read in this window (or the latest if only one exists), while the file still exists."""
+        frames = getattr(self, "_login_frames", None) or {}
+        try:
+            key = int(hwnd) if hwnd else 0
+        except (TypeError, ValueError):
+            key = 0
+        frame = frames.get(key)
+        if not frame and len(frames) == 1:
+            frame = next(iter(frames.values()))
+        if not frame:
+            return None
+        path = str(frame.get("path") or "")
+        if not path or not os.path.isfile(path):
+            return None
+        if float(frame.get("saved_at") or 0) < time.time() - self._LOGIN_FRAME_TTL_SEC:
+            frames.pop(key, None)
+            return None
+        return frame
+
+    def _attach_pending_login_evidence(self, payload, hwnd) -> None:
+        """Hands the main thread the GST or ITR UID/login frame read earlier in this window, so it can
+        be stored in Notes & Media slot 2 beside the ARN capture (and on the capture row)."""
+        if not isinstance(payload, dict) or not hwnd:
+            return
+        frame = self._pending_login_frame(hwnd)
+        if frame is None:
+            return
+        f_portal = str(frame.get("portal") or "").lower()
+        if not f_portal:
+            uname = str(frame.get("username") or "")
+            from .vsdc_regex import extract_pan
+            f_portal = "income tax" if extract_pan(uname) == uname else "gst"
+
+        p_portal = str(payload.get("portal") or "").lower()
+        if f_portal and p_portal:
+            if "gst" in f_portal and "gst" not in p_portal:
+                return
+            if ("income" in f_portal or "itr" in f_portal) and ("income" not in p_portal and "itr" not in p_portal):
+                return
+        payload["_login_evidence_screenshot"] = frame.get("path")
+        payload["_login_evidence_username"] = frame.get("username") or ""
+
+    def _attach_verifier_login_evidence(self, payload, arn: str) -> None:
+        """The verifier's ledger knows which window saw this ARN; carry that window's login frame."""
+        if not isinstance(payload, dict) or not arn:
+            return
+        if not (self._verifier_enabled and self._verifier is not None):
+            return
+        try:
+            hwnd = self._verifier.window_for_arn(arn)
+        except Exception:
+            return
+        self._attach_pending_login_evidence(payload, hwnd)
 
     def _save_247_evidence(self, identifier: str, img, hwnd: int) -> str:
         """
@@ -1108,6 +1192,13 @@ class VSDCRouter:
         payload = self.assembler.build_247_payload(det)
         if shot:
             payload["_evidence_screenshot"] = shot
+        self._attach_pending_login_evidence(payload, hwnd)
+        frame = self._pending_login_frame(hwnd)
+        if frame is not None:
+            # Kept on the detection so a submission captured before its client was known still
+            # carries the login frame when it is re-sent attributed.
+            det.login_evidence_screenshot = frame.get("path")
+            det.login_evidence_username = frame.get("username") or ""
         self._dispatched_ids[ident] = now
         print(f"[VSDC247] captured {det.kind} {ident} score={det.score} ({'; '.join(det.reasons)})")
         who = self.assembler.client_name or self.assembler.client_pan or ""
@@ -1138,6 +1229,10 @@ class VSDCRouter:
         shot = getattr(det, "evidence_screenshot", "") or ""
         if shot and os.path.exists(shot):
             payload["_evidence_screenshot"] = shot
+        login_shot = getattr(det, "login_evidence_screenshot", "") or ""
+        if login_shot and os.path.exists(login_shot):
+            payload["_login_evidence_screenshot"] = login_shot
+            payload["_login_evidence_username"] = getattr(det, "login_evidence_username", "") or ""
         if not payload.get("identity_resolved"):
             return None
         print(f"[VSDC247] attributed {ident} to {self.assembler.client_name or self.assembler.client_pan}")
@@ -1387,6 +1482,8 @@ class VSDCRouter:
             v_existing = sgt_row.get("raw_payload", {}).get("vsdc247-v") if isinstance(sgt_row.get("raw_payload"), dict) else None
 
         if isinstance(v_existing, dict) and v_existing.get("verified"):
+            if is_real_arn:
+                self._attach_verifier_login_evidence(sgt_row, arn)
             return sgt_row
 
         verif = None
@@ -1413,6 +1510,9 @@ class VSDCRouter:
                 "status": "unverified",
                 "arn": arn if is_real_arn else "N/A",
             }
+
+        if is_real_arn:
+            self._attach_verifier_login_evidence(sgt_row, arn)
 
         sgt_row["vsdc247-v"] = vsdc_v_section
         if "raw_payload" in sgt_row and isinstance(sgt_row["raw_payload"], dict):
@@ -1488,6 +1588,7 @@ class VSDCRouter:
                 else:
                     self._observe_247(hwnd)      # the crosshair pipeline handled this frame
             if result:
+                self._attach_pending_login_evidence(result, hwnd)
                 self._remember_dispatch(result)
                 cm = str(result.get("capture_method") or "").lower()
                 is_history = "history" in cm or "audit" in cm or "calendar" in cm or "view_filed" in cm
@@ -2072,6 +2173,7 @@ class VSDCRouter:
         # Mark route captured when key data points for the matched route render on screen
         if is_login_auth and pan:
             self.route_captured = True
+            self._record_login_frame(hwnd, pan, img, "Income Tax")
         elif matched_crosshair.id in ("itr_personal_info", "itr_profile") and (client_name or pan):
             # Don't lock this route purely on identity — the header profile pill
             # carries name/PAN in the page shell from the very first tick, while
@@ -2390,6 +2492,18 @@ class VSDCRouter:
                 self.route_poll_count = 0
                 self.notify_activity("logout", "GST Session Concluded", f"Archived: {ident}")
                 return flushed
+
+        # GST Login page: record Username/UID frame as login evidence
+        if matched_crosshair.id == "gst_login":
+            from .vsdc247_verify_pages import read_login_username
+            login_user = read_login_username(uia_lines) if uia_lines else None
+            if not login_user and lines:
+                login_user = read_login_username(lines)
+            if not login_user and full_text:
+                login_user = read_login_username(full_text.splitlines())
+            if login_user:
+                self._record_login_frame(hwnd, login_user, img, "GST Portal")
+            return None
 
         # Clear active workflow selection when returning to welcome/dashboard
         if matched_crosshair.id in ("gst_welcome_calendar", "gst_returns_dashboard"):
