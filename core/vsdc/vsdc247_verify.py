@@ -260,6 +260,15 @@ class Verifier:
 
             }
 
+    def window_for_arn(self, arn: str) -> Any:
+        """The VSDC window that observed this ARN (so it can be paired with its login frame)."""
+        clean_arn = (arn or "").strip().upper()
+        if not clean_arn or clean_arn in ("N/A", "NONE"):
+            return None
+        with self._lock:
+            entry = self.saved.get(clean_arn)
+        return entry.get("hwnd") if entry else None
+
     def client_for_window(self, hwnd: Any) -> Optional[str]:
         return self._links.current(hwnd, self._clock())
 

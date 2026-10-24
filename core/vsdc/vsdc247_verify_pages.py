@@ -71,7 +71,12 @@ def classify_page(url: str, lines: Sequence[str]) -> Optional[PageSpec]:
     if not host:
         return None
     for spec in PAGE_KINDS:
-        if host == spec.host and path == spec.path and all(c.search(text) for c in spec.cues):
+        if spec.kind == "gst_login":
+            is_gst_host = ("gst.gov.in" in host or "services.gst" in host)
+            is_login_path = ("login" in path.lower() or "login" in (url or "").lower())
+            if is_gst_host and is_login_path and all(c.search(text) for c in spec.cues):
+                return spec
+        elif host == spec.host and path == spec.path and all(c.search(text) for c in spec.cues):
             return spec
     return None
 

@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 import unittest
 
 from PySide6.QtWidgets import QApplication
@@ -425,6 +426,165 @@ class TestNotesMediaFix(unittest.TestCase):
         media = self.db.get_srpf_container_media("CLI-00042")
         self.assertEqual(media["screenshot_path_2"], rel)
         self.assertEqual(media["screenshot_path"], "")
+
+
+    def test_13_arn_capture_carries_login_frame_to_row_and_container(self):
+        """The UID/login frame read before an ARN lands in slot 2 of the capture row AND the
+        client container, beside the filing evidence in slot 1."""
+        from PIL import Image
+        from core.vsdc.vsdc247_evidence import (
+            attach_capture_evidence, attach_login_evidence_to_capture,
+        )
+
+        filing = os.path.join(self.tmp_dir.name, "filing_frame.png")
+        login = os.path.join(self.tmp_dir.name, "uid_frame.png")
+        Image.new("RGB", (64, 48), (230, 230, 230)).save(filing, "PNG")
+        Image.new("RGB", (64, 48), (250, 250, 250)).save(login, "PNG")
+
+        res = self.db.insert_tracker_dump(
+            pan="PAN247003",
+            portal="GST Portal",
+            period_label="September - 2026-27",
+            arn_number="AA270826009900Z",
+            capture_method="VSDC247_gstr1_ack",
+            status="Filed",
+            raw_payload_json=json.dumps({"pan": "PAN247003", "arn": "AA270826009900Z"}),
+            dataset_key="GST:PAN247003:September - 2026-27:GSTR-1:0",
+        )
+
+        filing_rel = attach_capture_evidence(
+            self.db, filing, res["id"],
+            client_id=res.get("client_id"),
+            unassigned_identity=res.get("unassigned_identity"),
+            arn="AA270826009900Z",
+        )
+        login_rel = attach_login_evidence_to_capture(
+            self.db, login, res["id"],
+            client_id=res.get("client_id"),
+            unassigned_identity=res.get("unassigned_identity"),
+            username="UIDPANEL01",
+        )
+
+        self.assertTrue(login_rel.startswith("media/vsdc247_login_"), login_rel)
+        self.assertTrue(os.path.exists(os.path.join(self.tmp_dir.name, login_rel)))
+
+        row = self.db.get_tracker_dump_media(res["id"])
+        self.assertEqual(row["screenshot_path"], filing_rel)
+        self.assertEqual(row["screenshot_path_2"], login_rel, "capture row must show the UID frame")
+
+        container = self.db.get_srpf_container_media(res["unassigned_identity"])
+        self.assertEqual(container["screenshot_path"], filing_rel)
+        self.assertEqual(container["screenshot_path_2"], login_rel)
+
+        # A second ARN in the same login session reuses the stored auto frame (no duplicate file).
+        self.assertEqual(
+            attach_login_evidence_to_capture(
+                self.db, login, res["id"],
+                client_id=res.get("client_id"),
+                unassigned_identity=res.get("unassigned_identity"),
+                username="UIDPANEL01",
+            ),
+            login_rel,
+        )
+
+    def test_14_login_frame_never_replaces_hand_attached_slots(self):
+        """Hand-attached screenshots in either second slot are never replaced."""
+        from PIL import Image
+        from core.vsdc.vsdc247_evidence import attach_login_evidence_to_capture
+
+        login = os.path.join(self.tmp_dir.name, "uid_frame.png")
+        Image.new("RGB", (64, 48), (250, 250, 250)).save(login, "PNG")
+
+        res = self.db.insert_tracker_dump(
+            pan="PAN247004",
+            portal="GST Portal",
+            period_label="September - 2026-27",
+            arn_number="AA270826009901Z",
+            capture_method="VSDC247_gstr1_ack",
+            status="Filed",
+            raw_payload_json=json.dumps({"pan": "PAN247004"}),
+            dataset_key="GST:PAN247004:September - 2026-27:GSTR-1:0",
+        )
+        self.db.save_tracker_dump_media(
+            res["id"], "row note", "media/user_row.png",
+            screenshot_path_2="media/user_row_login.png",
+        )
+        self.db.save_srpf_container_media(
+            res["unassigned_identity"], "container note", "media/user_container.png",
+            screenshot_path_2="media/user_container_login.png",
+        )
+
+        self.assertEqual(
+            attach_login_evidence_to_capture(
+                self.db, login, res["id"],
+                client_id=res.get("client_id"),
+                unassigned_identity=res.get("unassigned_identity"),
+                username="UIDPANEL02",
+            ),
+            "",
+        )
+        self.assertEqual(
+            self.db.get_tracker_dump_media(res["id"])["screenshot_path_2"],
+            "media/user_row_login.png",
+        )
+        self.assertEqual(
+            self.db.get_srpf_container_media(res["unassigned_identity"])["screenshot_path_2"],
+            "media/user_container_login.png",
+        )
+
+    def test_15_router_carries_pending_login_frame_onto_arn_payload(self):
+        """The router keeps the login frame after the login page and hands it to the ARN payload."""
+        from core.vsdc.vsdc_router import VSDCRouter
+
+        login = os.path.join(self.tmp_dir.name, "uid_frame.png")
+        with open(login, "wb") as fh:
+            fh.write(b"png")
+
+        router = object.__new__(VSDCRouter)
+        router._login_frames = {
+            4242: {"username": "UIDPANEL03", "path": login, "saved_at": time.time()},
+        }
+
+        payload = {"portal": "GST Portal", "arn": "AA270826009902Z"}
+        router._attach_pending_login_evidence(payload, 4242)
+        self.assertEqual(payload["_login_evidence_screenshot"], login)
+        self.assertEqual(payload["_login_evidence_username"], "UIDPANEL03")
+
+        # Non-GST captures never receive the GST login frame.
+        other = {"portal": "Income Tax", "arn": "901036690231026"}
+        router._attach_pending_login_evidence(other, 4242)
+        self.assertNotIn("_login_evidence_screenshot", other)
+
+        # An expired frame is not used.
+        router._login_frames[4242]["saved_at"] = time.time() - router._LOGIN_FRAME_TTL_SEC - 1
+        stale = {"portal": "GST Portal", "arn": "AA270826009903Z"}
+        router._attach_pending_login_evidence(stale, 4242)
+        self.assertNotIn("_login_evidence_screenshot", stale)
+
+
+    def test_16_router_carries_itr_login_frame_onto_itr_payload(self):
+        """The router keeps the ITR login frame (PAN) and hands it to ITR captures, not GST."""
+        from core.vsdc.vsdc_router import VSDCRouter
+
+        login = os.path.join(self.tmp_dir.name, "itr_uid_frame.png")
+        with open(login, "wb") as fh:
+            fh.write(b"png")
+
+        router = object.__new__(VSDCRouter)
+        router._login_frames = {
+            9999: {"username": "ABCDE1234F", "path": login, "saved_at": time.time(), "portal": "Income Tax"},
+        }
+
+        # ITR capture receives the ITR login frame
+        payload = {"portal": "Income Tax", "arn": "901036690231026"}
+        router._attach_pending_login_evidence(payload, 9999)
+        self.assertEqual(payload["_login_evidence_screenshot"], login)
+        self.assertEqual(payload["_login_evidence_username"], "ABCDE1234F")
+
+        # GST captures never receive the ITR login frame
+        other = {"portal": "GST Portal", "arn": "AA270826009904Z"}
+        router._attach_pending_login_evidence(other, 9999)
+        self.assertNotIn("_login_evidence_screenshot", other)
 
 
 if __name__ == "__main__":
