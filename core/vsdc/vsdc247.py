@@ -560,10 +560,17 @@ class Vsdc247Scanner:
             return ScanOutcome(False, "no frame")
 
         h = self._frame_hash(img)
+        first_frame = not self._seen_first_frame
+        changed = h != self._last_hash
+        # An unchanged frame cannot have sprung a green success box (that would change the
+        # pixels), so a static tick skips the colour scan entirely. The hash above is the
+        # cheap part; find_green_boxes is not. Re-reads for agreement are the one exception:
+        # the same frame is looked at again.
+        if not first_frame and not changed and self._rescans_left <= 0:
+            return ScanOutcome(False, "static")
+
         boxes = find_green_boxes(img)
         green_appeared = len(boxes) > self._last_green
-        changed = h != self._last_hash
-        first_frame = not self._seen_first_frame
         self._seen_first_frame = True
         self._last_hash = h
         self._last_green = len(boxes)

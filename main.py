@@ -1240,6 +1240,14 @@ class SeraApp:
 
             return results[0] if len(results) == 1 else {"datasets": results, "count": len(results)}
         except Exception as e:
+            # The capture outbox retries this same dict. Put the evidence paths back so a
+            # retried row still carries its screenshot (popping them at the top used to
+            # mean a row that failed once was saved without its evidence).
+            if evidence_path:
+                msg["_evidence_screenshot"] = evidence_path
+            if login_evidence_path:
+                msg["_login_evidence_screenshot"] = login_evidence_path
+                msg["_login_evidence_username"] = login_evidence_user
             # The capture outbox retries a failed write and keeps the row (core/capture_outbox.py).
             print(f"[Tracker Dump Error] {type(e).__name__}")
             raise

@@ -9,8 +9,11 @@ Tests:
 """
 
 import os
+import time
 import unittest
 from unittest.mock import MagicMock, patch
+
+from PIL import Image
 
 from core.vsdc.vsdc_engines import read_verifier_enabled
 from core.vsdc.vsdc_router import VSDCRouter
@@ -161,6 +164,47 @@ class TestVerifierRouterLane(unittest.TestCase):
         # Must not raise
         result = self.router.evaluate_tick()
         self.assertIsNone(result)
+
+    def test_the_verifier_does_not_ocr_every_tick(self):
+        """One full OCR a second at most; an unchanged frame waits for the forced pass."""
+        class CountingOcr:
+            def __init__(self):
+                self.shots = 0
+                self.scans = 0
+                self.img = Image.new("RGB", (64, 64), (240, 240, 240))
+
+            def capture_window_image(self, hwnd):
+                self.shots += 1
+                return self.img
+
+            def scan_image(self, img):
+                self.scans += 1
+                return {"lines": ["x"], "words": []}
+
+        ocr = CountingOcr()
+        router = VSDCRouter(ocr_engine=ocr)
+        router._verifier = MagicMock()
+        router._verifier.reconcile_tick.return_value = []
+        router._verifier.observe_frame.return_value = {}
+        router.get_foreground_info = MagicMock(
+            return_value=(1, "GST Portal - Google Chrome", "chrome.exe"))
+        router.extract_browser_url = MagicMock(return_value="https://services.gst.gov.in/x")
+
+        router._run_verifier()
+        router._tick_capture = None
+        router._run_verifier()          # same second, same frame: no second screenshot/OCR
+        self.assertEqual((ocr.shots, ocr.scans), (1, 1))
+
+        router._tick_capture = None
+        router._verifier_ocr_at = time.time() - (router._VERIFIER_FORCE_INTERVAL_SEC + 0.1)
+        router._run_verifier()          # forced pass on the unchanged frame
+        self.assertEqual((ocr.shots, ocr.scans), (2, 2))
+
+        ocr.img = Image.new("RGB", (64, 64), (10, 10, 10))
+        router._tick_capture = None
+        router._verifier_ocr_at = time.time() - (router._VERIFIER_MIN_INTERVAL_SEC + 0.1)
+        router._run_verifier()          # a visibly different frame is read
+        self.assertEqual((ocr.shots, ocr.scans), (3, 3))
 
 
 if __name__ == "__main__":

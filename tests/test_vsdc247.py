@@ -6,7 +6,7 @@ Every "must NOT capture" case here is a mistake this project actually made or ne
 
 import unittest
 from datetime import date
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from PIL import Image, ImageDraw
 
@@ -260,6 +260,14 @@ class TestScannerCadence(unittest.TestCase):
         for t in (0.4, 0.8, 1.2, 60.0):
             self.assertFalse(s.scan(self._img(240), ocr, "Income Tax", t, today=TODAY).scanned)
         self.assertEqual(ocr.scan_image.call_count, 1)
+
+    def test_a_static_frame_does_not_even_scan_for_green_boxes(self):
+        s, ocr = Vsdc247Scanner(), self._ocr(["Dashboard"])
+        s.scan(self._img(240), ocr, "Income Tax", 0.0, today=TODAY)
+        with patch("core.vsdc.vsdc247.find_green_boxes") as green:
+            for t in (0.4, 0.8, 1.2, 60.0):
+                self.assertFalse(s.scan(self._img(240), ocr, "Income Tax", t, today=TODAY).scanned)
+        self.assertEqual(green.call_count, 0)
 
     def test_a_confirmation_already_on_screen_at_first_sight_is_not_missed(self):
         s, ocr = Vsdc247Scanner(), self._ocr(ITR_CONFIRMATION)

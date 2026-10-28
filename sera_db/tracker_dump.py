@@ -1386,7 +1386,34 @@ class TrackerDumpMixin:
         """Saves notes and up to two screenshots. `screenshot_path_2=None` preserves the existing
         second screenshot (so older callers cannot wipe it); pass "" to clear it."""
         with self._connect_raw() as conn:
-            if screenshot_path_2 is None:
+            # One read up front: an autosave that changes nothing must not rewrite the row
+            # (or its payload JSON) every second. Only a changed notes value touches
+            # raw_payload_json; screenshot paths alone are two cheap columns.
+            row = conn.execute(
+                "SELECT notes, screenshot_path, raw_payload_json FROM tracker_dump WHERE id = ?",
+                (dump_id,)
+            ).fetchone()
+            old_notes = (row[0] if row else "") or ""
+            old_path = (row[1] if row else "") or ""
+            raw_json = row[2] if row else None
+            keep_slot2 = screenshot_path_2 is None
+            old_path_2 = None
+            if not keep_slot2:
+                try:
+                    r2 = conn.execute(
+                        "SELECT screenshot_path_2 FROM tracker_dump WHERE id = ?", (dump_id,)
+                    ).fetchone()
+                    old_path_2 = (r2[0] if r2 else "") or ""
+                except Exception:
+                    old_path_2 = None
+            new_path_2 = old_path_2 if keep_slot2 else (screenshot_path_2 or "")
+
+            if (row is not None and old_notes == (notes or "")
+                    and old_path == (screenshot_path or "")
+                    and (old_path_2 is None or old_path_2 == new_path_2)):
+                return True
+
+            if keep_slot2:
                 cur = conn.execute(
                     "UPDATE tracker_dump SET notes = ?, screenshot_path = ? WHERE id = ?",
                     (notes, screenshot_path, dump_id)
@@ -1398,18 +1425,17 @@ class TrackerDumpMixin:
                 )
 
             # Also store notes inside raw_payload_json so it connects seamlessly to DRS and sync
-            try:
-                row = conn.execute("SELECT raw_payload_json FROM tracker_dump WHERE id = ?", (dump_id,)).fetchone()
-                if row and row[0]:
-                    payload = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+            if raw_json and old_notes != (notes or ""):
+                try:
+                    payload = json.loads(raw_json) if isinstance(raw_json, str) else raw_json
                     if isinstance(payload, dict):
                         payload["notes"] = notes
                         conn.execute(
                             "UPDATE tracker_dump SET raw_payload_json = ? WHERE id = ?",
                             (json.dumps(payload), dump_id)
                         )
-            except Exception:
-                pass
+                except Exception:
+                    pass
             return cur.rowcount > 0
 
     def delete_tracker_dump(self, dump_id: int) -> bool:

@@ -975,6 +975,11 @@ class NotesAndMediaDialog(QDialog):
         self.current_screenshot_paths = ["", ""]
         self._saved_screenshot_raws = ["", ""]
         self._image_cleareds = [False, False]
+        # Slots the user attached/pasted/cleared in this dialog are theirs: an evidence
+        # frame that arrives afterwards must not replace them, and a stale autosave must
+        # not write over it either.
+        self._slot_dirty = [False, False]
+        self._ocr_workers = set()
         self._media_slot_pages = []
         for slot_index, slot_title in enumerate(("Screenshot 1", "Screenshot 2")):
             page = self._build_media_slot(slot_index, slot_title)
@@ -1167,26 +1172,66 @@ class NotesAndMediaDialog(QDialog):
                     uid, notes, final_path, screenshot_path_2=final_path_2
                 )
 
+    def _read_media_from_db(self):
+        """The (notes, [slot1, slot2]) currently stored for this row/container."""
+        notes = ""
+        raw_paths = ["", ""]
+        if not self.db:
+            return notes, raw_paths
+        if self.is_container:
+            ikey = self.item_data.get('identity_key')
+            if ikey and hasattr(self.db, 'get_srpf_container_media'):
+                media_data = self.db.get_srpf_container_media(ikey)
+                notes = media_data.get("notes", "") or ""
+                raw_paths = [media_data.get("screenshot_path", "") or "",
+                             media_data.get("screenshot_path_2", "") or ""]
+        else:
+            uid = self.item_data.get('id')
+            if uid and hasattr(self.db, 'get_tracker_dump_media'):
+                media_data = self.db.get_tracker_dump_media(uid)
+                notes = media_data.get("notes", "") or ""
+                raw_paths = [media_data.get("screenshot_path", "") or "",
+                             media_data.get("screenshot_path_2", "") or ""]
+        return notes, raw_paths
+
+    def _adopt_external_slot_paths(self):
+        """Picks up screenshots attached after this dialog opened.
+
+        VSDC247 writes its evidence frame / login frame straight into the row while the
+        dialog is open. The dialog's autosave would otherwise write the stale (usually
+        empty) path it loaded at open time over that fresh frame. Only slots the user has
+        not touched here are adopted.
+        """
+        try:
+            _notes, raw_paths = self._read_media_from_db()
+        except Exception:
+            return
+        dirty = getattr(self, "_slot_dirty", [False, False])
+        for index in range(2):
+            if dirty[index]:
+                continue
+            raw = raw_paths[index] or ""
+            if raw == (self._saved_screenshot_raws[index] or ""):
+                continue
+            if not raw:
+                self.current_screenshot_paths[index] = ""
+                self._saved_screenshot_raws[index] = ""
+                self._image_cleareds[index] = False
+                self._set_slot_empty(index)
+                continue
+            resolved = self._resolve_media_path(raw)
+            if resolved and os.path.exists(resolved):
+                self.current_screenshot_paths[index] = resolved
+                self._saved_screenshot_raws[index] = raw
+                self._image_cleareds[index] = False
+                self._show_preview(index, resolved)
+
     def _load_notes_and_media(self):
         if not self.db: return
         try:
             self._image_cleareds = [False, False]
-            notes = ""
-            raw_paths = ["", ""]
-            if self.is_container:
-                ikey = self.item_data.get('identity_key')
-                if ikey and hasattr(self.db, 'get_srpf_container_media'):
-                    media_data = self.db.get_srpf_container_media(ikey)
-                    notes = media_data.get("notes", "")
-                    raw_paths = [media_data.get("screenshot_path", ""),
-                                 media_data.get("screenshot_path_2", "")]
-            else:
-                uid = self.item_data.get('id')
-                if uid and hasattr(self.db, 'get_tracker_dump_media'):
-                    media_data = self.db.get_tracker_dump_media(uid)
-                    notes = media_data.get("notes", "")
-                    raw_paths = [media_data.get("screenshot_path", ""),
-                                 media_data.get("screenshot_path_2", "")]
+            self._slot_dirty = [False, False]
+            notes, raw_paths = self._read_media_from_db()
 
             self._saved_screenshot_raws = list(raw_paths)
             if notes:
@@ -1243,6 +1288,7 @@ class NotesAndMediaDialog(QDialog):
 
     def _clear_image(self, index: int = 0):
         self._image_cleareds[index] = True
+        self._slot_dirty[index] = True
         self.current_screenshot_paths[index] = ""
         self._saved_screenshot_raws[index] = ""
         self._set_slot_empty(index)
@@ -1260,6 +1306,7 @@ class NotesAndMediaDialog(QDialog):
         file_path, _ = QFileDialog.getOpenFileName(self, "Select Image", "", "Images (*.png *.jpg *.jpeg *.bmp)")
         if file_path:
             self._image_cleareds[index] = False
+            self._slot_dirty[index] = True
             self.current_screenshot_paths[index] = file_path
             self._show_preview(index, file_path)
             self._save_notes()
@@ -1272,6 +1319,7 @@ class NotesAndMediaDialog(QDialog):
             image = clipboard.image()
             if not image.isNull():
                 self._image_cleareds[index] = False
+                self._slot_dirty[index] = True
                 temp_path = os.path.join(
                     os.path.expanduser("~"),
                     f"temp_sera_paste_{index}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png"
@@ -1295,9 +1343,31 @@ class NotesAndMediaDialog(QDialog):
         from ui.utils.ocr_worker import OCRWorker
         self.lbl_save_status.setText("Scanning OCR...")
         self.lbl_save_status.setStyleSheet("color: #58A6FF; font-size: 12px; font-weight: bold;")
-        self.ocr_thread = OCRWorker(img_path)
-        self.ocr_thread.finished.connect(self._on_ocr_finished)
-        self.ocr_thread.start()
+        worker = OCRWorker(img_path)          # no parent: the module registry keeps it alive
+        self._ocr_workers.add(worker)
+        worker.ocr_finished.connect(self._on_ocr_finished)
+        worker.finished.connect(lambda w=worker: self._ocr_workers.discard(w))
+        self.ocr_thread = worker              # backwards-compatible alias
+        worker.start()
+
+    def _wait_for_ocr_workers(self, timeout_ms: int = 2000):
+        for worker in list(getattr(self, "_ocr_workers", ())):
+            if worker.isRunning():
+                worker.wait(timeout_ms)
+        self._ocr_workers.clear()
+
+    def closeEvent(self, event):
+        # Autosave is single-shot: a keystroke less than a second old would otherwise be
+        # lost when the dialog closes.
+        if self._save_timer.isActive():
+            self._save_timer.stop()
+            try:
+                self._save_notes()
+            except Exception:
+                pass
+        self._save_timer.stop()
+        self._wait_for_ocr_workers()
+        super().closeEvent(event)
 
     def _on_ocr_finished(self, text):
         if text and not text.startswith("OCR Error") and not text.startswith("OCR Failed") and not text.startswith("OCR Engine"):
@@ -1341,6 +1411,9 @@ class NotesAndMediaDialog(QDialog):
 
     def _save_notes(self):
         if not self.db: return
+        # A frame VSDC247 attached while this dialog was open is newer than what this
+        # dialog loaded; without this the autosave writes the stale empty slot over it.
+        self._adopt_external_slot_paths()
         notes = self.txt_notes.toPlainText()
         try:
             final_paths = [self._finalize_slot_path(0), self._finalize_slot_path(1)]
@@ -1366,6 +1439,7 @@ class PayloadInspectorDialog(QDialog):
         self.db = db
         self.item_data = item_data
         self.is_container = is_container or bool(item_data.get("filing_history"))
+        self._ocr_workers = set()
         title_tag = item_data.get('identity_key') or item_data.get('arn_number') or 'Capture'
         self.setWindowTitle(f"SRPF Container Inspector — {title_tag}")
         self.resize(1000, 700)
@@ -1945,9 +2019,22 @@ class PayloadInspectorDialog(QDialog):
         from ui.utils.ocr_worker import OCRWorker
         self.lbl_save_status.setText("Scanning OCR...")
         self.lbl_save_status.setStyleSheet("color: #58A6FF; font-size: 12px; font-weight: bold;")
-        self.ocr_thread = OCRWorker(img_path)
-        self.ocr_thread.finished.connect(self._on_ocr_finished)
-        self.ocr_thread.start()
+        worker = OCRWorker(img_path)          # no parent: the module registry keeps it alive
+        self._ocr_workers.add(worker)
+        worker.ocr_finished.connect(self._on_ocr_finished)
+        worker.finished.connect(lambda w=worker: self._ocr_workers.discard(w))
+        self.ocr_thread = worker              # backwards-compatible alias
+        worker.start()
+
+    def _wait_for_ocr_workers(self, timeout_ms: int = 2000):
+        for worker in list(getattr(self, "_ocr_workers", ())):
+            if worker.isRunning():
+                worker.wait(timeout_ms)
+        self._ocr_workers.clear()
+
+    def closeEvent(self, event):
+        self._wait_for_ocr_workers()
+        super().closeEvent(event)
 
     def _on_ocr_finished(self, text):
         if text and not text.startswith("OCR Error") and not text.startswith("OCR Failed") and not text.startswith("OCR Engine"):

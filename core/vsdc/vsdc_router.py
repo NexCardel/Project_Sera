@@ -10,6 +10,7 @@ import ctypes
 from ctypes import wintypes
 import os
 import tempfile
+import threading
 import time
 import re
 from typing import Dict, List, Optional, Tuple, Any, Callable
@@ -309,6 +310,20 @@ class VSDCRouter:
         self._scope_ok_this_tick: bool = False
         self._tick_portal: Optional[str] = None
         self._tick_page_url: str = ""       # this tick's address-bar URL, query stripped
+        # VSDC247 when a non-browser window is in front (our own Notes & Media dialog, a
+        # terminal): the browser windows still on screen are looked at on their own slow
+        # tick. Screenshots run on daemon threads with a timeout, so a wedged PrintWindow
+        # cannot freeze the worker; a stuck shot is left out and the count is capped.
+        self._bg_247_last: Dict[int, float] = {}
+        self._shot_lock = threading.Lock()
+        self._shot_threads: set = set()
+        # Evidence PNGs are written from the frame already read (no second capture); the
+        # temp folder is swept at most this often instead of once per capture.
+        self._evidence_swept_at: float = 0.0
+        # VSDC247-V: last full OCR pass and the frame signature it saw - the verifier is
+        # throttled to at most one OCR a second, plus a forced pass every two seconds.
+        self._verifier_ocr_at: float = 0.0
+        self._verifier_sig = None
 
         # Portal pages already reported as matching no crosshair, so each unknown page
         # is logged once (with its link) instead of on every poll tick.
@@ -719,10 +734,22 @@ class VSDCRouter:
                     if not is_gst_title:
                         return
 
-            # Capture window screenshot and run OCR
-            img = self.ocr.capture_window_image(hwnd)
+            # Capture window screenshot and run OCR. The verifier used to OCR a full frame
+            # on every tick; on office hardware that alone doubled the tick cost. Now at
+            # most one OCR a second, an unchanged frame waits for the forced pass, and the
+            # screenshot is the tick's own (shared with VSDC247/SGT) where possible.
+            if now - getattr(self, "_verifier_ocr_at", 0.0) < self._VERIFIER_MIN_INTERVAL_SEC:
+                return
+            img = self._capture_window(hwnd)
             if img is None:
                 return
+            from .vsdc_gate import frame_signature
+            sig = frame_signature(img)
+            if (sig == getattr(self, "_verifier_sig", None)
+                    and now - getattr(self, "_verifier_ocr_at", 0.0) < self._VERIFIER_FORCE_INTERVAL_SEC):
+                return
+            self._verifier_sig = sig
+            self._verifier_ocr_at = now
             scan = self.ocr.scan_image(img) if hasattr(self.ocr, "scan_image") else {}
             lines = scan.get("lines") or []
             if not lines:
@@ -938,6 +965,18 @@ class VSDCRouter:
     # ── VSDC247: the crosshair-independent submission safety net ────────────────
     _DISPATCH_TTL_SEC = 24 * 3600
     _PROMPT_TTL_SEC = 600
+    # A background browser is looked at this often while a non-browser window is in front.
+    _BG_247_TICK_SEC = 1.0
+    # One background screenshot may take this long before it is abandoned (PrintWindow can
+    # block forever on a Chromium window that another window covers).
+    _BG_SHOT_TIMEOUT_SEC = 2.5
+    _MAX_STUCK_SHOTS = 2
+    # Evidence temp files older than this are swept, but not more than every 10 minutes.
+    _EVIDENCE_SWEEP_SEC = 600.0
+    _EVIDENCE_TTL_SEC = 24 * 3600
+    # VSDC247-V OCR cadence.
+    _VERIFIER_MIN_INTERVAL_SEC = 1.0
+    _VERIFIER_FORCE_INTERVAL_SEC = 2.0
 
     def _remember_dispatch(self, payload: Dict[str, Any]) -> None:
         """Records every ack/ARN in a dispatched payload so nothing is sent twice."""
@@ -961,11 +1000,16 @@ class VSDCRouter:
                 self._scanner_247 = Vsdc247Scanner()
             self._scanner_247.observe(cached[1])
 
-    def _run_vsdc247(self, hwnd: int) -> Optional[Dict[str, Any]]:
-        portal = self._tick_portal
+    def _run_vsdc247(self, hwnd: int, portal: Optional[str] = None,
+                     page_url: Optional[str] = None, img=None) -> Optional[Dict[str, Any]]:
+        """VSDC247's scan. `portal`/`page_url`/`img` are supplied when this runs for a
+        background window (no foreground tick has loaded them); the foreground path keeps
+        using this tick's own values and screenshot."""
+        portal = portal if portal is not None else self._tick_portal
         if portal not in ("Income Tax", "GST Portal"):
             return None
-        img = self._capture_window(hwnd)
+        if img is None:
+            img = self._capture_window(hwnd)
         if img is None:
             return None
         if self._scanner_247 is None:
@@ -977,7 +1021,7 @@ class VSDCRouter:
         )
         det = outcome.detection
         if det is not None:
-            det.page_url = self._tick_page_url
+            det.page_url = page_url if page_url is not None else self._tick_page_url
         payload = None
         if det is not None:
             if det.tier == "vetoed":
@@ -993,6 +1037,125 @@ class VSDCRouter:
             payload = self._attribute_pending_247_orphans()
         return payload
 
+    def _background_247_tick(self, foreground_hwnd: int = 0) -> Optional[Dict[str, Any]]:
+        """VSDC247 while a non-browser window is in front (our own Notes & Media dialog, a
+        terminal, the tracker). The browser windows still on screen are read one slow tick
+        at a time. Without this, opening Notes & Media - a modal - blinded VSDC247 entirely,
+        while SGT kept working from its own background-window loop.
+
+        Only a window whose address bar is readable AND in scope is read: a cold title
+        alone is never trusted with a screenshot/OCR.
+        """
+        if self._mode_247 == MODE_OFF:
+            return None
+        from . import vsdc_windows
+        now = time.time()
+        last_seen = getattr(self, "_bg_247_last", None)
+        if last_seen is None:
+            last_seen = self._bg_247_last = {}
+        if len(last_seen) > 16:
+            cutoff = now - 3600
+            self._bg_247_last = last_seen = {h: t for h, t in last_seen.items() if t >= cutoff}
+        try:
+            windows = vsdc_windows.browser_windows(foreground_hwnd)
+        except Exception:
+            return None
+
+        for win in windows:
+            hwnd = int(getattr(win, "hwnd", 0) or 0)
+            if not hwnd:
+                continue
+            if now - last_seen.get(hwnd, 0.0) < self._BG_247_TICK_SEC:
+                continue
+            last_seen[hwnd] = now
+            try:
+                url = self.extract_browser_url(hwnd) or ""
+            except Exception:
+                url = ""
+            if not url or not is_in_scope_url(url):
+                continue
+            portal = portal_for_url(url)
+            if portal not in ("Income Tax", "GST Portal"):
+                continue
+            img = self._timed_capture(hwnd)
+            if img is None:
+                continue
+
+            # This window's own scanner/assembler/identity, restored afterwards so the
+            # foreground tick that called us still sees its own state.
+            saved = {field: getattr(self, field, None) for field in _SESSION_FIELDS}
+            session = self._get_or_create_session(hwnd)
+            self._load_session(session)
+            try:
+                result = self._run_vsdc247(hwnd, portal=portal,
+                                           page_url=sanitize_page_url(url), img=img)
+                if result:
+                    self._attach_pending_login_evidence(result, hwnd)
+                    self._remember_dispatch(result)
+                    cm = str(result.get("capture_method") or "").lower()
+                    is_history = ("history" in cm or "audit" in cm or "calendar" in cm
+                                  or "view_filed" in cm)
+                    stamp_original_author(result, is_live=not is_history)
+                    stamp_device_name(result)
+                return result
+            finally:
+                self._save_session(session)
+                for field, value in saved.items():
+                    setattr(self, field, value)
+        return None
+
+    def _timed_capture(self, hwnd: int, timeout: float = 0.0):
+        """One background-window screenshot, abandoned after `timeout`. PrintWindow can
+        hang on a covered Chromium window, so the call runs on a daemon thread; a shot
+        still running when the timeout fires is left alone and counted, and no more than
+        `_MAX_STUCK_SHOTS` are ever left behind."""
+        timeout = timeout or self._BG_SHOT_TIMEOUT_SEC
+        lock = getattr(self, "_shot_lock", None)
+        if lock is None:
+            lock = self._shot_lock = threading.Lock()
+            self._shot_threads = set()
+        with lock:
+            if len(self._shot_threads) >= self._MAX_STUCK_SHOTS:
+                return None
+
+        box: Dict[str, Any] = {}
+
+        def grab():
+            try:
+                box["img"] = self.ocr.capture_window_image(hwnd)
+            except Exception:
+                box["img"] = None
+            finally:
+                with lock:
+                    self._shot_threads.discard(threading.current_thread())
+
+        thread = threading.Thread(target=grab, name="vsdc-bg-shot", daemon=True)
+        with lock:
+            self._shot_threads.add(thread)
+        thread.start()
+        thread.join(timeout)
+        if thread.is_alive():
+            vsdc_diag.note(f"[VSDC247] background screenshot of {hwnd} abandoned after {timeout:.1f}s")
+            return None
+        return box.get("img")
+
+    def _sweep_evidence_dir(self, out_dir: str) -> None:
+        """Deletes evidence PNGs older than a day, at most every `_EVIDENCE_SWEEP_SEC`
+        (the old code listed the folder on every capture)."""
+        now = time.monotonic()
+        last = getattr(self, "_evidence_swept_at", 0.0) or 0.0
+        if now - last < self._EVIDENCE_SWEEP_SEC:
+            return
+        self._evidence_swept_at = now
+        cutoff = time.time() - self._EVIDENCE_TTL_SEC
+        try:
+            for name in os.listdir(out_dir):
+                old = os.path.join(out_dir, name)
+                if os.path.isfile(old) and os.path.getmtime(old) < cutoff:
+                    os.remove(old)
+        except OSError:
+            pass
+
     def _save_login_evidence(self, username: str, img, hwnd: int = 0) -> str:
         """Saves the exact login frame that was OCR'd (username filled, password not read)."""
         try:
@@ -1000,17 +1163,10 @@ class VSDCRouter:
                 return ""
             out_dir = os.path.join(tempfile.gettempdir(), "sera_vsdc247_evidence")
             os.makedirs(out_dir, exist_ok=True)
-            cutoff = time.time() - 24 * 3600
-            try:
-                for name in os.listdir(out_dir):
-                    old = os.path.join(out_dir, name)
-                    if os.path.isfile(old) and os.path.getmtime(old) < cutoff:
-                        os.remove(old)
-            except OSError:
-                pass
+            self._sweep_evidence_dir(out_dir)
             stem = re.sub(r"[^A-Za-z0-9]+", "", str(username or ""))[:40] or "login"
             path = os.path.join(out_dir, f"login_{stem}_{int(time.time() * 1000)}.png")
-            img.save(path, "PNG")
+            img.save(path, "PNG", compress_level=1)
             return path
         except Exception as e:
             print(f"[VSDC247-V] login evidence screenshot could not be saved: {e}")
@@ -1123,39 +1279,26 @@ class VSDCRouter:
             return
         self._attach_pending_login_evidence(payload, hwnd)
 
-    def _save_247_evidence(self, identifier: str, img, hwnd: int) -> str:
+    def _save_247_evidence(self, identifier: str, img, hwnd: int = 0) -> str:
         """
-        Writes the frame VSDC247 actually read to a temp PNG and returns its path. The whole
-        browser window is preferred (title bar, tabs and address bar included): that is the
-        evidence the Notes & Media tab shows. Falls back to the frame handed to the scanner.
-        The main thread copies this into the app's media folder and records it on the capture.
+        Writes the frame VSDC247 actually read to a temp PNG and returns its path.
+        The frame handed to the scanner IS the evidence, so this never takes a second
+        screenshot and never PNG-encodes on a different picture: both used to stall the
+        capture tick for hundreds of milliseconds on a slow PC. `hwnd` is kept for older
+        callers. The main thread copies this into the app's media folder and records it
+        on the capture.
         """
         try:
-            shot = None
-            try:
-                if hwnd:
-                    shot = self.ocr.capture_window_full(hwnd)
-            except Exception:
-                shot = None
-            if not isinstance(shot, Image.Image):
-                shot = img
-            if not isinstance(shot, Image.Image):
+            if not isinstance(img, Image.Image):
                 return ""
 
             out_dir = os.path.join(tempfile.gettempdir(), "sera_vsdc247_evidence")
             os.makedirs(out_dir, exist_ok=True)
-            cutoff = time.time() - 24 * 3600
-            try:
-                for name in os.listdir(out_dir):
-                    old = os.path.join(out_dir, name)
-                    if os.path.isfile(old) and os.path.getmtime(old) < cutoff:
-                        os.remove(old)
-            except OSError:
-                pass
+            self._sweep_evidence_dir(out_dir)
 
             stem = re.sub(r"[^A-Za-z0-9]+", "", str(identifier or ""))[:40] or "capture"
             path = os.path.join(out_dir, f"{stem}_{int(time.time() * 1000)}.png")
-            shot.save(path, "PNG")
+            img.save(path, "PNG", compress_level=1)
             return path
         except Exception as e:
             print(f"[VSDC247] evidence screenshot could not be saved: {e}")
@@ -1199,7 +1342,9 @@ class VSDCRouter:
             # carries the login frame when it is re-sent attributed.
             det.login_evidence_screenshot = frame.get("path")
             det.login_evidence_username = frame.get("username") or ""
-        self._dispatched_ids[ident] = now
+        # Not remembered here: the caller records it (_remember_dispatch) only once the
+        # payload is actually handed off. Marking it before the row existed meant a failed
+        # write left the ARN permanently "already sent" and VSDC247 never read it again.
         print(f"[VSDC247] captured {det.kind} {ident} score={det.score} ({'; '.join(det.reasons)})")
         who = self.assembler.client_name or self.assembler.client_pan or ""
         form_lbl = det.form or self.assembler.current_filing_type or "Submission"
@@ -1522,6 +1667,10 @@ class VSDCRouter:
 
     def _evaluate_tick(self) -> Optional[Dict[str, Any]]:
         try:
+            # "One screenshot per tick": never hand the next tick a picture taken earlier
+            # (the background-window path may not reach the per-window reset in
+            # _crosshair_tick at all).
+            self._tick_capture = None
             # SGT tracker rows waiting to be saved go out first, one per tick - even when the
             # engines were just switched off (switching SGT off queues its last rows) and whatever
             # window is in front. They are SGT's own rows: never recorded in _dispatched_ids, so
@@ -1565,6 +1714,11 @@ class VSDCRouter:
         is_browser = any(b in proc_name for b in BROWSER_EXE_NAMES)
 
         if not (is_portal_title or is_browser):
+            # Our own modal Notes & Media dialog (or another app) is in front. SGT keeps
+            # watching browser windows from its own loop; VSDC247 must do the same, or a
+            # submission completed behind that dialog is never seen.
+            if self._mode_247 != MODE_OFF:
+                return self._background_247_tick(hwnd)
             return None
 
         # Isolate this window's tracking state for the duration of this tick —

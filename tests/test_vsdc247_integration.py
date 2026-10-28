@@ -11,6 +11,7 @@ import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from PIL import Image
@@ -129,6 +130,36 @@ class TestRunsOnPagesWithNoCrosshair(unittest.TestCase):
             h.run(1)
         self.assertEqual(h.events[-1][0], "prompt")
         save.assert_not_called()
+
+    def test_evidence_is_the_frame_already_read_not_a_second_screenshot(self):
+        h = Harness()
+        h.screen(["Dashboard"], shade=245)
+        h.tick()
+        h.screen(ITR_CONFIRMATION)
+        p = h.run()[0]
+        path = p.get("_evidence_screenshot")
+        try:
+            self.assertTrue(path and os.path.exists(path))
+            h.ocr.capture_window_full.assert_not_called()
+        finally:
+            if path and os.path.exists(path):
+                os.remove(path)
+
+    def test_a_submission_behind_a_non_browser_window_is_still_captured(self):
+        """Our own Notes & Media dialog (modal) is foreground: VSDC247 must watch the
+        browser windows still on screen, exactly like SGT does from its own loop."""
+        h = Harness()
+        h.router.get_foreground_info = MagicMock(
+            return_value=(9999, "Notes & Media — Client", "python.exe"))
+        h.router._timed_capture = lambda hwnd: h.router.ocr.capture_window_image(hwnd)
+        h.screen(["Dashboard"], shade=245)
+        with patch("core.vsdc.vsdc_windows.browser_windows",
+                   return_value=[SimpleNamespace(hwnd=4242, title=TITLE_ITR, proc_name="chrome.exe")]):
+            h.tick()
+            h.screen(ITR_CONFIRMATION)
+            got = [r for r in (h.tick(advance=1.1) for _ in range(3)) if r]
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["arn"], TODAY_ACK)
 
     def test_the_same_filing_is_never_sent_twice(self):
         h = Harness()

@@ -268,6 +268,72 @@ class TestNotesMediaFix(unittest.TestCase):
             self.assertEqual(row[1], "media/login_legacy.png")
 
 
+    def test_17_notes_autosave_does_not_clobber_evidence_attached_while_open(self):
+        """A VSDC247 frame attached after the dialog opened wins over the stale empty slot."""
+        from PIL import Image
+        from ui.windows.tracker_dump_window import NotesAndMediaDialog
+
+        res = self.db.insert_tracker_dump(
+            pan="PAN247005",
+            portal="Income Tax",
+            period_label="AY 2026-27",
+            arn_number="901036690231027",
+            capture_method="VSDC247_itr_ack",
+            status="Filed",
+            raw_payload_json=json.dumps({"pan": "PAN247005"}),
+            dataset_key="ITR:PAN247005:AY 2026-27:ITR-4:0",
+        )
+        dlg = NotesAndMediaDialog({"id": res["id"]}, db=self.db)
+        dlg._save_timer.stop()
+        dlg._load_notes_and_media()
+
+        evidence = os.path.join(self.user_media_dir, "vsdc247_late.png")
+        Image.new("RGB", (64, 48), (240, 240, 240)).save(evidence, "PNG")
+        self.db.save_tracker_dump_media(res["id"], "", "media/vsdc247_late.png")
+
+        dlg.txt_notes.setPlainText("typed while open")
+        dlg._save_timer.stop()
+        dlg._save_notes()
+
+        row = self.db.get_tracker_dump_media(res["id"])
+        self.assertEqual(row["notes"], "typed while open")
+        self.assertEqual(row["screenshot_path"], "media/vsdc247_late.png")
+        dlg.close()
+
+    def test_18_a_slot_the_user_touched_is_not_replaced_by_a_later_frame(self):
+        """Adopting external evidence must never take a slot the user edited in the dialog."""
+        from PIL import Image
+        from ui.windows.tracker_dump_window import NotesAndMediaDialog
+
+        res = self.db.insert_tracker_dump(
+            pan="PAN247006",
+            portal="Income Tax",
+            period_label="AY 2026-27",
+            arn_number="901036690231028",
+            capture_method="VSDC247_itr_ack",
+            status="Filed",
+            raw_payload_json=json.dumps({"pan": "PAN247006"}),
+            dataset_key="ITR:PAN247006:AY 2026-27:ITR-4:0",
+        )
+        dlg = NotesAndMediaDialog({"id": res["id"]}, db=self.db)
+        dlg._save_timer.stop()
+        dlg._load_notes_and_media()
+
+        user_pick = os.path.join(self.user_media_dir, "user_pick.png")
+        Image.new("RGB", (64, 48), (10, 10, 10)).save(user_pick, "PNG")
+        dlg._slot_dirty[0] = True
+        dlg._image_cleareds[0] = False
+        dlg.current_screenshot_paths[0] = user_pick
+
+        evidence = os.path.join(self.user_media_dir, "vsdc247_late_2.png")
+        Image.new("RGB", (64, 48), (240, 240, 240)).save(evidence, "PNG")
+        self.db.save_tracker_dump_media(res["id"], "note", "media/vsdc247_late_2.png")
+
+        dlg._save_notes()
+        self.assertEqual(self.db.get_tracker_dump_media(res["id"])["screenshot_path"],
+                         "media/user_pick.png")
+        dlg.close()
+
     def test_09_vsdc247_evidence_saved_to_notes_and_media(self):
         """Phase 9: VSDC247's evidence frame lands on the capture row and its container."""
         from PIL import Image
