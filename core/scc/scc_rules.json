@@ -5,7 +5,7 @@
   "precedence": ["locked", "wrong_password", "worked", "neutral", "no_conclusion"],
 
   "messages": {
-    "wrong_password": "The portal did not accept that password (marked ✗). The highlighted row is next.",
+    "wrong_password": "The portal did not accept that password (marked \u2717). The highlighted row is next.",
     "locked": "The portal says this account is locked. Stop here: do not try any more passwords.",
     "ask_which": "Logged in. Which password did you use? Press \"This one worked\" on it, or \"None - I typed my own\"."
   },
@@ -84,6 +84,72 @@
       "note": "A page whose heading is exactly this; the password page's link has a '?' after it.",
       "examples": ["Reset Password", "Forgot your Password"],
       "counter_examples": ["Forgot Password?", "Password", "Reset Password link sent"]
+    },
+
+    {
+      "name": "gst_wrong_password",
+      "outcome": "wrong_password",
+      "portals": ["GST"],
+      "unconfirmed": true,
+      "patterns": ["\\bInvalid Username or Password\\b", "\\binvalid username or password\\b", "\\buser(?:name)? or password (?:is )?(?:invalid|incorrect|wrong)\\b", "\\bplease enter (?:a )?valid (?:username|password)\\b"],
+      "note": "The GST portal error after a wrong username or password attempt. Unconfirmed: verify against a real wrong-password UIA probe dump.",
+      "examples": ["Invalid Username or Password", "invalid username or password", "Please enter a valid password"],
+      "counter_examples": ["Username", "Password", "Forgot Password?", "Enter OTP", "Captcha is invalid"]
+    },
+
+    {
+      "name": "gst_logged_in",
+      "outcome": "worked",
+      "portals": ["GST"],
+      "unconfirmed": true,
+      "patterns": ["\\bFile Returns\\b", "\\bView My Ledger\\b"],
+      "note": "GST portal dashboard elements visible only when logged in. Unconfirmed: verify with a real logged-in UIA probe.",
+      "examples": ["File Returns", "View My Ledger"],
+      "counter_examples": ["Login", "Username", "Password", "Invalid Username or Password", "Enter OTP"]
+    },
+
+    {
+      "name": "gst_locked",
+      "outcome": "locked",
+      "portals": ["GST"],
+      "unconfirmed": true,
+      "patterns": ["\\baccount (?:has been |is )?(?:locked|blocked|suspended)\\b", "\\btoo many (?:failed|invalid|incorrect)? ?(?:login )?attempts\\b", "\\bmaximum (?:(?:number of )?(?:login )?)?attempts (?:exceeded|reached)\\b"],
+      "note": "GST portal lockout message. Unconfirmed: must never be reproduced intentionally.",
+      "examples": ["Your account has been locked.", "Too many failed login attempts", "Maximum attempts exceeded"],
+      "counter_examples": ["Invalid Username or Password", "Enter OTP", "File Returns", "Account Settings"]
+    },
+
+    {
+      "name": "traces_wrong_password",
+      "outcome": "wrong_password",
+      "portals": ["TRACES"],
+      "unconfirmed": true,
+      "patterns": ["\\bUser ID or Password is incorrect\\b", "\\binvalid user(?:name)? (?:or|and) password\\b", "\\bincorrect (?:username|password)\\b"],
+      "note": "TRACES portal error after a wrong username or password attempt. Unconfirmed: verify against a real wrong-password UIA probe dump.",
+      "examples": ["User ID or Password is incorrect", "Incorrect password", "invalid username and password"],
+      "counter_examples": ["User ID", "Password", "Forgot Password?", "Enter OTP", "Captcha", "Form 26AS"]
+    },
+
+    {
+      "name": "traces_logged_in",
+      "outcome": "worked",
+      "portals": ["TRACES"],
+      "unconfirmed": true,
+      "patterns": ["\\bForm 26AS\\b", "\\bTDS/TCS Credit\\b", "\\bDownload TDS Certificate\\b"],
+      "note": "TRACES dashboard elements visible only when logged in. Unconfirmed: verify with a real logged-in UIA probe.",
+      "examples": ["Form 26AS", "TDS/TCS Credit", "Download TDS Certificate"],
+      "counter_examples": ["Login", "User ID", "Password", "Invalid Username or Password", "Enter OTP"]
+    },
+
+    {
+      "name": "traces_locked",
+      "outcome": "locked",
+      "portals": ["TRACES"],
+      "unconfirmed": true,
+      "patterns": ["\\baccount (?:has been |is )?(?:locked|blocked|suspended)\\b", "\\btoo many (?:failed|invalid|incorrect)? ?(?:login )?attempts\\b", "\\bmaximum (?:(?:number of )?(?:login )?)?attempts (?:exceeded|reached)\\b"],
+      "note": "TRACES portal lockout message. Unconfirmed: must never be reproduced intentionally on a real account.",
+      "examples": ["Your account has been locked.", "Too many failed login attempts", "Maximum attempts exceeded"],
+      "counter_examples": ["Invalid Username or Password", "Enter OTP", "Form 26AS", "Account Settings"]
     }
   ]
 }
