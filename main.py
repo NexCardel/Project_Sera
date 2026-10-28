@@ -397,6 +397,8 @@ class SeraApp:
         loading_dlg.set_status("Verifying staff identity & pre-loading workspace...")
         loading_dlg.hide()
         self.actor, self.actor_alias = self._ensure_user_identity()
+        if hasattr(self, "clipboard_watcher") and self.clipboard_watcher:
+            self.clipboard_watcher.actor = self.actor
         loading_dlg.show()
 
         # Start Sera Sync LAN peer service

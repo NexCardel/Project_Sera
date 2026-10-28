@@ -103,6 +103,7 @@ class Arm:
     grants: int = 0
     fills: List[str] = field(default_factory=list)
     max_uses: int = 1
+    sca_mode: str = "autofill"
 
 
 class ClipboardWatchService(QObject):
@@ -110,9 +111,10 @@ class ClipboardWatchService(QObject):
     sca_armed = Signal(int, str, list)  # client_id, client_token, services (no passwords)
     sca_notice = Signal(str, str)       # message for staff, level ("info" | "warning")
 
-    def __init__(self, db, parent=None):
+    def __init__(self, db, parent=None, actor: str = "Staff"):
         super().__init__(parent)
         self.db = db
+        self.actor = actor or "Staff"
         self.enabled = True
         self._uid_index: Dict[str, int] = {}
         self._identity_column_ids: set = set()
@@ -334,7 +336,7 @@ class ClipboardWatchService(QObject):
             self._arm = Arm(arm_id=arm["arm_id"], client_id=client_id, client_token=client_token,
                             matched_uid=matched_uid, services=arm_services,
                             expires_at=arm["expires_at"] / 1000.0, uses_remaining=max_uses,
-                            max_uses=max_uses)
+                            max_uses=max_uses, sca_mode=sca_mode)
             print(f"[SCA] Armed client {client_token}: {len(services)} portal(s) [mode: {sca_mode}]")
             automation.arm_sca(request)
             self.sca_armed.emit(client_id, client_token, services)
@@ -399,10 +401,26 @@ class ClipboardWatchService(QObject):
             if client_id:
                 arm.fills.append(portal)
                 arm.uses_remaining = max(0, arm.uses_remaining - 1)
+                mode = getattr(arm, "sca_mode", "autofill")
+                is_widget = mode in ("widget", "assist")
+                action = "sca_widget" if is_widget else "sca_autofill"
+                mode_desc = "Widget" if is_widget else "Ambient Autofill"
+                detail = f"SCA {mode_desc} filled password for {portal}"
+                service_id = msg.get("service_id")
                 try:
-                    self.db.record_client_activity(client_id, "SCA", f"Password filled on {portal}")
-                except Exception:
-                    pass
+                    self.db.log_action(
+                        actor=self.actor,
+                        action=action,
+                        client_id=client_id,
+                        service_id=service_id,
+                        detail=detail
+                    )
+                except Exception as e:
+                    print(f"[SCA] Audit log error: {e}")
+                    try:
+                        self.db.record_client_activity(client_id, "SCA", f"Password filled on {portal}")
+                    except Exception:
+                        pass
         else:
             reason = msg.get("reason") or "unknown"
             print(f"[SCA] Fill on {portal} failed: {reason}")

@@ -88,8 +88,11 @@ class AuditBackupMixin:
                 where.append("actor LIKE ?")
                 params.append(f"%{actor}%")
             if action and action != "All Actions":
-                where.append("action = ?")
-                params.append(action)
+                if action.lower() in ("sca", "sca (all)", "all sca", "sca_usage"):
+                    where.append("(action LIKE 'sca_%' OR action = 'sca')")
+                else:
+                    where.append("action = ?")
+                    params.append(action)
             if from_date:
                 where.append("ts >= ?")
                 params.append(from_date)
@@ -108,6 +111,7 @@ class AuditBackupMixin:
             rows = cur.fetchall()
 
             client_name_map = {}
+            service_name_map = {}
             if resolve_names:
                 # Only look up the clients that actually appear in these rows --
                 # scanning every client's values on each refresh froze the UI.
@@ -131,16 +135,29 @@ class AuditBackupMixin:
                 except Exception:
                     pass
 
+                # Resolve service names
+                try:
+                    wanted_services = sorted({r[5] for r in rows if r[5]})
+                    if wanted_services:
+                        marks = ",".join("?" * len(wanted_services))
+                        cur_srv = conn.execute(f"SELECT id, name FROM services WHERE id IN ({marks})", wanted_services).fetchall()
+                        for s_id, s_name in cur_srv:
+                            service_name_map[s_id] = s_name
+                except Exception:
+                    pass
+
             results = []
             for r in rows:
                 cid = r[4]
+                sid = r[5]
                 cname = client_name_map.get(cid) if cid else None
+                sname = service_name_map.get(sid) if sid else None
                 client_label = cname if cname else (f"CLI-{cid:05d}" if cid else "—")
                 results.append({
                     "id": r[0], "ts": r[1], "actor": r[2], "action": r[3],
                     "client_id": cid, "client_name": client_label,
                     "client_token": f"CLI-{cid:05d}" if cid else "",
-                    "service_id": r[5], "detail": r[6]
+                    "service_id": sid, "service_name": sname, "detail": r[6]
                 })
             return results
 

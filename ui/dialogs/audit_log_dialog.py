@@ -86,9 +86,15 @@ def _get_action_badge_style(action: str) -> tuple[str, str, str]:
         return "👁️ View", "#58A6FF", "#162B4D"
     elif act == "audit_log_viewed":
         return "🛡️ Audit View", "#58A6FF", "#162B4D"
-    elif act in ("autofill", "sca_autofill", "autofill_extension", "autofill_playwright"):
+    elif act == "sca_autofill":
+        return "🪄 SCA Autofill", "#BC8CFF", "#2E1D4D"
+    elif act == "sca_widget":
+        return "⚡ SCA Widget", "#39FF14", "#183B18"
+    elif act in ("sca", "sca_usage", "sca_fill"):
+        return "⚡ SCA", "#BC8CFF", "#2E1D4D"
+    elif act in ("autofill", "autofill_extension", "autofill_playwright"):
         return "🪄 Autofill", "#BC8CFF", "#2E1D4D"
-    elif act in ("manual_assist", "sca_widget"):
+    elif act in ("manual_assist",):
         return "⚡ Manual Assist", "#39FF14", "#183B18"
     elif act == "manual_copy":
         return "📋 Copy", "#79C0FF", "#1C304A"
@@ -326,7 +332,7 @@ class AuditLogDialog(QDialog):
         self.action_combo = QComboBox()
         self.action_combo.setFixedWidth(145)
         self.action_combo.addItems([
-            "All Actions", "view", "manual_assist", "autofill", "manual_copy",
+            "All Actions", "SCA (All)", "sca_autofill", "sca_widget", "view", "manual_assist", "autofill", "manual_copy",
             "create", "update", "archive", "unarchive", "delete",
             "csv_import", "backup", "restore", "csv_export",
             "filing_submitted", "sync_pushed", "sync_received", "audit_log_viewed"
