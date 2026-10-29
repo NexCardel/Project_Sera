@@ -410,3 +410,35 @@ def test_the_coordinator_js_tests_pass():
     out = subprocess.run(["node", str(ROOT / "tests" / "js" / "test_sca_coordinator.js")],
                          capture_output=True, text=True, timeout=120)
     assert out.returncode == 0, out.stdout + out.stderr
+
+
+def test_sck_edit_request_reaches_the_desktop(bridge):
+    received = []
+    bridge.sck_edit_requested.connect(received.append)
+    bridge.dispatch({
+        "type": "sck_edit_request",
+        "service_id": 3,
+        "client_id": 42,
+        "portal": "GST Portal",
+    })
+    assert len(received) == 1
+    assert received[0] == {
+        "type": "sck_edit_request",
+        "service_id": 3,
+        "client_id": 42,
+        "portal": "GST Portal",
+    }
+
+
+def test_sck_edit_request_with_no_client_id(bridge):
+    received = []
+    bridge.sck_edit_requested.connect(received.append)
+    bridge.dispatch({
+        "type": "sck_edit_request",
+        "service_id": 5,
+        "portal": "Income Tax",
+    })
+    assert len(received) == 1
+    assert received[0]["service_id"] == 5
+    assert received[0]["client_id"] is None
+    assert received[0]["portal"] == "Income Tax"

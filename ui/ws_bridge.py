@@ -90,6 +90,53 @@ def _load_chrome_extension_id(manifest_path: Path) -> Optional[str]:
         return None
 
 
+def _as_positive_int(value) -> Optional[int]:
+    """A positive integer id, or None. Accepts an int or a numeric string only."""
+    if isinstance(value, bool):
+        return None
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+def _clean_sck_password(msg: dict) -> Optional[dict]:
+    """Validate an SCK save message before any handler touches it.
+
+    The password is the only sensitive value here, so it is bounded (1-256 chars) and kept in
+    local memory only; callers must never log or store the returned dict. Everything else is an
+    id or a short label, bounded so a malformed page message cannot arrive as a huge string.
+    """
+    service_id = _as_positive_int(msg.get("service_id"))
+    if service_id is None:
+        return None
+    password = msg.get("password")
+    if not isinstance(password, str) or not 1 <= len(password) <= 256:
+        return None
+    client_id = msg.get("client_id")
+    if client_id in (None, ""):
+        client_id = None
+    else:
+        client_id = _as_positive_int(client_id)
+        if client_id is None:
+            return None
+    arm_id = msg.get("arm_id") or ""
+    portal = msg.get("portal") or ""
+    if not isinstance(arm_id, str) or len(arm_id) > 64:
+        return None
+    if not isinstance(portal, str) or len(portal) > 100:
+        return None
+    return {
+        "type": "sck_save_password",
+        "service_id": service_id,
+        "client_id": client_id,
+        "arm_id": arm_id.strip(),
+        "portal": portal.strip(),
+        "password": password,
+    }
+
+
 class WSBridge(QObject):
     # Fed only by core/vsdc's filing_captured signal (SGT/VSDC desktop capture), connected
     # directly to main.py's _handle_extension_result - not by anything over this websocket.
@@ -104,6 +151,14 @@ class WSBridge(QObject):
     scc_row_worked_received = Signal(dict)
     scc_card_closed_received = Signal(dict)     # {attempt_id}
     scc_row_none_received = Signal(dict)        # {attempt_id}: "None - I typed my own" (step 5)
+    # SCK: the new password staff typed into the portal card. Carries the password - the handler
+    # must never log, print or store the message.
+    sck_save_password_received = Signal(dict)
+    # SCK: the card closed itself (staff pressed x, or the service's dashboard page was reached).
+    sck_widget_closed_received = Signal(dict)   # {service_id, reason}
+    # SCK: staff pressed the ✎ edit button on SMTI / MECP / SCA widget to update a
+    # password without a detected failure.  {service_id, client_id, portal}
+    sck_edit_requested = Signal(dict)
     extension_settings_updated_received = Signal(dict)
 
     # automation.py calls broadcast()/send_first() from plain background threads (autofill
@@ -389,6 +444,24 @@ class WSBridge(QObject):
             attempt_id = msg.get("attempt_id")
             if isinstance(attempt_id, str) and 0 < len(attempt_id) <= 64:
                 self.scc_row_none_received.emit({"type": mtype, "attempt_id": attempt_id})
+        elif mtype == "sck_save_password":
+            clean = _clean_sck_password(msg)
+            if clean is not None:
+                self.sck_save_password_received.emit(clean)
+        elif mtype in ("sck_dismissed", "sck_widget_done"):
+            service_id = _as_positive_int(msg.get("service_id"))
+            if service_id is not None:
+                self.sck_widget_closed_received.emit({
+                    "type": mtype, "service_id": service_id,
+                    "reason": "dismissed" if mtype == "sck_dismissed" else "dashboard"})
+        elif mtype == "sck_edit_request":
+            service_id = _as_positive_int(msg.get("service_id"))
+            client_id  = _as_positive_int(msg.get("client_id"))
+            portal = msg.get("portal", "")
+            if service_id is not None and isinstance(portal, str) and len(portal) <= 100:
+                self.sck_edit_requested.emit({
+                    "type": mtype, "service_id": service_id,
+                    "client_id": client_id, "portal": portal.strip()})
         elif mtype == "extension_settings_updated":
             self.extension_settings_updated_received.emit(msg)
         elif mtype in ("request_settings", "get_settings"):

@@ -1,155 +1,393 @@
 {
   "version": 1,
   "about": "SCC-U outcome wording for the Income Tax login (autofill-tweaks blueprint G.2 step 4). Every rule must carry examples and counter_examples; a rule that fails them, or whose example another rule of a different outcome claims first, is refused at load and the previous version of that rule keeps running. A rule matches a page when its 'urls' (regexes on the page address, if any) AND its 'patterns' (regexes on any one line, if any) both hold. Wording that no tools/vsdc_uia_probe_output/*.txt dump has shown yet carries \"unconfirmed\": true - it is a best reading, to be replaced by real wording from tools/vsdc_uia_probe.py, never widened by guessing. Precedence when a page matches several: locked, wrong_password, worked, neutral, no_conclusion.",
-
-  "precedence": ["locked", "wrong_password", "worked", "neutral", "no_conclusion"],
-
+  "precedence": [
+    "locked",
+    "wrong_password",
+    "worked",
+    "neutral",
+    "no_conclusion"
+  ],
   "messages": {
     "wrong_password": "The portal did not accept that password (marked \u2717). The highlighted row is next.",
     "locked": "The portal says this account is locked. Stop here: do not try any more passwords.",
     "ask_which": "Logged in. Which password did you use? Press \"This one worked\" on it, or \"None - I typed my own\"."
   },
-
   "rules": [
     {
       "name": "itr_logged_in_header",
       "outcome": "worked",
-      "portals": ["Income Tax"],
-      "patterns": ["^([A-Z][A-Z .'&]*[A-Z.]) (?:Individual|HUF|Company|Firm|AOP|BOI|Trust|Local Authority|Artificial Juridical Person)$"],
+      "portals": [
+        "Income Tax"
+      ],
+      "patterns": [
+        "^([A-Z][A-Z .'&]*[A-Z.]) (?:Individual|HUF|Company|Firm|AOP|BOI|Trust|Local Authority|Artificial Juridical Person)$"
+      ],
       "case": "sensitive",
       "group": 1,
       "note": "The profile menu button in the portal header, on every logged-in page: '<NAME> Individual' (the itr_header_name spec in core/sgt/sgt_fields.json). A CA/ERI login shows a role instead, which does not count. Group 1 is the name, for the 'must agree with the client' check.",
-      "examples": ["ASHOK KUMAR SEN Individual", "SEN TRADING CO Firm", {"lines": ["Dashboard", "ASHOK KUMAR SEN Individual", "e-File"]}],
-      "counter_examples": ["ASHOK KUMAR SEN Chartered Accountant", "Dashboard Individual", "Individual", {"lines": ["PAN", "ABCPD1234E", "Password", "Continue"]}]
+      "examples": [
+        "ASHOK KUMAR SEN Individual",
+        "SEN TRADING CO Firm",
+        {
+          "lines": [
+            "Dashboard",
+            "ASHOK KUMAR SEN Individual",
+            "e-File"
+          ]
+        }
+      ],
+      "counter_examples": [
+        "ASHOK KUMAR SEN Chartered Accountant",
+        "Dashboard Individual",
+        "Individual",
+        {
+          "lines": [
+            "PAN",
+            "ABCPD1234E",
+            "Password",
+            "Continue"
+          ]
+        }
+      ]
     },
-
     {
       "name": "itr_wrong_password",
       "outcome": "wrong_password",
-      "portals": ["Income Tax"],
+      "portals": [
+        "Income Tax",
+        "ITR",
+        "eportal"
+      ],
       "unconfirmed": true,
-      "patterns": ["\\b(?:invalid|incorrect|wrong) password\\b", "\\bpassword (?:is )?(?:invalid|incorrect|wrong)\\b", "\\bplease enter (?:a )?valid password\\b"],
+      "patterns": [
+        "\\b(?:invalid|incorrect|wrong) password\\b",
+        "\\bpassword (?:entered )?(?:is )?(?:invalid|incorrect|wrong)\\b",
+        "\\bplease enter (?:a )?valid password\\b",
+        "\\b(?:invalid|incorrect) (?:user ?(?:id|name) (?:or|and) )?password\\b",
+        "\\b(?:user ?(?:id|name) (?:or|and) )?password (?:entered )?(?:is )?(?:invalid|incorrect|wrong)\\b",
+        "\\b(?:invalid|incorrect) credentials\\b",
+        "\\bthe password (?:you entered )?(?:is )?(?:incorrect|invalid)\\b",
+        "\\b(?:enter|provide) (?:a )?valid password\\b"
+      ],
       "note": "The message on the password page after a wrong password. Unconfirmed: ask staff to run tools/vsdc_uia_probe.py on ONE real wrong-password attempt (never repeat it to a lock-out).",
-      "examples": ["Invalid Password. You have 4 attempts left.", "Incorrect password", "Password is incorrect", "Please enter a valid password"],
-      "counter_examples": ["Password", "Forgot Password?", "Enter your password", "Secure Access Message"]
+      "examples": [
+        "Invalid Password. You have 4 attempts left.",
+        "Incorrect password",
+        "Password is incorrect",
+        "Please enter a valid password",
+        "Invalid User ID or Password",
+        "Invalid credentials",
+        "The password you entered is incorrect"
+      ],
+      "counter_examples": [
+        "Password",
+        "Forgot Password?",
+        "Enter your password",
+        "Secure Access Message"
+      ]
     },
     {
       "name": "itr_locked",
       "outcome": "locked",
-      "portals": ["Income Tax"],
+      "portals": [
+        "Income Tax"
+      ],
       "unconfirmed": true,
-      "patterns": ["\\baccount (?:has been |is )?(?:locked|blocked)\\b", "\\bmaximum (?:number of )?(?:login )?attempts\\b", "\\btoo many (?:failed |invalid |incorrect )?(?:login )?attempts\\b", "\\byour account is (?:temporarily )?(?:locked|blocked|disabled)\\b"],
+      "patterns": [
+        "\\baccount (?:has been |is )?(?:locked|blocked)\\b",
+        "\\bmaximum (?:number of )?(?:login )?attempts\\b",
+        "\\btoo many (?:failed |invalid |incorrect )?(?:login )?attempts\\b",
+        "\\byour account is (?:temporarily )?(?:locked|blocked|disabled)\\b"
+      ],
       "note": "The lock-out message. Unconfirmed, and it must never be produced on purpose on a real account: the wording will come from a taxpayer who was locked out by accident, if ever.",
-      "examples": ["Your account has been locked due to multiple invalid attempts.", "Your account is locked.", "You have exceeded the maximum number of login attempts", "Too many failed attempts"],
-      "counter_examples": ["Invalid Password. You have 4 attempts left.", "Invalid Password. Your account will be locked after 3 more attempts.", "Account Settings", "Unlock your account by Forgot Password", "Password"]
+      "examples": [
+        "Your account has been locked due to multiple invalid attempts.",
+        "Your account is locked.",
+        "You have exceeded the maximum number of login attempts",
+        "Too many failed attempts"
+      ],
+      "counter_examples": [
+        "Invalid Password. You have 4 attempts left.",
+        "Invalid Password. Your account will be locked after 3 more attempts.",
+        "Account Settings",
+        "Unlock your account by Forgot Password",
+        "Password"
+      ]
     },
-
     {
       "name": "itr_otp_or_secure_access",
       "outcome": "neutral",
-      "portals": ["Income Tax"],
+      "portals": [
+        "Income Tax"
+      ],
       "unconfirmed": true,
-      "patterns": ["^(?:please )?enter (?:the )?(?:\\d+[- ]digit )?otp\\b", "\\botp (?:has been |is )?sent\\b", "\\bsecure access message\\b", "\\bvalidate (?:your )?(?:secure access|otp)\\b"],
+      "patterns": [
+        "^(?:please )?enter (?:the )?(?:\\d+[- ]digit )?otp\\b",
+        "\\botp (?:has been |is )?sent\\b",
+        "\\bsecure access message\\b",
+        "\\bvalidate (?:your )?(?:secure access|otp)\\b"
+      ],
       "note": "Steps between the password and the dashboard that say nothing about the password: an OTP page, the secure access message page. The attempt goes on waiting.",
-      "examples": ["Enter 6 digit OTP", "OTP has been sent to your registered mobile", "Secure Access Message", "Please enter the OTP"],
-      "counter_examples": ["Invalid Password", "Login with OTP", "Password", "ASHOK KUMAR SEN Individual"]
+      "examples": [
+        "Enter 6 digit OTP",
+        "OTP has been sent to your registered mobile",
+        "Secure Access Message",
+        "Please enter the OTP"
+      ],
+      "counter_examples": [
+        "Invalid Password",
+        "Login with OTP",
+        "Password",
+        "ASHOK KUMAR SEN Individual"
+      ]
     },
     {
       "name": "itr_everify_steps",
       "outcome": "neutral",
-      "portals": ["Income Tax"],
+      "portals": [
+        "Income Tax"
+      ],
       "unconfirmed": true,
-      "urls": ["e-?verif"],
+      "urls": [
+        "e-?verif"
+      ],
       "note": "A portal address inside an e-verification flow. Address only: the menu item 'e-Verify' is in the header of every logged-in page, so the words alone prove nothing.",
-      "examples": [{"url": "https://example.test/#/e-verify/start", "lines": ["e-Verify"]}, {"url": "https://example.test/#/everify", "lines": ["Steps"]}],
-      "counter_examples": ["e-Verify", {"url": "https://example.test/#/login/password", "lines": ["e-Verify"]}]
+      "examples": [
+        {
+          "url": "https://example.test/#/e-verify/start",
+          "lines": [
+            "e-Verify"
+          ]
+        },
+        {
+          "url": "https://example.test/#/everify",
+          "lines": [
+            "Steps"
+          ]
+        }
+      ],
+      "counter_examples": [
+        "e-Verify",
+        {
+          "url": "https://example.test/#/login/password",
+          "lines": [
+            "e-Verify"
+          ]
+        }
+      ]
     },
-
     {
       "name": "itr_forgot_or_reset_page",
       "outcome": "no_conclusion",
-      "portals": ["Income Tax"],
+      "portals": [
+        "Income Tax"
+      ],
       "unconfirmed": true,
-      "urls": ["#/(?:login/)?(?:forgot|reset)", "forgot-?password", "reset-?password"],
+      "urls": [
+        "#/(?:login/)?(?:forgot|reset)",
+        "forgot-?password",
+        "reset-?password"
+      ],
       "note": "The forgot / reset password pages, by address only: the password page itself carries a 'Forgot Password?' link, so those words alone prove nothing.",
-      "examples": [{"url": "https://example.test/#/forgot-password", "lines": ["Anything"]}, {"url": "https://example.test/#/login/reset", "lines": ["Anything"]}],
-      "counter_examples": ["Forgot Password?", {"url": "https://example.test/#/login/password", "lines": ["Forgot Password?"]}]
+      "examples": [
+        {
+          "url": "https://example.test/#/forgot-password",
+          "lines": [
+            "Anything"
+          ]
+        },
+        {
+          "url": "https://example.test/#/login/reset",
+          "lines": [
+            "Anything"
+          ]
+        }
+      ],
+      "counter_examples": [
+        "Forgot Password?",
+        {
+          "url": "https://example.test/#/login/password",
+          "lines": [
+            "Forgot Password?"
+          ]
+        }
+      ]
     },
     {
       "name": "itr_reset_heading",
       "outcome": "no_conclusion",
-      "portals": ["Income Tax"],
+      "portals": [
+        "Income Tax"
+      ],
       "unconfirmed": true,
-      "patterns": ["^(?:Reset|Forgot) (?:your )?Password$"],
+      "patterns": [
+        "^(?:Reset|Forgot) (?:your )?Password$"
+      ],
       "note": "A page whose heading is exactly this; the password page's link has a '?' after it.",
-      "examples": ["Reset Password", "Forgot your Password"],
-      "counter_examples": ["Forgot Password?", "Password", "Reset Password link sent"]
+      "examples": [
+        "Reset Password",
+        "Forgot your Password"
+      ],
+      "counter_examples": [
+        "Forgot Password?",
+        "Password",
+        "Reset Password link sent"
+      ]
     },
-
     {
       "name": "gst_wrong_password",
       "outcome": "wrong_password",
-      "portals": ["GST"],
+      "portals": [
+        "GST"
+      ],
       "unconfirmed": true,
-      "patterns": ["\\bInvalid Username or Password\\b", "\\binvalid username or password\\b", "\\buser(?:name)? or password (?:is )?(?:invalid|incorrect|wrong)\\b", "\\bplease enter (?:a )?valid (?:username|password)\\b"],
+      "patterns": [
+        "\\bInvalid Username or Password\\b",
+        "\\binvalid username or password\\b",
+        "\\buser(?:name)? or password (?:is )?(?:invalid|incorrect|wrong)\\b",
+        "\\bplease enter (?:a )?valid (?:username|password)\\b"
+      ],
       "note": "The GST portal error after a wrong username or password attempt. Unconfirmed: verify against a real wrong-password UIA probe dump.",
-      "examples": ["Invalid Username or Password", "invalid username or password", "Please enter a valid password"],
-      "counter_examples": ["Username", "Password", "Forgot Password?", "Enter OTP", "Captcha is invalid"]
+      "examples": [
+        "Invalid Username or Password",
+        "invalid username or password",
+        "Please enter a valid password"
+      ],
+      "counter_examples": [
+        "Username",
+        "Password",
+        "Forgot Password?",
+        "Enter OTP",
+        "Captcha is invalid"
+      ]
     },
-
     {
       "name": "gst_logged_in",
       "outcome": "worked",
-      "portals": ["GST"],
+      "portals": [
+        "GST"
+      ],
       "unconfirmed": true,
-      "patterns": ["\\bFile Returns\\b", "\\bView My Ledger\\b"],
+      "patterns": [
+        "\\bFile Returns\\b",
+        "\\bView My Ledger\\b"
+      ],
       "note": "GST portal dashboard elements visible only when logged in. Unconfirmed: verify with a real logged-in UIA probe.",
-      "examples": ["File Returns", "View My Ledger"],
-      "counter_examples": ["Login", "Username", "Password", "Invalid Username or Password", "Enter OTP"]
+      "examples": [
+        "File Returns",
+        "View My Ledger"
+      ],
+      "counter_examples": [
+        "Login",
+        "Username",
+        "Password",
+        "Invalid Username or Password",
+        "Enter OTP"
+      ]
     },
-
     {
       "name": "gst_locked",
       "outcome": "locked",
-      "portals": ["GST"],
+      "portals": [
+        "GST"
+      ],
       "unconfirmed": true,
-      "patterns": ["\\baccount (?:has been |is )?(?:locked|blocked|suspended)\\b", "\\btoo many (?:failed|invalid|incorrect)? ?(?:login )?attempts\\b", "\\bmaximum (?:(?:number of )?(?:login )?)?attempts (?:exceeded|reached)\\b"],
+      "patterns": [
+        "\\baccount (?:has been |is )?(?:locked|blocked|suspended)\\b",
+        "\\btoo many (?:failed|invalid|incorrect)? ?(?:login )?attempts\\b",
+        "\\bmaximum (?:(?:number of )?(?:login )?)?attempts (?:exceeded|reached)\\b"
+      ],
       "note": "GST portal lockout message. Unconfirmed: must never be reproduced intentionally.",
-      "examples": ["Your account has been locked.", "Too many failed login attempts", "Maximum attempts exceeded"],
-      "counter_examples": ["Invalid Username or Password", "Enter OTP", "File Returns", "Account Settings"]
+      "examples": [
+        "Your account has been locked.",
+        "Too many failed login attempts",
+        "Maximum attempts exceeded"
+      ],
+      "counter_examples": [
+        "Invalid Username or Password",
+        "Enter OTP",
+        "File Returns",
+        "Account Settings"
+      ]
     },
-
     {
       "name": "traces_wrong_password",
       "outcome": "wrong_password",
-      "portals": ["TRACES"],
+      "portals": [
+        "TRACES"
+      ],
       "unconfirmed": true,
-      "patterns": ["\\bUser ID or Password is incorrect\\b", "\\binvalid user(?:name)? (?:or|and) password\\b", "\\bincorrect (?:username|password)\\b"],
+      "patterns": [
+        "\\bUser ID or Password is incorrect\\b",
+        "\\binvalid user(?:name)? (?:or|and) password\\b",
+        "\\bincorrect (?:username|password)\\b"
+      ],
       "note": "TRACES portal error after a wrong username or password attempt. Unconfirmed: verify against a real wrong-password UIA probe dump.",
-      "examples": ["User ID or Password is incorrect", "Incorrect password", "invalid username and password"],
-      "counter_examples": ["User ID", "Password", "Forgot Password?", "Enter OTP", "Captcha", "Form 26AS"]
+      "examples": [
+        "User ID or Password is incorrect",
+        "Incorrect password",
+        "invalid username and password"
+      ],
+      "counter_examples": [
+        "User ID",
+        "Password",
+        "Forgot Password?",
+        "Enter OTP",
+        "Captcha",
+        "Form 26AS"
+      ]
     },
-
     {
       "name": "traces_logged_in",
       "outcome": "worked",
-      "portals": ["TRACES"],
+      "portals": [
+        "TRACES"
+      ],
       "unconfirmed": true,
-      "patterns": ["\\bForm 26AS\\b", "\\bTDS/TCS Credit\\b", "\\bDownload TDS Certificate\\b"],
+      "patterns": [
+        "\\bForm 26AS\\b",
+        "\\bTDS/TCS Credit\\b",
+        "\\bDownload TDS Certificate\\b"
+      ],
       "note": "TRACES dashboard elements visible only when logged in. Unconfirmed: verify with a real logged-in UIA probe.",
-      "examples": ["Form 26AS", "TDS/TCS Credit", "Download TDS Certificate"],
-      "counter_examples": ["Login", "User ID", "Password", "Invalid Username or Password", "Enter OTP"]
+      "examples": [
+        "Form 26AS",
+        "TDS/TCS Credit",
+        "Download TDS Certificate"
+      ],
+      "counter_examples": [
+        "Login",
+        "User ID",
+        "Password",
+        "Invalid Username or Password",
+        "Enter OTP"
+      ]
     },
-
     {
       "name": "traces_locked",
       "outcome": "locked",
-      "portals": ["TRACES"],
+      "portals": [
+        "TRACES"
+      ],
       "unconfirmed": true,
-      "patterns": ["\\baccount (?:has been |is )?(?:locked|blocked|suspended)\\b", "\\btoo many (?:failed|invalid|incorrect)? ?(?:login )?attempts\\b", "\\bmaximum (?:(?:number of )?(?:login )?)?attempts (?:exceeded|reached)\\b"],
+      "patterns": [
+        "\\baccount (?:has been |is )?(?:locked|blocked|suspended)\\b",
+        "\\btoo many (?:failed|invalid|incorrect)? ?(?:login )?attempts\\b",
+        "\\bmaximum (?:(?:number of )?(?:login )?)?attempts (?:exceeded|reached)\\b"
+      ],
       "note": "TRACES portal lockout message. Unconfirmed: must never be reproduced intentionally on a real account.",
-      "examples": ["Your account has been locked.", "Too many failed login attempts", "Maximum attempts exceeded"],
-      "counter_examples": ["Invalid Username or Password", "Enter OTP", "Form 26AS", "Account Settings"]
+      "examples": [
+        "Your account has been locked.",
+        "Too many failed login attempts",
+        "Maximum attempts exceeded"
+      ],
+      "counter_examples": [
+        "Invalid Username or Password",
+        "Enter OTP",
+        "Form 26AS",
+        "Account Settings"
+      ]
     }
   ]
 }

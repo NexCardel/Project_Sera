@@ -632,6 +632,9 @@ class SeraApp:
         self.bridge.scc_row_worked_received.connect(self._handle_scc_row_worked)
         self.bridge.scc_card_closed_received.connect(self._handle_scc_card_closed)
         self.bridge.scc_row_none_received.connect(self._handle_scc_row_none)
+        self.bridge.sck_save_password_received.connect(self._handle_sck_save_password)
+        self.bridge.sck_widget_closed_received.connect(self._handle_sck_widget_closed)
+        self.bridge.sck_edit_requested.connect(self._handle_sck_edit_requested)
         self.bridge.extension_settings_updated_received.connect(self._handle_extension_settings_updated)
         self.bridge.settings_provider = self._get_extension_settings_payload
         self.bridge.sca_password_requested.connect(self._handle_sca_password_request)
@@ -1277,8 +1280,17 @@ class SeraApp:
             router.answer_demotion(info.get("token"), box.clickedButton() is lower)
 
     def _make_scc_handlers(self):
-        """SCC-U's handlers (once, when its host is created)."""
-        return self._ensure_scc()
+        """SCC-U's handlers (once, when its host is created). SCK's watcher shares the same host and
+        runs even when Detect login automatically is Off; SCC-U's own attempt/outcome readers are
+        only registered when that switch is On."""
+        handlers = []
+        try:
+            if str(self.db.get_setting("scc_detect_mode", "off")).strip().lower() == "on":
+                handlers.extend(self._ensure_scc())
+        except Exception:
+            pass
+        handlers.append(self._ensure_sck())
+        return handlers
 
     def _open_scc_manual(self, pan: str, client_id, on_error=None) -> bool:
         """Client Detail's MECP on an unverified Income Tax client (core/scc/manual.py): the card, with
@@ -1386,7 +1398,14 @@ class SeraApp:
                         "verified": "Marked verified"}.get(outcome, "Permanent password saved")
                 self.tray_icon.showMessage("Password Verified via SCC", f"{what} for {client_name} ({pan}).",
                                            QSystemTrayIcon.Information, 5000)
+        except Exception as e:
+            print(f"[main._after_scc_save toast error] {type(e).__name__}")
+        self._refresh_client_views(client_id)
 
+    def _refresh_client_views(self, client_id: int):
+        """Client Detail, the main grid, search results and the extension settings, after a vault
+        write from either SCC or SCK. Safe to call from the Qt thread only."""
+        try:
             if hasattr(self, "client_detail_win") and self.client_detail_win and self.client_detail_win.isVisible():
                 cur_c = getattr(self.client_detail_win, "client", None)
                 if cur_c and cur_c.get("id") == client_id:
@@ -1398,7 +1417,214 @@ class SeraApp:
                 self.search_win._on_search_changed()
             self._sync_extension_settings()
         except Exception as e:
-            print(f"[main._after_scc_save error] {type(e).__name__}")
+            print(f"[main._refresh_client_views error] {type(e).__name__}")
+
+    # ── SCK: Sera Credential Keeper ──────────────────────────────────────────────
+
+    def _sck_enabled(self) -> bool:
+        """SCK has its own switch (sck_enabled, on unless turned off) and does not need SCC-U's
+        Detect login automatically."""
+        try:
+            return str(self.db.get_setting("sck_enabled", "1")).strip().lower() in ("1", "true", "on", "yes")
+        except Exception:
+            return False
+
+    def _ensure_sck(self):
+        """Builds SCK's one watcher (core/rotation/watcher.py): any registered service, any client,
+        including verified ones. Its host is SCC-U's, so the watcher works when SCC-U's own rules
+        are off."""
+        existing = getattr(self, "_sck_watcher", None)
+        if existing is not None:
+            return existing
+        from core.rotation import SckWatcher
+        watcher = SckWatcher(
+            services=self.db.get_services,
+            resolve_client=self._sck_resolve_client,
+            on_failure=self._sck_show,
+            on_clear=self._sck_hide,
+        )
+        self._sck_watcher = watcher
+        return watcher
+
+    def _sck_show(self, failure):
+        """SCC-U's thread: ask every browser to show the new-password card for this service.
+        `automation.show_sck_widget` marshals the send onto the Qt thread."""
+        import automation
+        automation.show_sck_widget(failure.service, failure.client_id, failure.client_name,
+                                   failure.portal)
+
+    def _sck_hide(self, failure):
+        """SCC-U's thread: the service's dashboard page was reached, so the card has done its job."""
+        import automation
+        automation.hide_sck_widget(failure.service_id)
+
+    def _sck_resolve_client(self, service: dict, obs):
+        """(client_id | None, display name) for a failed login: the PAN/GSTIN SGT read on the page,
+        then the username typed on the login page through the service's user-ID column, then the
+        client SCA is working for on this portal. Read-only."""
+        from core.rotation.watcher import profile_value
+        from core.scc import db_client_names
+
+        pan = profile_value(obs, "pan")
+        gstin = profile_value(obs, "gstin")
+        client = None
+        if pan:
+            client = self.db.get_client_by_pan(pan)
+        if client is None and len(gstin) == 15:
+            client = self.db.get_client_by_pan(gstin[2:12])    # the PAN inside the GSTIN
+
+        if client is None:
+            uid = profile_value(obs, "username") or profile_value(obs, "userid")
+            col = (service or {}).get("userid_column_id")
+            if uid and col:
+                try:
+                    ids = self.db.find_client_ids_by_column_value(col, uid)
+                except Exception:
+                    ids = []
+                if len(ids) == 1:
+                    client = self.db.get_client(ids[0])
+
+        if client is None:
+            watcher = getattr(self, "clipboard_watcher", None)
+            if watcher is not None:
+                try:
+                    cid = watcher.client_for_portal(service, str(getattr(obs, "portal", "") or ""))
+                except Exception:
+                    cid = None
+                if cid:
+                    client = self.db.get_client(cid)
+
+        if not client or client.get("id") is None:
+            return None, ""
+        cid = int(client["id"])
+        try:
+            names = db_client_names(self.db)(cid)
+        except Exception:
+            names = []
+        return cid, (names[0] if names else "")
+
+    def _handle_sck_save_password(self, msg: dict):
+        """SCK: the new password staff typed into the card. Runs on the Qt thread and never writes
+        the message anywhere - no print, no audit detail, no log."""
+        import automation
+        from core.rotation import save_verified_for_rotation
+
+        service_id = msg.get("service_id")
+        password = msg.get("password") or ""
+        portal = str(msg.get("portal") or "").strip()
+        service = {}
+        try:
+            service = self.db.get_service(service_id) or {}
+        except Exception:
+            service = {}
+        portal = portal or str(service.get("name") or "")
+
+        client_id = msg.get("client_id")
+        if not client_id:
+            arm_id = str(msg.get("arm_id") or "")
+            watcher = getattr(self, "clipboard_watcher", None)
+            if watcher is not None and arm_id:
+                try:
+                    client_id = watcher.client_for_arm(arm_id)
+                except Exception:
+                    client_id = None
+
+        if not client_id:
+            automation.sck_save_result(service_id, False,
+                                       "Sera could not tell which client this login belongs to. "
+                                       "Copy the client's ID first, then try again.")
+            return
+
+        try:
+            result = save_verified_for_rotation(
+                db=self.db, password=password, pan="", client_id=int(client_id),
+                portal=portal, actor=getattr(self, "actor", "Staff"),
+                service_id=service_id, method="SCK-Widget")
+        except Exception as exc:
+            print(f"[main._handle_sck_save_password error] {type(exc).__name__}")
+            automation.sck_save_result(service_id, False, "The password could not be saved. Try again.")
+            return
+        finally:
+            password = ""       # noqa: F841 - drop our copy as soon as the write is done
+
+        if result is None:
+            automation.sck_save_result(service_id, False,
+                                       "This service has no password column in the vault. "
+                                       "Set one in Services.")
+            return
+
+        what = {"saved": "New password saved", "replaced": "Saved password replaced",
+                "verified": "Password already saved"}.get(result.outcome, "Password saved")
+        automation.sck_save_result(service_id, True, what)
+        automation.hide_sck_widget(service_id)
+        watcher = getattr(self, "_sck_watcher", None)
+        if watcher is not None:
+            watcher.mark_resolved(service_id, result.client_id)
+        self._after_sck_save(result)
+
+    def _after_sck_save(self, result):
+        """Qt thread: toast + the same refresh SCC's save does. `result` is a RotationSave."""
+        try:
+            if hasattr(self, "tray_icon") and self.tray_icon and self.tray_icon.isVisible():
+                what = {"saved": "New password saved", "replaced": "Saved password replaced",
+                        "verified": "Password already saved"}.get(result.outcome, "Password saved")
+                self.tray_icon.showMessage("Sera Credential Keeper",
+                                           f"{what} for {result.client_name or 'the client'} "
+                                           f"({result.portal}).",
+                                           QSystemTrayIcon.Information, 5000)
+        except Exception as e:
+            print(f"[main._after_sck_save toast error] {type(e).__name__}")
+        self._refresh_client_views(result.client_id)
+
+    def _handle_sck_widget_closed(self, msg: dict):
+        """The browser card closed itself: staff pressed x ("dismissed") or the service's dashboard
+        page was reached ("dashboard"). Either way the next failure on that service may fire."""
+        import automation
+        service_id = msg.get("service_id")
+        automation.hide_sck_widget(service_id)
+        watcher = getattr(self, "_sck_watcher", None)
+        if watcher is not None:
+            watcher.mark_resolved(service_id)
+
+    def _handle_sck_edit_requested(self, msg: dict):
+        """Staff pressed the ✎ edit button on SMTI / MECP / SCA widget: open the SCK card
+        for this service and client so staff can enter a new password without needing a failed login."""
+        import automation
+        from core.scc import db_client_names
+
+        service_id = msg.get("service_id")
+        client_id = msg.get("client_id")
+        portal = str(msg.get("portal") or "").strip()
+        service = {}
+        try:
+            service = self.db.get_service(service_id) or {}
+        except Exception:
+            service = {}
+        portal = portal or str(service.get("name") or "")
+
+        if not client_id:
+            watcher = getattr(self, "clipboard_watcher", None)
+            if watcher is not None:
+                try:
+                    client_id = watcher.client_for_portal(service, portal)
+                except Exception:
+                    client_id = None
+
+        client_name = ""
+        if client_id:
+            try:
+                names = db_client_names(self.db)(client_id)
+                client_name = names[0] if names else ""
+            except Exception:
+                client_name = ""
+            if not client_name:
+                try:
+                    c = self.db.get_client(client_id) or {}
+                    client_name = c.get("business_name") or c.get("name") or ""
+                except Exception:
+                    client_name = ""
+
+        automation.show_sck_widget(service, client_id, client_name, portal)
 
     def _run_pending_rejoin(self) -> None:
         """P2-8: finish or run a requested "Rejoin office", then offer the salvage import.
@@ -1887,10 +2113,13 @@ class SeraApp:
             vsdc, vsdc_x, vsdc247 = read_engine_flags(self.db.get_setting)
             sgt = read_sgt_mode(self.db.get_setting)
             vsdc247_verify = read_verifier_enabled(self.db.get_setting)
+            # SCC-U's host is also SCK's host: it is attached when either SCC-U's own rules are on
+            # or SCK is on (SCK is on by default and independent of Detect login automatically).
+            scc_or_sck = (read_scc_detect_mode(self.db.get_setting) == "on" or self._sck_enabled())
             worker.router.apply_engine_settings(vsdc, vsdc_x, vsdc247, sgt=sgt,
                                                 sgt_record=read_sgt_record_pages(self.db.get_setting),
                                                 sgt_i=False,   # SGT-I unhooked: never attached, whatever the sgt_i_mode setting says
-                                                scc_detect=read_scc_detect_mode(self.db.get_setting) == "on",
+                                                scc_detect=scc_or_sck,
                                                 sdis_record=read_sdis_record(self.db.get_setting),
                                                 vsdc247_verify=vsdc247_verify)
             if (vsdc or vsdc_x or vsdc247 or vsdc247_verify or sgt != "off") and not worker.isRunning():

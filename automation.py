@@ -275,6 +275,52 @@ def update_scc_card(attempt_id: str, failed: list, next_label, message: str, sto
     return bridge.broadcast(msg) > 0
 
 
+# ── SCK: the persistent new-password card ─────────────────────────────────────
+
+def show_sck_widget(service: dict, client_id, client_name: str, portal: str = "") -> bool:
+    """SCK: a login the portal refused. Ask for the NEW password for `client_id` in the portal's
+    own tab. Carries no password and no countdown: the card stays until the desktop clears it
+    (saved), the extension reaches the service's dashboard page, or staff press x. Broadcast to
+    every connected browser - each one shows it only in a tab on the service's login site."""
+    from ui import ws_bridge
+    if not service or service.get("id") is None:
+        return False
+    bridge = ws_bridge.get_active_bridge()
+    if not bridge:
+        return False
+    payload = {
+        "type": "sck_failed_login",
+        "service_id": service.get("id"),
+        "portal": str(portal or service.get("name") or ""),
+        "client_id": client_id,
+        "client_name": str(client_name or ""),
+        "login_page_link": service.get("login_page_link", ""),
+        "dashboard_page_link": service.get("dashboard_page_link", ""),
+    }
+    return bridge.broadcast(payload) > 0
+
+
+def hide_sck_widget(service_id) -> bool:
+    """SCK: take the card for this service down in every browser (saved, dismissed, or the
+    service's dashboard page was reached)."""
+    from ui import ws_bridge
+    bridge = ws_bridge.get_active_bridge()
+    if not bridge or service_id is None:
+        return False
+    return bridge.broadcast({"type": "sck_clear", "service_id": service_id}) > 0
+
+
+def sck_save_result(service_id, ok: bool, message: str = "") -> bool:
+    """SCK: tells the card whether the new password was saved. `message` is staff wording only -
+    never a password."""
+    from ui import ws_bridge
+    bridge = ws_bridge.get_active_bridge()
+    if not bridge or service_id is None:
+        return False
+    return bridge.broadcast({"type": "sck_save_result", "service_id": service_id,
+                             "ok": bool(ok), "message": str(message or "")}) > 0
+
+
 def _send_to_extension(service: dict, user_id: str, password: str, client_id: int, on_error=None, mode="autofill"):
     """Sends the autofill/SMTI/MECP payload to the extension via the WebSocket bridge, with retry & auto-launch fallback."""
     payload = _extension_payload(service, user_id, password, client_id, mode)
