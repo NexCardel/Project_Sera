@@ -1616,12 +1616,17 @@ class SeraApp:
         if msg.get("ok"):
             bar.deliver_outcome("fill_ok")
             return
-        reason = str(msg.get("reason") or "").strip()
-        message = {
-            "no_tab": "Open the portal's login page in the browser, then press Fill & Test.",
-            "no_dom": "The portal page could not be scripted. Reload it and try again.",
-            "frame": "The password field is inside a frame. Reload the login page and try again.",
-        }.get(reason, "Could not find the password field on the portal page.")
+        reason = str(msg.get("reason") or "").strip().lower()
+        if reason == "no_tab":
+            message = "Open the portal's login page in the browser, then press Fill & Test."
+        elif reason == "no_dom":
+            message = ("The Sera extension is out of date. Reload it in the browser, then try again.")
+        elif "password field" in reason or reason in ("no_field", "frame"):
+            message = ("Could not find the password box on the portal page. Open the portal's "
+                       "password step (Income Tax: enter the PAN, press Continue), then press "
+                       "Fill & Test again.")
+        else:
+            message = "Could not fill the password. Reload the login page and try again."
         bar.deliver_outcome({"kind": "fill_failed", "message": message})
 
     def _sck_resolve_client(self, service: dict, obs):

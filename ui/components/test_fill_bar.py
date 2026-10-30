@@ -112,7 +112,7 @@ _WARN = "#FF9800"
 _BAR_W = 520
 _TTL_MS = 180_000       # 3 min idle TTL
 _POLL_MS = 500          # outcome queue poll interval
-_FILL_ACK_MS = 6000     # wait this long for the extension's sck_fill_result
+_FILL_ACK_MS = 12000    # wait this long for the extension's sck_fill_result (it polls the page)
 _ICON_SZ = 16           # icon point size for qtawesome
 
 # ── Status messages ──────────────────────────────────────────────────────────

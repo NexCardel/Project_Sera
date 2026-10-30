@@ -2,6 +2,7 @@
 "use strict";
 const assert = require("assert");
 const path = require("path");
+const vm = require("vm");
 const SCA = require(path.join(__dirname, "..", "..", "sera_extension", "sca", "sca_coordinator.js"));
 
 const tests = [];
@@ -296,6 +297,81 @@ test("an automatic request is never marked confirmed", async () => {
   const c = await armed(env);
   await c.onCandidate({ candidate: "ABCPD1234E" }, portalTab());
   assert.strictEqual(env.native.find(m => m.type === "SCA_PASSWORD_REQUEST").confirmed, false);
+});
+
+// ------------------------------------------------------------ the page fill (SCK runs this too)
+function fakePage(opts) {
+  opts = opts || {};
+  const field = {
+    tagName: "INPUT", type: opts.type || "password", id: opts.id || "", name: opts.name || "",
+    value: "", disabled: false, readOnly: false, events: [], focused: false,
+    getAttribute(k) { return k === "autocomplete" ? (opts.autocomplete || null) : null; },
+    getBoundingClientRect() { return { width: 200, height: 28 }; },
+    focus() { this.focused = true; },
+    dispatchEvent(e) { this.events.push(e.type); return true; },
+  };
+  const proto = {};
+  Object.defineProperty(proto, "value", { configurable: true, set(v) { field.value = v; } });
+  const document = {
+    querySelectorAll(sel) { return sel === "input[type='password']" && field.type === "password" ? [field] : []; },
+    querySelector() { return null; },
+  };
+  const window = {
+    HTMLInputElement: { prototype: proto }, HTMLTextAreaElement: { prototype: proto },
+    getComputedStyle: () => ({ display: "block", visibility: "visible" }),
+  };
+  const ctx = vm.createContext({
+    window, document,
+    Event: class { constructor(t) { this.type = t; } },
+    InputEvent: class { constructor(t, o) { this.type = t; Object.assign(this, o || {}); } },
+    setTimeout, Date, Object,
+  });
+  const fill = vm.runInContext("(" + SCA.fillPasswordInPage.toString() + ")", ctx);
+  return { field, window, fill };
+}
+
+test("SCK's fill path uses sera_dom.findField, so a revealed password box is filled", async () => {
+  const page = fakePage({ type: "text", id: "loginPassword" });   // portal eye switched it to text
+  let asked = 0;
+  page.window.__seraDom = { findField: (doc, kind) => { asked++; assert.strictEqual(kind, "pass"); return page.field; } };
+
+  const res = await page.fill("pw-for-test", "", "sck:1:1", 50);
+
+  assert.strictEqual(res.filled, true);
+  assert.strictEqual(asked, 1);
+  assert.strictEqual(page.field.value, "pw-for-test");
+  assert.deepStrictEqual(page.field.events, ["input", "change"]);
+});
+
+test("without sera_dom the SCA rules still fill a plain password input", async () => {
+  const page = fakePage({ type: "password" });
+
+  const res = await page.fill("pw-for-test", "", "sck:1:2", 50);
+
+  assert.strictEqual(res.filled, true);
+  assert.strictEqual(page.field.value, "pw-for-test");
+});
+
+test("the same attempt never fills the same page twice", async () => {
+  const page = fakePage({ type: "password" });
+
+  await page.fill("one", "", "sck:1:3", 50);
+  const again = await page.fill("two", "", "sck:1:3", 50);
+
+  assert.strictEqual(again.filled, false);
+  assert.strictEqual(again.reason, "already filled on this page for this copy");
+  assert.strictEqual(page.field.value, "one");
+});
+
+test("no password box is reported as a failed fill after the wait", async () => {
+  const page = fakePage({ type: "text", id: "searchBox" });
+  const started = Date.now();
+
+  const res = await page.fill("pw", "", "sck:1:4", 120);
+
+  assert.strictEqual(res.filled, false);
+  assert.strictEqual(res.reason, "no visible password field");
+  assert.ok(Date.now() - started >= 100, "it waited for the box instead of failing at once");
 });
 
 (async () => {

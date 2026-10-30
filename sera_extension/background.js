@@ -1970,52 +1970,26 @@ function handleSckResult(message) {
 }
 
 // ── SCK: fill the portal's password field from the desktop Test & Fill bar ────────────────
-// Runs in the portal page (injectWithDom). Sets the box with the native value setter plus
-// input/change events, so Angular/React controllers see a normal edit. Never navigates and
-// never submits: staff still solve the CAPTCHA and press Login.
-function sckFillInPage(password, passwordSelector) {
-  try { if (window.self !== window.top) return { ok: false, reason: "frame" }; } catch (_) { return { ok: false, reason: "frame" }; }
-  const dom = window.__seraDom;
-  if (!dom) return { ok: false, reason: "no_dom" };
-
-  // Flutter portals (TRACES) draw their form after the HTML shell loads; the real input lives
-  // in a hidden editing host.
-  function flutterInput() {
-    try {
-      const host = document.querySelector("flt-text-editing-host");
-      if (host) { const inp = host.querySelector("input, textarea"); if (inp) return inp; }
-      const pane = document.querySelector("flt-glass-pane");
-      if (pane && pane.shadowRoot) {
-        const inp = pane.shadowRoot.querySelector("flt-text-editing-host input, flt-text-editing-host textarea");
-        if (inp) return inp;
-      }
-    } catch (_) {}
-    return null;
-  }
-
-  let el = null;
-  try { el = dom.findField(document, "pass", passwordSelector || "", [], ""); } catch (_) { el = null; }
-  if (!el) el = flutterInput();
-  if (!el) return { ok: false, reason: "no_field" };
-
-  try { el.focus(); } catch (_) {}
-  try {
-    const proto = el.tagName === "TEXTAREA" ? window.HTMLTextAreaElement && window.HTMLTextAreaElement.prototype
-                                            : window.HTMLInputElement && window.HTMLInputElement.prototype;
-    const desc = proto && Object.getOwnPropertyDescriptor(proto, "value");
-    if (desc && desc.set) desc.set.call(el, password);
-    else el.value = password;
-  } catch (_) {
-    try { el.value = password; } catch (_) { return { ok: false, reason: "no_field" }; }
-  }
-  try {
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
-  } catch (_) {}
-  try {
-    if (typeof el.setSelectionRange === "function") el.setSelectionRange(password.length, password.length);
-  } catch (_) {}
-  return { ok: true, reason: "" };
+// SCK does not have its own field rules: it runs SCA's fillPasswordInPage (sca/sca_coordinator.js)
+// with sera_dom.js injected first, so the portal's box is found and set exactly the way SCA's
+// autofill does it. Never navigates and never submits: staff still solve the CAPTCHA and press
+// Login.
+function _sckRunFill(tabId, password, passwordSelector, armId, waitMs) {
+  const fill = self.SeraSCA && self.SeraSCA.fillPasswordInPage;
+  if (typeof fill !== "function") return Promise.resolve(null);
+  const args = [password, passwordSelector, armId, waitMs];
+  return injectWithDom({ tabId }, fill, args)
+    .then(results => {
+      const hit = (results || []).find(r => r && r.result && r.result.filled);
+      if (hit) return hit.result;
+      // Some portals wrap the form in a frame; try every frame only after the main one failed.
+      return injectWithDom({ tabId, allFrames: true }, fill, args)
+        .then(all => {
+          const f = (all || []).find(r => r && r.result && r.result.filled);
+          return f ? f.result : ((results || [])[0] || {}).result || null;
+        })
+        .catch(() => ((results || [])[0] || {}).result || null);
+    });
 }
 
 function _sckFillReply(serviceId, ok, reason) {
@@ -2055,16 +2029,20 @@ function handleSckFill(message) {
                    matches.find(t => t.id === cardTabId) ||
                    matches[0];
 
-    injectWithDom({ tabId: target.id }, sckFillInPage, [password, message.password_selector || ""])
-      .then(results => {
-        const hit = (results || []).find(r => r && r.result) || null;
-        const res = hit ? hit.result : null;
-        if (res && res.ok) {
+    // A fresh armId per attempt, so staff pressing Fill & Test again is never blocked by SCA's
+    // "already filled on this page" guard; the all-frames retry reuses it, so a frame that was
+    // already filled by this attempt is not filled twice.
+    const armId = "sck:" + sid + ":" + Date.now();
+    _sckRunFill(target.id, password, message.password_selector || "", armId, 3000)
+      .then(res => {
+        if (res && res.filled) {
           _sckFillReply(sid, true, "");
           try { chrome.tabs.update(target.id, { active: true }); } catch (_) {}
           try {
             if (target.windowId !== undefined) chrome.windows.update(target.windowId, { focused: true });
           } catch (_) {}
+        } else if (res === null) {
+          _sckFillReply(sid, false, "no_dom");
         } else {
           _sckFillReply(sid, false, (res && res.reason) || "no_field");
         }
