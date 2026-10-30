@@ -321,6 +321,44 @@ def sck_save_result(service_id, ok: bool, message: str = "") -> bool:
                              "ok": bool(ok), "message": str(message or "")}) > 0
 
 
+def sck_fill(service: dict, password: str, client_id=None, portal: str = "") -> bool:
+    """SCK: ask the browser to put `password` into the service's password field.
+
+    This is the replacement for the old Win32 ``SendInput`` keystroke engine: the extension
+    sets the field in the page's own DOM (native value setter + ``input``/``change`` events), so
+    Angular/React see a normal edit and the browser keeps its focus. The extension never
+    navigates and never submits - staff still solve the CAPTCHA and press Login.
+
+    The password travels over the local WebSocket only (the same path autofill already uses);
+    it is never logged, stored, or included in the audit trail. It goes to **one** browser - the
+    service's own when it names one, otherwise the preferred/Chromium browser - never to every
+    connected browser. Returns whether the message reached a browser.
+    """
+    from ui import ws_bridge
+    if not service or not password:
+        return False
+    bridge = ws_bridge.get_active_bridge()
+    if not bridge:
+        return False
+    payload = {
+        "type": "sck_fill",
+        "service_id": service.get("id"),
+        "client_id": client_id,
+        "portal": str(portal or service.get("name") or ""),
+        "url": service.get("login_page_link", ""),
+        "password": password,
+        "password_selector": (service.get("password_selector") or "").strip(),
+    }
+    browser = str(service.get("browser") or "").strip().lower()
+    if browser:
+        return bridge.send_first(payload, browser=browser)
+    preferred = _default_browser_kind()
+    for kind in dict.fromkeys((preferred, "chrome", "edge")):
+        if kind and bridge.send_first(payload, browser=kind):
+            return True
+    return bridge.send_first(payload)
+
+
 def _send_to_extension(service: dict, user_id: str, password: str, client_id: int, on_error=None, mode="autofill"):
     """Sends the autofill/SMTI/MECP payload to the extension via the WebSocket bridge, with retry & auto-launch fallback."""
     payload = _extension_payload(service, user_id, password, client_id, mode)

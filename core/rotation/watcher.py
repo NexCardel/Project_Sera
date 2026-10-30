@@ -20,8 +20,14 @@ keyed by ``(service, portal)`` instead:
 What it reports
 ---------------
 ``wrong_password`` for a registered service -> ``on_failure(SckFailure)`` once per service until
-the dashboard page is reached, the password is saved (``mark_resolved``) or
-``PENDING_TTL_SEC`` passes. The card is persistent: no countdown, no repeated firing.
+the dashboard page is reached, the portal itself says the login worked, the password is saved
+(``mark_resolved``) or ``PENDING_TTL_SEC`` passes. The card is persistent: no countdown, no
+repeated firing.
+
+While a failure is pending, ``on_outcome(service_id, kind)`` reports a retry rejection
+(``wrong_password`` / ``locked``) and the success transition (``worked``) to the desktop
+Test & Fill bar. A ``worked`` on a dashboard page is reported even with nothing pending, because
+the bar's own idle TTL (restarted by every fill) can outlive the pending failure.
 
 Reads around the login page
 ---------------------------
@@ -113,6 +119,7 @@ class SckFailure:
     url: str
     rule: str
     line: str
+    pan: str = ""                    # the PAN/GSTIN read on the page, when there is one
 
 
 Lookup = Callable[[Dict[str, Any], Any], Tuple[Optional[int], str]]
@@ -127,6 +134,7 @@ class SckWatcher:
                  resolve_client: Optional[Lookup] = None,
                  on_failure: Optional[Callable[[SckFailure], Any]] = None,
                  on_clear: Optional[Callable[[SckFailure], Any]] = None,
+                 on_outcome: Optional[Callable[[int, str], Any]] = None,
                  rules: Optional[Callable[[], RuleSet]] = None,
                  ttl_sec: float = PENDING_TTL_SEC,
                  monotonic: Callable[[], float] = time.monotonic) -> None:
@@ -134,6 +142,7 @@ class SckWatcher:
         self._resolve_client = resolve_client
         self._on_failure = on_failure
         self._on_clear = on_clear
+        self._on_outcome = on_outcome
         self._rules = rules or get_rules
         self._ttl = float(ttl_sec)
         self._now = monotonic
@@ -142,6 +151,15 @@ class SckWatcher:
         # card is per service too (one host element), so a second client on the same service
         # would only replace the first one's card.
         self._pending: Dict[int, Tuple[float, SckFailure]] = {}
+        # (service id, outcome kind) -> monotonic time of the last on_outcome call. The desktop
+        # Test & Fill bar needs to hear about a retry rejection and the dashboard transition
+        # while its attempt is open; the page keeps showing the same line, so it must be throttled.
+        self._last_outcome: Dict[Tuple[int, str], float] = {}
+        # service id -> (kind, line) of the page last read. A rejection line that is still on
+        # screen is not a new rejection: the bar would otherwise call the password it just filled
+        # "rejected" while staff are still solving the CAPTCHA. The line is forgotten as soon as
+        # the page shows something else (a submit reloads the page).
+        self._last_page_outcome: Dict[int, Tuple[str, str]] = {}
 
     # ── Read side (any thread) ───────────────────────────────────────────────────
     def pending(self) -> List[SckFailure]:
@@ -156,6 +174,17 @@ class SckWatcher:
             return
         with self._lock:
             self._pending.pop(sid, None)
+
+    def reset_outcome_throttle(self, service_id: Any) -> None:
+        """A new attempt started for this service (staff pressed Fill & Test). Clear the time
+        throttle of the previous attempt so a genuine new rejection is not delayed - an unchanged
+        page line is still suppressed by the page-line check in _observe()."""
+        sid = _as_int(service_id)
+        if sid is None:
+            return
+        with self._lock:
+            for key in [k for k in self._last_outcome if k[0] == sid]:
+                self._last_outcome.pop(key, None)
 
     # ── Handler (SCC-U's thread) ─────────────────────────────────────────────────
     def observe(self, obs: Any, hwnd: int, ctx: Any = None) -> Optional[str]:
@@ -183,8 +212,10 @@ class SckWatcher:
             cleared = self._clear(sid)
             if cleared is not None:
                 self._send(self._on_clear, cleared)
-                return "cleared"
-            return None
+            # The desktop bar may still be open after its pending failure was cleared or expired,
+            # so the dashboard is also reported as an outcome rather than only through on_clear.
+            self._notify(sid, "worked", throttle_sec=10.0)
+            return "cleared" if cleared is not None else None
 
         login_link = (svc.get("login_page_link") or "").strip()
         if login_link and not on_site(url, login_link):
@@ -198,19 +229,48 @@ class SckWatcher:
             except Exception:
                 pass
 
-        if self._is_pending(sid):
-            return "pending"
-
+        pending = self._is_pending(sid)
         clean = [line for line in (getattr(obs, "lines", ()) or ()) if not _is_captcha_line(line)]
         out = self._rules().classify(clean, url, str(getattr(obs, "portal", "") or ""))
-        if out is None or out.kind != "wrong_password":
+        if out is None:
+            with self._lock:
+                self._last_page_outcome.pop(sid, None)
+            return "pending" if pending else None
+
+        page_key = (out.kind, out.line)
+        with self._lock:
+            same_page = self._last_page_outcome.get(sid) == page_key
+            self._last_page_outcome[sid] = page_key
+
+        if out.kind == "worked":
+            # The portal's own wording says the login succeeded (some portals keep the login
+            # route and swap the form for a welcome page). The failure is resolved and the
+            # desktop bar saves the candidate it filled.
+            cleared = self._clear(sid)
+            if cleared is not None:
+                self._send(self._on_clear, cleared)
+            self._notify(sid, "worked", throttle_sec=10.0)
+            return "cleared" if cleared is not None else None
+
+        if pending:
+            # The card already exists; the bar still needs to know a retry was rejected - but
+            # only when the page actually changed, not while the old error line is still shown.
+            if out.kind in ("wrong_password", "locked") and not same_page:
+                self._notify(sid, out.kind, throttle_sec=5.0)
+            return "pending"
+
+        if out.kind != "wrong_password":
             return None
 
         client_id, client_name = self._identify(svc, obs)
         portal = str(getattr(obs, "portal", "") or svc.get("name") or "").strip()
+        pan = profile_value(obs, "pan")
+        if not pan:
+            gstin = profile_value(obs, "gstin")
+            pan = gstin[2:12] if len(gstin) == 15 else ""
         failure = SckFailure(service=dict(svc), service_id=sid, client_id=client_id,
                             client_name=client_name, portal=portal, hwnd=int(hwnd or 0),
-                            url=url, rule=out.rule, line=out.line)
+                            url=url, rule=out.rule, line=out.line, pan=pan)
         with self._lock:
             self._pending[sid] = (self._now(), failure)
         try:
@@ -237,6 +297,22 @@ class SckWatcher:
         with self._lock:
             hit = self._pending.pop(sid, None)
         return hit[1] if hit else None
+
+    def _notify(self, sid: int, kind: str, throttle_sec: float) -> None:
+        """Send one page outcome to the desktop bar, at most once per `throttle_sec` per kind."""
+        if self._on_outcome is None:
+            return
+        now = self._now()
+        key = (sid, kind)
+        with self._lock:
+            last = self._last_outcome.get(key)
+            if last is not None and now - last < throttle_sec:
+                return
+            self._last_outcome[key] = now
+        try:
+            self._on_outcome(sid, kind)
+        except Exception:
+            pass
 
     def _identify(self, svc: Dict[str, Any], obs: Any) -> Tuple[Optional[int], str]:
         if self._resolve_client is None:

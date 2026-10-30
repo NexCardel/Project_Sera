@@ -442,3 +442,35 @@ def test_sck_edit_request_with_no_client_id(bridge):
     assert received[0]["service_id"] == 5
     assert received[0]["client_id"] is None
     assert received[0]["portal"] == "Income Tax"
+
+
+def test_sck_fill_result_reaches_the_desktop(bridge):
+    received = []
+    bridge.sck_fill_result_received.connect(received.append)
+    bridge.dispatch({"type": "sck_fill_result", "service_id": 3, "ok": True, "reason": ""})
+    assert received == [{"type": "sck_fill_result", "service_id": 3, "ok": True, "reason": ""}]
+
+
+def test_sck_fill_result_carries_the_reason_and_is_truncated(bridge):
+    received = []
+    bridge.sck_fill_result_received.connect(received.append)
+    bridge.dispatch({"type": "sck_fill_result", "service_id": 3, "ok": False,
+                     "reason": "x" * 300})
+    assert len(received) == 1
+    assert received[0]["ok"] is False
+    assert received[0]["reason"] == "x" * 100
+
+
+def test_sck_fill_result_without_a_service_id_is_dropped(bridge):
+    received = []
+    bridge.sck_fill_result_received.connect(received.append)
+    bridge.dispatch({"type": "sck_fill_result", "ok": True})
+    bridge.dispatch({"type": "sck_fill_result", "service_id": 0, "ok": True})
+    assert received == []
+
+
+def test_sck_widget_done_reports_a_dashboard_close(bridge):
+    received = []
+    bridge.sck_widget_closed_received.connect(received.append)
+    bridge.dispatch({"type": "sck_widget_done", "service_id": 9})
+    assert received == [{"type": "sck_widget_done", "service_id": 9, "reason": "dashboard"}]

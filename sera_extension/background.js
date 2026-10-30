@@ -269,6 +269,8 @@ function handleDesktopMessage(message) {
     handleSckClear(message.service_id);
   } else if (message.type === "sck_result") {
     handleSckResult(message);
+  } else if (message.type === "sck_fill") {
+    handleSckFill(message);
   } else if (message.type === "update_settings") {
     const sca = message.sca_enabled !== false;
     const scaMode = message.sca_mode || "autofill";
@@ -1744,6 +1746,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ status: "ok" });
     return true;
   }
+  // The card's 60-second dashboard confirmation ran out: it closed itself. Same handling as a
+  // dismissal, but the reason is "dashboard" so the desktop can tell them apart.
+  if (msg.type === "SCK_DASHBOARD") {
+    const sid = msg.service_id == null ? "" : String(msg.service_id);
+    sckCardTabs.delete(sid);
+    sendToDesktop({ type: "sck_widget_done", service_id: msg.service_id }, false);
+    sendResponse({ status: "ok" });
+    return true;
+  }
   if (msg.type === "scc_row_worked" && msg.attempt_id && msg.row_label) {
     sendToDesktop({ type: "scc_row_worked", attempt_id: String(msg.attempt_id), row_label: String(msg.row_label) }, false);
     sendResponse({ status: "ok" });
@@ -1877,13 +1888,15 @@ function injectSckEverywhere(payload) {
   chrome.tabs.query({}, tabs => {
     (tabs || []).forEach(tab => {
       if (!tab || !tab.url) return;
-      if (sckOnDashboard(tab.url, payload.dashboard_page_link)) return;
       let applies = false;
       if (link) {
         applies = sckUrlApplies(tab.url, link);
       } else {
         const cur = _sckUrlParts(tab.url);
         applies = !!(cur && _sckPortalMatchesHost(cur.host, payload.portal));
+      }
+      if (!applies && sckOnDashboard(tab.url, payload.dashboard_page_link)) {
+        applies = true;
       }
       if (applies || (typeof _sckLastEditTab === "number" && tab.id === _sckLastEditTab)) {
         injectSck(tab.id, payload);
@@ -1934,16 +1947,130 @@ function handleSckClear(serviceId) {
 
 function handleSckResult(message) {
   const sid = String(message.service_id == null ? "" : message.service_id);
+  const payload = {
+    type: "SERA_SCK_RESULT",
+    service_id: message.service_id,
+    ok: !!message.ok,
+    message: String(message.message || "")
+  };
   const tabId = sckCardTabs.get(sid);
-  if (tabId === undefined) return;
+  if (tabId !== undefined) {
+    try {
+      chrome.tabs.sendMessage(tabId, payload, () => { if (chrome.runtime.lastError) {} });
+      return;
+    } catch (_) {}
+  }
+  // A worker restart loses sckCardTabs: tell every tab instead (the card ignores other services).
+  chrome.tabs.query({}, tabs => (tabs || []).forEach(t => {
+    if (!t || typeof t.id !== "number") return;
+    try {
+      chrome.tabs.sendMessage(t.id, payload, () => { if (chrome.runtime.lastError) {} });
+    } catch (_) {}
+  }));
+}
+
+// ── SCK: fill the portal's password field from the desktop Test & Fill bar ────────────────
+// Runs in the portal page (injectWithDom). Sets the box with the native value setter plus
+// input/change events, so Angular/React controllers see a normal edit. Never navigates and
+// never submits: staff still solve the CAPTCHA and press Login.
+function sckFillInPage(password, passwordSelector) {
+  try { if (window.self !== window.top) return { ok: false, reason: "frame" }; } catch (_) { return { ok: false, reason: "frame" }; }
+  const dom = window.__seraDom;
+  if (!dom) return { ok: false, reason: "no_dom" };
+
+  // Flutter portals (TRACES) draw their form after the HTML shell loads; the real input lives
+  // in a hidden editing host.
+  function flutterInput() {
+    try {
+      const host = document.querySelector("flt-text-editing-host");
+      if (host) { const inp = host.querySelector("input, textarea"); if (inp) return inp; }
+      const pane = document.querySelector("flt-glass-pane");
+      if (pane && pane.shadowRoot) {
+        const inp = pane.shadowRoot.querySelector("flt-text-editing-host input, flt-text-editing-host textarea");
+        if (inp) return inp;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  let el = null;
+  try { el = dom.findField(document, "pass", passwordSelector || "", [], ""); } catch (_) { el = null; }
+  if (!el) el = flutterInput();
+  if (!el) return { ok: false, reason: "no_field" };
+
+  try { el.focus(); } catch (_) {}
   try {
-    chrome.tabs.sendMessage(tabId, {
-      type: "SERA_SCK_RESULT",
-      service_id: message.service_id,
-      ok: !!message.ok,
-      message: String(message.message || "")
-    }, () => { if (chrome.runtime.lastError) {} });
+    const proto = el.tagName === "TEXTAREA" ? window.HTMLTextAreaElement && window.HTMLTextAreaElement.prototype
+                                            : window.HTMLInputElement && window.HTMLInputElement.prototype;
+    const desc = proto && Object.getOwnPropertyDescriptor(proto, "value");
+    if (desc && desc.set) desc.set.call(el, password);
+    else el.value = password;
+  } catch (_) {
+    try { el.value = password; } catch (_) { return { ok: false, reason: "no_field" }; }
+  }
+  try {
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
   } catch (_) {}
+  try {
+    if (typeof el.setSelectionRange === "function") el.setSelectionRange(password.length, password.length);
+  } catch (_) {}
+  return { ok: true, reason: "" };
+}
+
+function _sckFillReply(serviceId, ok, reason) {
+  sendToDesktop({ type: "sck_fill_result", service_id: serviceId, ok: !!ok,
+                  reason: String(reason || "") }, false);
+}
+
+function _sckFillHost(link) {
+  const parts = _sckUrlParts(link);
+  return parts && parts.host ? parts.host : "";
+}
+
+// Desktop asked the bar's password to be put into the portal tab staff are looking at.
+function handleSckFill(message) {
+  const sid = String(message.service_id == null ? "" : message.service_id);
+  const password = typeof message.password === "string" ? message.password : "";
+  if (!sid || !password) return;
+  const wantHost = _sckFillHost(message.url || "");
+  const portal = String(message.portal || "");
+
+  chrome.tabs.query({}, tabs => {
+    const matches = [];
+    (tabs || []).forEach(tab => {
+      if (!tab || typeof tab.id !== "number" || !tab.url) return;
+      const cur = _sckUrlParts(tab.url);
+      if (!cur) return;
+      const applies = wantHost
+        ? (cur.host === wantHost || cur.host.endsWith("." + wantHost) || wantHost.endsWith("." + cur.host))
+        : _sckPortalMatchesHost(cur.host, portal);
+      if (applies) matches.push(tab);
+    });
+    if (!matches.length) { _sckFillReply(sid, false, "no_tab"); return; }
+
+    // The tab staff just failed the login in is the active one; fall back to the card's tab.
+    const cardTabId = sckCardTabs.get(sid);
+    const target = matches.find(t => t.active) ||
+                   matches.find(t => t.id === cardTabId) ||
+                   matches[0];
+
+    injectWithDom({ tabId: target.id }, sckFillInPage, [password, message.password_selector || ""])
+      .then(results => {
+        const hit = (results || []).find(r => r && r.result) || null;
+        const res = hit ? hit.result : null;
+        if (res && res.ok) {
+          _sckFillReply(sid, true, "");
+          try { chrome.tabs.update(target.id, { active: true }); } catch (_) {}
+          try {
+            if (target.windowId !== undefined) chrome.windows.update(target.windowId, { focused: true });
+          } catch (_) {}
+        } else {
+          _sckFillReply(sid, false, (res && res.reason) || "no_field");
+        }
+      })
+      .catch(() => _sckFillReply(sid, false, "no_field"));
+  });
 }
 
 function maybeReinjectSck(tabId, url) {
@@ -1955,11 +2082,20 @@ function maybeReinjectSck(tabId, url) {
       const p = all[key];
       if (!p) return;
       if (sckOnDashboard(url, p.dashboard_page_link)) {
-        delete all[key];
-        changed = true;
-        sckCardTabs.delete(String(p.service_id));
-        removeSckFromTab(tabId);
-        sendToDesktop({ type: "sck_widget_done", service_id: p.service_id }, false);
+        if (!p.dashTime) {
+          p.dashTime = Date.now();
+          changed = true;
+          setTimeout(() => injectSck(tabId, p), 700);
+        } else if (Date.now() - p.dashTime > 65000) {
+          delete all[key];
+          changed = true;
+          sckCardTabs.delete(String(p.service_id));
+          removeSckFromTab(tabId);
+          sendToDesktop({ type: "sck_widget_done", service_id: p.service_id }, false);
+          return;
+        } else {
+          setTimeout(() => injectSck(tabId, p), 700);
+        }
         return;
       }
       const link = (p.login_page_link || "").trim();
@@ -2009,7 +2145,6 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
   function onDashboard() {
     return !!dashboardLink && onLink(String(location.href || ""), dashboardLink);
   }
-  if (onDashboard()) return;
 
   const hasClient = clientId !== null && clientId !== undefined && clientId !== "";
   const host = document.createElement("div");
@@ -2017,17 +2152,156 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
   host.setAttribute("data-service-id", String(serviceId));
   const shadow = host.attachShadow({ mode: "closed" });
 
+  // Dynamic placement avoiding other widgets
+  function getPlacement() {
+    const vpW = window.innerWidth || document.documentElement.clientWidth || 1280;
+    const vpH = window.innerHeight || document.documentElement.clientHeight || 800;
+    const cardW = 340;
+    const cardH = 260;
+    const pad = 24;
+
+    const obstacles = [];
+    const knownHosts = [
+      "#sera-manual-assist-host",
+      "#sera-mecp-host",
+      "#sera-vsdc-hud-pill",
+      "#sera-hud-root",
+      "#vsdc-crosshair-container"
+    ];
+    knownHosts.forEach(sel => {
+      const el = document.querySelector(sel);
+      if (el) {
+        const r = el.getBoundingClientRect();
+        if (r.width > 20 && r.height > 20) obstacles.push(r);
+      }
+    });
+
+    try {
+      document.querySelectorAll("body > *").forEach(el => {
+        if (el.id === hostId) return;
+        const s = window.getComputedStyle(el);
+        if (s && (s.position === "fixed" || s.position === "sticky")) {
+          const r = el.getBoundingClientRect();
+          if (r.width > 40 && r.height > 40 && r.width < vpW * 0.95 && r.height < vpH * 0.95) {
+            obstacles.push(r);
+          }
+        }
+      });
+    } catch (_) {}
+
+    function boxOverlaps(b) {
+      const buf = 14;
+      return obstacles.some(obs => {
+        return !(
+          b.right + buf < obs.left ||
+          b.left - buf > obs.right ||
+          b.bottom + buf < obs.top ||
+          b.top - buf > obs.bottom
+        );
+      });
+    }
+
+    const corners = [
+      {
+        id: "bottom-right",
+        css: { bottom: `${pad}px`, right: `${pad}px`, top: "auto", left: "auto" },
+        box: { left: vpW - cardW - pad, right: vpW - pad, top: vpH - cardH - pad, bottom: vpH - pad }
+      },
+      {
+        id: "bottom-left",
+        css: { bottom: `${pad}px`, left: `${pad}px`, top: "auto", right: "auto" },
+        box: { left: pad, right: pad + cardW, top: vpH - cardH - pad, bottom: vpH - pad }
+      },
+      {
+        id: "top-right",
+        css: { top: `${pad}px`, right: `${pad}px`, bottom: "auto", left: "auto" },
+        box: { left: vpW - cardW - pad, right: vpW - pad, top: pad, bottom: pad + cardH }
+      },
+      {
+        id: "top-left",
+        css: { top: `${pad}px`, left: `${pad}px`, bottom: "auto", right: "auto" },
+        box: { left: pad, right: pad + cardW, top: pad, bottom: pad + cardH }
+      }
+    ];
+
+    let chosen = corners[0];
+    for (const c of corners) {
+      if (!boxOverlaps(c.box)) {
+        chosen = c;
+        break;
+      }
+    }
+
+    let outTransform = "translateY(40px)";
+    if (chosen.id === "bottom-right") {
+      const blockedBottom = obstacles.some(o => o.bottom >= vpH - pad && o.right >= vpW - cardW - pad);
+      outTransform = blockedBottom ? "translateX(50px)" : "translateY(50px)";
+    } else if (chosen.id === "bottom-left") {
+      const blockedBottom = obstacles.some(o => o.bottom >= vpH - pad && o.left <= pad + cardW);
+      outTransform = blockedBottom ? "translateX(-50px)" : "translateY(50px)";
+    } else if (chosen.id === "top-right") {
+      const blockedTop = obstacles.some(o => o.top <= pad + 30 && o.right >= vpW - cardW - pad);
+      outTransform = blockedTop ? "translateX(50px)" : "translateY(-50px)";
+    } else if (chosen.id === "top-left") {
+      const blockedTop = obstacles.some(o => o.top <= pad + 30 && o.left <= pad + cardW);
+      outTransform = blockedTop ? "translateX(-50px)" : "translateY(-50px)";
+    }
+
+    return {
+      css: chosen.css,
+      inTransform: "translate(0, 0)",
+      outTransform: outTransform
+    };
+  }
+
+  const placement = getPlacement();
+
   const style = document.createElement("style");
   style.textContent = `
-    .card { position: fixed; bottom: 20px; right: 24px; z-index: 2147483647; width: 340px;
+    .card { position: fixed; z-index: 2147483647; width: 340px;
       padding: 14px 16px; box-sizing: border-box; color: #FFFFFF;
       background: linear-gradient(145deg, #1B0E12, #12080B);
       border: 1.5px solid #D93A4E; border-radius: 12px;
       box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      transform: translateY(14px); opacity: 0;
+      opacity: 0;
       transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.3s ease; }
-    .card.in { transform: translateY(0); opacity: 1; }
+    .card.in { opacity: 1; }
+    .card.heartbeat {
+      animation: sck-heartbeat 2.6s ease-in-out infinite;
+    }
+    @keyframes sck-heartbeat {
+      0% {
+        transform: scale(1);
+        border-color: #D93A4E;
+        box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45), 0 0 0 0 rgba(217, 58, 78, 0);
+      }
+      14% {
+        transform: scale(1.02);
+        border-color: #FF5E72;
+        box-shadow: 0 14px 40px rgba(217, 58, 78, 0.35), 0 0 12px 2px rgba(217, 58, 78, 0.35);
+      }
+      28% {
+        transform: scale(1);
+        border-color: #D93A4E;
+        box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45), 0 0 0 0 rgba(217, 58, 78, 0);
+      }
+      42% {
+        transform: scale(1.025);
+        border-color: #FF7082;
+        box-shadow: 0 16px 44px rgba(217, 58, 78, 0.45), 0 0 16px 3px rgba(217, 58, 78, 0.45);
+      }
+      70% {
+        transform: scale(1);
+        border-color: #D93A4E;
+        box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45), 0 0 0 0 rgba(217, 58, 78, 0);
+      }
+      100% {
+        transform: scale(1);
+        border-color: #D93A4E;
+        box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45), 0 0 0 0 rgba(217, 58, 78, 0);
+      }
+    }
     .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
     .badge { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px;
       color: #FFB3BE; background: rgba(217, 58, 78, 0.20); border: 1px solid rgba(255, 122, 140, 0.45);
@@ -2041,10 +2315,15 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
     .note { font-size: 12px; color: #FFD166; line-height: 1.35; margin-bottom: 10px; }
     .field-label { font-size: 11px; font-weight: 600; color: #E8C3CA; text-transform: uppercase;
       letter-spacing: 0.5px; margin-bottom: 4px; }
-    .pwd { width: 100%; box-sizing: border-box; padding: 9px 10px; font-size: 13px; color: #FFFFFF;
+    .pwd-wrap { position: relative; width: 100%; box-sizing: border-box; display: flex; align-items: center; }
+    .pwd { width: 100%; box-sizing: border-box; padding: 9px 36px 9px 10px; font-size: 13px; color: #FFFFFF;
       background: #25141A; border: 1px solid #5A2631; border-radius: 8px; outline: none; }
     .pwd:focus { border-color: #D93A4E; }
     .pwd:disabled { opacity: 0.55; }
+    .eye-btn { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: transparent;
+      border: none; cursor: pointer; color: #C89AA2; padding: 4px; display: flex; align-items: center;
+      justify-content: center; border-radius: 4px; line-height: 1; }
+    .eye-btn:hover { color: #FFFFFF; }
     .btn-save { display: flex; align-items: center; justify-content: center; width: 100%; margin-top: 10px;
       padding: 9px 12px; font-size: 13px; font-weight: 700; color: #FFFFFF; background: #C42F44;
       border: 1px solid #E5484D; border-radius: 8px; cursor: pointer; box-sizing: border-box; }
@@ -2052,10 +2331,17 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
     .btn-save:disabled { background: #3A2025; color: #A58088; border-color: #4A2931; cursor: default; }
     .status { font-size: 12px; line-height: 1.3; margin-top: 9px; min-height: 15px; color: #C9A6AD; }
     .status.ok { color: #5EE0A0; }
-    .status.err { color: #FF8A97; }`;
+    .status.err { color: #FF8A97; }
+    .dash-progress-wrap { width: 100%; height: 3px; background: rgba(255, 255, 255, 0.12);
+      border-radius: 2px; overflow: hidden; margin-top: 10px; display: none; }
+    .dash-progress-wrap.active { display: block; }
+    .dash-progress-bar { width: 100%; height: 100%; background: #5EE0A0; transform-origin: left; transform: scaleX(1); }
+  `;
 
   const card = document.createElement("div");
   card.className = "card";
+  Object.assign(card.style, placement.css);
+  card.style.transform = placement.outTransform;
 
   const header = document.createElement("div");
   header.className = "header";
@@ -2089,12 +2375,40 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
   const label = document.createElement("div");
   label.className = "field-label";
   label.textContent = "New password";
+
+  const pwdWrap = document.createElement("div");
+  pwdWrap.className = "pwd-wrap";
+
   const pwd = document.createElement("input");
   pwd.type = "password";
   pwd.className = "pwd";
   pwd.autocomplete = "new-password";
   pwd.placeholder = "Type the new password";
   pwd.disabled = !hasClient;
+
+  const eyeBtn = document.createElement("button");
+  eyeBtn.type = "button";
+  eyeBtn.className = "eye-btn";
+  eyeBtn.title = "Show password";
+  const eyeOpenSvg = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>`;
+  const eyeClosedSvg = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>`;
+  eyeBtn.innerHTML = eyeOpenSvg;
+
+  eyeBtn.onclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (pwd.type === "password") {
+      pwd.type = "text";
+      eyeBtn.innerHTML = eyeClosedSvg;
+      eyeBtn.title = "Hide password";
+    } else {
+      pwd.type = "password";
+      eyeBtn.innerHTML = eyeOpenSvg;
+      eyeBtn.title = "Show password";
+    }
+    pwd.focus();
+  };
+  pwdWrap.append(pwd, eyeBtn);
 
   const saveBtn = document.createElement("button");
   saveBtn.className = "btn-save";
@@ -2104,18 +2418,69 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
   const status = document.createElement("div");
   status.className = "status";
 
+  const progressWrap = document.createElement("div");
+  progressWrap.className = "dash-progress-wrap";
+  const progressBar = document.createElement("div");
+  progressBar.className = "dash-progress-bar";
+  progressWrap.appendChild(progressBar);
+
   let done = false;
+  let dashTimeout = null;
+  let dashStarted = false;
+  let idleTimer = null;
+
+  function stopHeartbeat() {
+    if (idleTimer) clearTimeout(idleTimer);
+    card.classList.remove("heartbeat");
+  }
+  function scheduleHeartbeat() {
+    if (done) return;
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      if (!done && !card.matches(":hover") && shadow.activeElement !== pwd) {
+        card.classList.add("heartbeat");
+      }
+    }, 2500);
+  }
+
+  card.addEventListener("mouseenter", stopHeartbeat);
+  card.addEventListener("mouseleave", scheduleHeartbeat);
+  card.addEventListener("focusin", stopHeartbeat);
+  card.addEventListener("focusout", scheduleHeartbeat);
+  card.addEventListener("input", stopHeartbeat);
+  card.addEventListener("mousemove", stopHeartbeat);
+
   function setStatus(text, cls) {
     status.textContent = text || "";
     status.className = "status" + (cls ? " " + cls : "");
   }
+
   function removeCard() {
     try { chrome.runtime.onMessage.removeListener(onMsg); } catch (_) {}
     try { clearInterval(dashWatch); } catch (_) {}
+    if (dashTimeout) clearTimeout(dashTimeout);
+    stopHeartbeat();
+    card.classList.remove("in");
     card.style.opacity = "0";
-    card.style.transform = "translateY(14px)";
-    setTimeout(() => { if (host.isConnected) host.remove(); }, 320);
+    card.style.transform = placement.outTransform;
+    setTimeout(() => { if (host.isConnected) host.remove(); }, 350);
   }
+
+  function startDashboardCountdown() {
+    if (dashStarted || done) return;
+    dashStarted = true;
+    progressWrap.classList.add("active");
+    subtitle.textContent = "Dashboard reached. Confirm or enter new password.";
+    requestAnimationFrame(() => {
+      progressBar.style.transition = "transform 60000ms linear";
+      progressBar.style.transform = "scaleX(0)";
+    });
+    dashTimeout = setTimeout(() => {
+      try { chrome.runtime.sendMessage({ type: "SCK_DASHBOARD", service_id: serviceId }); } catch (_) {}
+      removeCard();
+    }, 60000);
+  }
+
   const onMsg = (msg) => {
     if (!msg || !host.isConnected) {
       try { chrome.runtime.onMessage.removeListener(onMsg); } catch (_) {}
@@ -2167,22 +2532,28 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
     removeCard();
   };
 
-  parts.push(label, pwd, saveBtn, status);
+  parts.push(label, pwdWrap, saveBtn, status, progressWrap);
   card.append(...parts);
   shadow.append(style, card);
   document.body.appendChild(host);
-  setTimeout(() => card.classList.add("in"), 40);
 
-  // The dashboard link decides when the card has done its job: a hash-router login may reach it
-  // without any page load, so the card watches its own address.
+  setTimeout(() => {
+    card.style.transform = placement.inTransform;
+    card.classList.add("in");
+    card.classList.add("heartbeat");
+  }, 40);
+
+  if (onDashboard()) {
+    startDashboardCountdown();
+  }
+
   const dashWatch = setInterval(() => {
     if (!host.isConnected) { clearInterval(dashWatch); return; }
     if (onDashboard()) {
       clearInterval(dashWatch);
-      try { chrome.runtime.sendMessage({ type: "SCK_DASHBOARD", service_id: serviceId }); } catch (_) {}
-      removeCard();
+      startDashboardCountdown();
     }
-  }, 1500);
+  }, 1200);
 }
 
 function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos, clearSeconds, attemptId, clientId, serviceId, portal) {

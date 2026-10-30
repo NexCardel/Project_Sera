@@ -4,9 +4,18 @@ ui/components/test_fill_bar.py — Sera Credential Keeper (SCK) floating bar.
 Model B: Desktop Floating Test & Fill Bar (blueprint section 2–5).
 
 TestFillBar is a native PySide6 frameless, always-on-top tool window that
-lets a staff member enter a candidate password, inject it into the active
+lets a staff member enter a candidate password, fill it into the active
 browser window, and observe the portal's response — automatically saving
 the verified credential to the Sera vault when the login succeeds.
+
+Fill mechanism
+--------------
+The password is **not** typed with Win32 ``SendInput``.  The bar asks the
+Sera browser extension (over the local WebSocket bridge) to set the portal's
+password field in its own DOM.  The extension uses the native value setter
+plus ``input``/``change`` events, so Angular/React controllers see a normal
+edit and the browser keeps its focus.  Nothing is submitted: staff still
+solve the CAPTCHA and press Login.
 
 Window characteristics
 ----------------------
@@ -26,19 +35,26 @@ Visual layout
 
 Outcome states
 --------------
-ready    → "Ready — Enter the working password to test and save"
-testing  → "Testing credentials on portal…"  (Fill button disabled)
-wrong    → shake animation + "Portal rejected this password. …"
-locked   → "Account locked. Ceasing attempts."  (auto-close after 3 s)
-worked   → bold green banner "✓ Login Succeeded! Password saved to Sera Vault."
-           (auto-close after 2.5 s)
+ready       → "Ready — Enter the working password to test and save"
+filling     → "Filling the password on the portal…"  (Fill button disabled)
+filled      → "Password filled. Complete the CAPTCHA and submit the login."
+wrong       → shake animation + "Portal rejected this password. …"
+locked      → "Account locked. Ceasing attempts."  (auto-close after 3 s)
+worked      → bold green banner "✓ Login Succeeded! Password saved to Sera Vault."
+              (auto-close after 2.5 s)
+fill_failed → "Could not find the password field on the portal page."
 
 Integration
 -----------
 The bar polls a ``queue.Queue`` (``outcome_queue``) every 500 ms.  The
-owning FailureDetector / rotation machinery puts outcome strings
-(``"worked"``, ``"wrong_password"``, ``"locked"``) into that queue when
-the portal responds.  On a ``"worked"`` outcome the bar:
+owning machinery (``main.py``) puts outcome strings or dicts into it:
+
+* ``"fill_ok"`` / ``{"kind": "fill_failed", "message": …}`` from the
+  extension's ``sck_fill_result`` reply.
+* ``"wrong_password"`` / ``"locked"`` / ``"worked"`` from ``SckWatcher``'s
+  page outcomes (SGT reading the portal).
+
+On a ``"worked"`` outcome the bar:
 
 1. Calls ``session.commit_candidate(attempt_id)`` to retrieve and zero
    the volatile password.
@@ -51,13 +67,13 @@ Security note
 The password field text is never logged or written to any persistent
 store directly.  Only ``session.set_candidate()`` touches it (storing it
 in volatile RAM), and it reaches the DB only through
-``save_verified_for_rotation``.
+``save_verified_for_rotation``.  The one outbound copy is the WebSocket
+message that asks the extension to fill the field.
 """
 
 from __future__ import annotations
 
 import queue
-import threading
 from typing import Any, Callable, Optional
 
 import qtawesome as qta
@@ -81,7 +97,6 @@ from PySide6.QtWidgets import (
 )
 
 from core.rotation.detector import save_verified_for_rotation
-from core.rotation.injector import RotationInjector
 from core.rotation.session import RotationSession
 
 # ── Colours / sizing ─────────────────────────────────────────────────────────
@@ -95,15 +110,22 @@ _WARN = "#FF9800"
 _BAR_W = 520
 _TTL_MS = 180_000       # 3 min idle TTL
 _POLL_MS = 500          # outcome queue poll interval
+_FILL_ACK_MS = 6000     # wait this long for the extension's sck_fill_result
 _ICON_SZ = 16           # icon point size for qtawesome
 
 # ── Status messages ──────────────────────────────────────────────────────────
 
 _MSG_READY = "Ready — Enter the working password to test and save"
-_MSG_TESTING = "Testing credentials on portal…"
+_MSG_FILLING = "Filling the password on the portal…"
+_MSG_FILLED = "Password filled. Complete the CAPTCHA and submit the login."
 _MSG_WRONG = "Portal rejected this password. Please check and try another."
 _MSG_LOCKED = "Account locked. Ceasing attempts."
 _MSG_WORKED = "✓ Login Succeeded! Password saved to Sera Vault."
+_MSG_NO_CLIENT = "Sera could not match this login to a client. Copy the client's ID first."
+_MSG_NO_FIELD = "Could not find the password field on the portal page."
+_MSG_NO_EXTENSION = ("Sera could not reach the browser extension. Make sure it is installed "
+                     "and the portal tab is open.")
+_MSG_SAVE_FAILED = "The login worked, but the password could not be saved. Try again."
 
 
 def _icon(name: str, color: str = _FG) -> Any:
@@ -137,51 +159,68 @@ class TestFillBar(QWidget):
             one of ``"wrong"``, ``"locked"``, or ``"timeout"``.
     """
 
-    rotation_succeeded = Signal(int, str, str)           # (client_id, pan, portal)
-    rotation_failed = Signal(int, str, str, str)         # (client_id, pan, portal, reason)
+    # ``object`` for client_id: an unregistered login has no id, and Signal(int) cannot emit None.
+    rotation_succeeded = Signal(object, str, str)        # (client_id, pan, portal)
+    rotation_failed = Signal(object, str, str, str)      # (client_id, pan, portal, reason)
 
     def __init__(
         self,
         db: Any,
-        client_id: int,
+        client_id: Optional[int],
         pan: str,
         portal: str,
         hwnd: int,
         client_name: str = "",
         actor_fn: Optional[Callable[[], str]] = None,
+        service: Optional[dict] = None,
         session: Optional[RotationSession] = None,
-        injector: Optional[RotationInjector] = None,
+        filler: Optional[Callable[[str], bool]] = None,
         outcome_queue: Optional[queue.Queue] = None,
+        on_fill_started: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         """
         Args:
             db:            Sera database handle.
-            client_id:     Sera client id.
-            pan:           PAN string.
+            client_id:     Sera client id, or ``None`` when the login is unregistered.
+            pan:           PAN string (shown in the header; may be empty).
             portal:        Human-readable portal name.
-            hwnd:          Win32 HWND of the target browser.
+            hwnd:          Win32 HWND of the target browser (0 = screen corner).
             client_name:   Display name shown in the header.
             actor_fn:      Zero-arg callable returning the current actor/username.
+            service:       The service row: ``id``, ``login_page_link``,
+                           ``password_selector`` — what the extension needs to find the field.
             session:       Shared :class:`RotationSession` instance.
-            injector:      Shared :class:`RotationInjector` instance.
-            outcome_queue: ``queue.Queue`` into which the rotation machinery
-                           puts outcome strings (``"worked"``, ``"wrong_password"``,
-                           ``"locked"``).  If ``None`` a new private queue is used.
+            filler:        ``callable(password) -> bool`` that hands the password to the
+                           browser.  Defaults to :func:`automation.sck_fill`.
+            outcome_queue: ``queue.Queue`` into which ``main.py`` puts outcome strings or
+                           dicts (``"worked"``, ``"wrong_password"``, ``"locked"``,
+                           ``"fill_ok"``, ``{"kind": "fill_failed", "message": …}``).
+                           If ``None`` a new private queue is used.
+            on_fill_started: Zero-arg callable run when a fill starts, so the owning watcher can
+                           deliver the new attempt's page outcome without the previous
+                           attempt's throttle.
             parent:        Optional parent widget.
         """
         super().__init__(parent)
 
         self._db = db
-        self._client_id = client_id
+        self._client_id = int(client_id) if client_id else None
+        self._has_client = self._client_id is not None
         self._pan = str(pan or "").strip().upper()
         self._portal = str(portal or "").strip()
         self._hwnd = int(hwnd)
         self._client_name = str(client_name or "").strip()
+        self._service: dict = dict(service or {})
+        self._service_id = self._service.get("id")
         self._actor_fn: Callable[[], str] = actor_fn or (lambda: "Staff")
         self._session: RotationSession = session or RotationSession()
-        self._injector: RotationInjector = injector or RotationInjector()
+        self._filler: Callable[[str], bool] = filler or self._send_fill
         self._outcome_queue: queue.Queue = outcome_queue or queue.Queue()
+        self._on_fill_started: Optional[Callable[[], None]] = on_fill_started
+        self._testing = False
+        self._fill_acked = False
+        self._last_save: Any = None
 
         # Open an attempt session immediately.
         self._attempt = self._session.open(
@@ -196,6 +235,12 @@ class TestFillBar(QWidget):
         self._build_ui()
         self._apply_stylesheet()
 
+        # No client in Sera: there is nowhere to save a verified password, so do not offer to fill.
+        if not self._has_client:
+            self._pwd_field.setEnabled(False)
+            self._fill_btn.setEnabled(False)
+            self._set_status(_MSG_NO_CLIENT, _WARN)
+
         # TTL timer — auto-close on 3-minute idle.
         self._ttl_timer = QTimer(self)
         self._ttl_timer.setSingleShot(True)
@@ -206,6 +251,12 @@ class TestFillBar(QWidget):
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll_outcome)
         self._poll_timer.start(_POLL_MS)
+
+        # If the extension never answers (not installed / Firefox build without SCK), do not
+        # leave the bar stuck on "Filling…".
+        self._fill_timer = QTimer(self)
+        self._fill_timer.setSingleShot(True)
+        self._fill_timer.timeout.connect(self._on_fill_ack_timeout)
 
         # Dock to the browser.
         self._dock_to_browser(self._hwnd)
@@ -219,6 +270,8 @@ class TestFillBar(QWidget):
             | Qt.Tool  # type: ignore[attr-defined]
         )
         self.setAttribute(Qt.WA_TranslucentBackground, False)  # type: ignore[attr-defined]
+        # Close means destroy: main.py's registry drops the bar on `destroyed`.
+        self.setAttribute(Qt.WA_DeleteOnClose, True)  # type: ignore[attr-defined]
         self.setFixedWidth(_BAR_W)
 
     def _build_ui(self) -> None:
@@ -313,12 +366,17 @@ class TestFillBar(QWidget):
     # ── Positioning ───────────────────────────────────────────────────────────
 
     def _dock_to_browser(self, hwnd: int) -> None:
-        """Place the bar at the top-right corner of the browser window."""
+        """Place the bar at the top-right corner of the browser window (screen corner without
+        a valid HWND)."""
         try:
             import ctypes
             import ctypes.wintypes
+            if not hwnd:
+                raise ValueError("no browser window")
             rect = ctypes.wintypes.RECT()
-            ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+            # GetWindowRect returns 0 for a stale HWND without raising; treat that as no window.
+            if not ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                raise OSError("stale browser window")
             bar_w = _BAR_W
             x = rect.right - bar_w - 8
             y = rect.top + 8
@@ -352,82 +410,158 @@ class TestFillBar(QWidget):
     # ── Fill & Test ───────────────────────────────────────────────────────────
 
     def _on_fill_clicked(self) -> None:
+        if not self._has_client:
+            self._set_status(_MSG_NO_CLIENT, _WARN)
+            return
         candidate = self._pwd_field.text()
         if not candidate:
             self._set_status("Please enter a candidate password first.", _WARN)
             return
 
-        # Store the candidate in volatile session RAM.
-        self._session.set_candidate(self._attempt.attempt_id, candidate)
+        # Store the candidate in volatile session RAM. It reaches the page only through
+        # `_filler` (the extension's DOM fill) and the DB only after a confirmed login.
+        try:
+            self._session.set_candidate(self._attempt.attempt_id, candidate)
+        except KeyError:
+            # Another bar's open() swept this attempt (3-minute sweep). Start a fresh one, so the
+            # candidate still has somewhere volatile to live and the confirmed login can save it.
+            self._attempt = self._session.open(
+                client_id=self._client_id, pan=self._pan, portal=self._portal, hwnd=self._hwnd)
+            self._session.set_candidate(self._attempt.attempt_id, candidate)
 
         # Clear the field in the UI immediately (UI copy is no longer needed).
         self._pwd_field.clear()
 
-        # Update state to "Testing".
+        # A new attempt starts: let the watcher deliver this attempt's page outcome at once
+        # (the previous attempt's rejection may still be inside its throttle window).
+        if self._on_fill_started is not None:
+            try:
+                self._on_fill_started()
+            except Exception:
+                pass
+
+        self._testing = True
+        self._fill_acked = False
         self._fill_btn.setEnabled(False)
-        self._set_status(_MSG_TESTING, _FG_DIM)
+        self._set_status(_MSG_FILLING, _FG_DIM)
         self._reset_ttl()
+        self._fill_timer.start(_FILL_ACK_MS)
 
-        # Run the injection on a daemon thread to keep the UI responsive.
-        threading.Thread(
-            target=self._inject_candidate,
-            args=(candidate,),
-            daemon=True,
-            name="sck-inject",
-        ).start()
-        # Zero our local reference — the injector will zero its own copy.
-        candidate = ""  # noqa: F841
-
-    def _inject_candidate(self, candidate: str) -> None:
-        """Daemon thread: inject the candidate then zero it."""
         try:
-            self._injector.inject(self._hwnd, candidate)
-        except RuntimeError as exc:
-            # Invalid HWND — surface error on the UI thread.
-            QTimer.singleShot(0, lambda: self._on_inject_error(str(exc)))
+            reached = bool(self._filler(candidate))
+        except Exception:
+            reached = False
         finally:
-            candidate = ""  # noqa: F841 — zero local copy
+            candidate = ""  # noqa: F841 — drop our local copy
 
-    def _on_inject_error(self, msg: str) -> None:
+        if not reached:
+            self._fill_timer.stop()
+            self._on_fill_failed(_MSG_NO_EXTENSION)
+
+    def _send_fill(self, candidate: str) -> bool:
+        """Ask the extension to set the password field in the open portal tab."""
+        try:
+            import automation
+            return automation.sck_fill(self._service, candidate, self._client_id, self._portal)
+        except Exception:
+            return False
+
+    def _on_fill_ack_timeout(self) -> None:
+        if not self._testing or self._fill_acked:
+            return
+        self._on_fill_failed(_MSG_NO_EXTENSION)
+
+    def _on_fill_failed(self, message: str) -> None:
+        """The extension could not fill the field (or never answered)."""
+        self._testing = False
+        self._fill_acked = True
+        self._fill_timer.stop()
         self._fill_btn.setEnabled(True)
-        self._set_status(f"Injection failed: {msg}", _WARN)
+        self._set_status(message or _MSG_NO_FIELD, _WARN)
         self._session.discard_candidate(self._attempt.attempt_id)
 
     # ── Outcome polling ───────────────────────────────────────────────────────
 
+    def deliver_outcome(self, outcome: Any) -> None:
+        """Thread-safe: ``main.py`` pushes an outcome for this bar (a string or a dict)."""
+        self._outcome_queue.put(outcome)
+
+    @property
+    def last_save(self) -> Any:
+        """The ``RotationSave`` from the confirmed login, or ``None``."""
+        return self._last_save
+
     def _poll_outcome(self) -> None:
         """Called every 500 ms to drain the outcome queue."""
-        try:
-            outcome = self._outcome_queue.get_nowait()
-        except queue.Empty:
-            return
-        self._handle_outcome(str(outcome))
+        while True:
+            try:
+                outcome = self._outcome_queue.get_nowait()
+            except queue.Empty:
+                return
+            self._handle_outcome(outcome)
 
-    def _handle_outcome(self, outcome: str) -> None:
-        if outcome == "worked":
+    def _handle_outcome(self, outcome: Any) -> None:
+        if isinstance(outcome, dict):
+            kind = str(outcome.get("kind") or "")
+            message = str(outcome.get("message") or "")
+        else:
+            kind, message = str(outcome), ""
+        if kind == "worked":
             self._on_worked()
-        elif outcome == "wrong_password":
+        elif kind == "wrong_password":
             self._on_wrong()
-        elif outcome == "locked":
+        elif kind == "locked":
             self._on_locked()
+        elif kind == "fill_ok":
+            self._fill_acked = True
+            self._fill_timer.stop()
+            if self._testing:
+                # The staff member now needs time for the CAPTCHA and Login: restart the idle TTL.
+                self._reset_ttl()
+                self._set_status(_MSG_FILLED, _GREEN)
+        elif kind == "fill_failed":
+            self._on_fill_failed(message or _MSG_NO_FIELD)
         # Anything else (neutral, no_conclusion) is silently ignored.
 
     def _on_worked(self) -> None:
         """The portal confirmed login.  Save the credential and announce success."""
+        if not self._testing:
+            return
+        self._testing = False
+        self._fill_acked = True
+        self._fill_timer.stop()
+
         # Commit the volatile candidate (zeros it in session RAM).
-        pwd = self._session.commit_candidate(self._attempt.attempt_id)
-        actor = self._actor_fn()
         try:
-            save_verified_for_rotation(
+            pwd = self._session.commit_candidate(self._attempt.attempt_id)
+        except KeyError:
+            # The attempt was already closed (idle TTL): there is no candidate to save.
+            self._set_status(_MSG_SAVE_FAILED, _WARN)
+            return
+        actor = self._actor_fn()
+        result = None
+        try:
+            result = save_verified_for_rotation(
                 db=self._db,
                 password=pwd,
                 pan=self._pan,
                 client_id=self._client_id,
                 portal=self._portal,
                 actor=actor,
+                service_id=self._service_id,
+                client_name=self._client_name,
+                method="SCK-Bar",
             )
+        except Exception:
+            result = None
         finally:
             pwd = ""  # noqa: F841 — zero our local copy immediately
+
+        self._last_save = result
+        if result is None:
+            self._fill_btn.setEnabled(True)
+            self._set_status(_MSG_SAVE_FAILED, _WARN)
+            return
 
         # Show success banner.
         self._fill_btn.setEnabled(False)
@@ -441,6 +575,11 @@ class TestFillBar(QWidget):
 
     def _on_wrong(self) -> None:
         """The portal rejected the password — shake and re-enable for retry."""
+        if not self._testing:
+            return
+        self._testing = False
+        self._fill_acked = True
+        self._fill_timer.stop()
         self._fill_btn.setEnabled(True)
         self._set_status(_MSG_WRONG, _WARN)
         self._session.discard_candidate(self._attempt.attempt_id)
@@ -448,6 +587,11 @@ class TestFillBar(QWidget):
 
     def _on_locked(self) -> None:
         """The portal says the account is locked — warn and close."""
+        if not self._testing:
+            return
+        self._testing = False
+        self._fill_acked = True
+        self._fill_timer.stop()
         self._fill_btn.setEnabled(False)
         self._set_status(_MSG_LOCKED, _ACCENT)
         self._session.discard_candidate(self._attempt.attempt_id)
@@ -487,6 +631,7 @@ class TestFillBar(QWidget):
         """Stop timers, close the session attempt, and hide the bar."""
         self._poll_timer.stop()
         self._ttl_timer.stop()
+        self._fill_timer.stop()
         self._session.close(self._attempt.attempt_id)
         self.close()
 
@@ -494,5 +639,6 @@ class TestFillBar(QWidget):
         """Ensure the session is always closed even if the window is force-closed."""
         self._poll_timer.stop()
         self._ttl_timer.stop()
+        self._fill_timer.stop()
         self._session.close(self._attempt.attempt_id)
         super().closeEvent(event)

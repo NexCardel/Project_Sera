@@ -159,6 +159,15 @@ class WSBridge(QObject):
     # SCK: staff pressed the ✎ edit button on SMTI / MECP / SCA widget to update a
     # password without a detected failure.  {service_id, client_id, portal}
     sck_edit_requested = Signal(dict)
+    # SCK: the browser finished (or refused) a "fill the password field" request from the
+    # desktop Test & Fill bar. {service_id, ok, reason}
+    sck_fill_result_received = Signal(dict)
+    # SCK: internal only - the failed-login watcher runs on SCC-U's thread and must ask the
+    # Qt thread to create the desktop bar. Carries the bar's arguments as a dict.
+    sck_bar_requested = Signal(dict)
+    # SCK: internal only - one page outcome from the watcher (SCC-U's thread) for the desktop
+    # bar. (service_id, kind) where kind is worked / wrong_password / locked.
+    sck_outcome_received = Signal(object, str)
     extension_settings_updated_received = Signal(dict)
 
     # automation.py calls broadcast()/send_first() from plain background threads (autofill
@@ -462,6 +471,14 @@ class WSBridge(QObject):
                 self.sck_edit_requested.emit({
                     "type": mtype, "service_id": service_id,
                     "client_id": client_id, "portal": portal.strip()})
+        elif mtype == "sck_fill_result":
+            service_id = _as_positive_int(msg.get("service_id"))
+            if service_id is not None:
+                reason = msg.get("reason") or ""
+                self.sck_fill_result_received.emit({
+                    "type": mtype, "service_id": service_id,
+                    "ok": bool(msg.get("ok")),
+                    "reason": reason.strip()[:100] if isinstance(reason, str) else ""})
         elif mtype == "extension_settings_updated":
             self.extension_settings_updated_received.emit(msg)
         elif mtype in ("request_settings", "get_settings"):

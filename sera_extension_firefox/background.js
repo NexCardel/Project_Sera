@@ -244,6 +244,8 @@ function handleDesktopMessage(message) {
     closeSccCard(message.attempt_id);
   } else if (message.type === "scc_card_update") {
     updateSccCard(message);
+  } else if (message.type === "sck_fill") {
+    handleSckFill(message);
   } else if (message.type === "update_settings") {
     const sca = message.sca_enabled !== false;
     const scaMode = message.sca_mode || "autofill";
@@ -650,6 +652,111 @@ function _findLoginTab(candidates, url, done) {
     } catch (_) { answer(false); }
   };
   next(0);
+}
+
+// ── SCK: fill the portal's password field from the desktop Test & Fill bar ────────────────
+// Runs in the portal page (injectWithDom). Sets the box with the native value setter plus
+// input/change events, so Angular/React controllers see a normal edit. Never navigates and
+// never submits: staff still solve the CAPTCHA and press Login.
+function sckFillInPage(password, passwordSelector) {
+  try { if (window.self !== window.top) return { ok: false, reason: "frame" }; } catch (_) { return { ok: false, reason: "frame" }; }
+  const dom = window.__seraDom;
+  if (!dom) return { ok: false, reason: "no_dom" };
+
+  // Flutter portals (TRACES) draw their form after the HTML shell loads; the real input lives
+  // in a hidden editing host.
+  function flutterInput() {
+    try {
+      const host = document.querySelector("flt-text-editing-host");
+      if (host) { const inp = host.querySelector("input, textarea"); if (inp) return inp; }
+      const pane = document.querySelector("flt-glass-pane");
+      if (pane && pane.shadowRoot) {
+        const inp = pane.shadowRoot.querySelector("flt-text-editing-host input, flt-text-editing-host textarea");
+        if (inp) return inp;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  let el = null;
+  try { el = dom.findField(document, "pass", passwordSelector || "", [], ""); } catch (_) { el = null; }
+  if (!el) el = flutterInput();
+  if (!el) return { ok: false, reason: "no_field" };
+
+  try { el.focus(); } catch (_) {}
+  try {
+    const proto = el.tagName === "TEXTAREA" ? window.HTMLTextAreaElement && window.HTMLTextAreaElement.prototype
+                                            : window.HTMLInputElement && window.HTMLInputElement.prototype;
+    const desc = proto && Object.getOwnPropertyDescriptor(proto, "value");
+    if (desc && desc.set) desc.set.call(el, password);
+    else el.value = password;
+  } catch (_) {
+    try { el.value = password; } catch (_) { return { ok: false, reason: "no_field" }; }
+  }
+  try {
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  } catch (_) {}
+  try {
+    if (typeof el.setSelectionRange === "function") el.setSelectionRange(password.length, password.length);
+  } catch (_) {}
+  return { ok: true, reason: "" };
+}
+
+function _sckFillHost(link) {
+  try {
+    return (new URL(link).hostname || "").toLowerCase().replace(/^www\./, "");
+  } catch (_) { return ""; }
+}
+
+function _sckFillReply(serviceId, ok, reason) {
+  sendToDesktop({ type: "sck_fill_result", service_id: serviceId, ok: !!ok,
+                  reason: String(reason || "") }, false);
+}
+
+// Desktop asked for the bar's password to be put into the portal tab staff are looking at.
+function handleSckFill(message) {
+  const sid = String(message.service_id == null ? "" : message.service_id);
+  const password = typeof message.password === "string" ? message.password : "";
+  if (!sid || !password) return;
+  const wantHost = _sckFillHost(message.url || "");
+
+  chrome.tabs.query({}, tabs => {
+    const httpTabs = (tabs || []).filter(tab => tab && typeof tab.id === "number" && /^https?:/i.test(tab.url || ""));
+    // Staff just failed the login in the active tab, so try that one first.
+    httpTabs.sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0));
+
+    const fillIn = (target) => {
+      if (!target) { _sckFillReply(sid, false, "no_tab"); return; }
+      injectWithDom({ tabId: target.id }, sckFillInPage, [password, message.password_selector || ""])
+        .then(results => {
+          const hit = (results || []).find(r => r && r.result) || null;
+          const res = hit ? hit.result : null;
+          if (res && res.ok) {
+            _sckFillReply(sid, true, "");
+            try { chrome.tabs.update(target.id, { active: true }, () => { if (chrome.runtime.lastError) {} }); } catch (_) {}
+            try {
+              if (target.windowId !== undefined) chrome.windows.update(target.windowId, { focused: true }, () => { if (chrome.runtime.lastError) {} });
+            } catch (_) {}
+          } else {
+            _sckFillReply(sid, false, (res && res.reason) || "no_field");
+          }
+        })
+        .catch(() => _sckFillReply(sid, false, "no_field"));
+    };
+
+    if (wantHost) {
+      const matches = httpTabs.filter(tab => {
+        let host = "";
+        try { host = (new URL(tab.url).hostname || "").toLowerCase().replace(/^www\./, ""); } catch (_) { return false; }
+        return host === wantHost || host.endsWith("." + wantHost) || wantHost.endsWith("." + host);
+      });
+      fillIn(matches[0] || null);
+      return;
+    }
+    // No login link configured: the first tab that actually shows a password box.
+    _findLoginTab(httpTabs, "", fillIn);
+  });
 }
 
 // Opens the portal's login page and calls onReady(tabId) exactly once, after it has loaded.
