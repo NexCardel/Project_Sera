@@ -79,6 +79,8 @@ from typing import Any, Callable, Optional
 import qtawesome as qta
 from PySide6.QtCore import (
     QEasingCurve,
+    QEvent,
+    QPoint,
     QPropertyAnimation,
     QRect,
     Qt,
@@ -131,6 +133,24 @@ _MSG_SAVE_FAILED = "The login worked, but the password could not be saved. Try a
 def _icon(name: str, color: str = _FG) -> Any:
     """Return a QIcon from qtawesome using a Google Material Design icon name."""
     return qta.icon(name, color=color)
+
+
+def _dock_xy(right_px: int, top_px: int, scale: float, geom: Any = None) -> Any:
+    """The bar's top-right corner for a browser window, in Qt's logical pixels.
+
+    `right_px` / `top_px` come from Win32 (physical pixels) and `scale` is the window's DPI
+    factor (1.0 = 96 dpi), so a 125%/150% display does not push the bar off the right edge.
+    With `geom` (the screen's available QRect) the result is clamped onto the screen, so a stale
+    or oversized window rect can never leave the bar hanging off an edge.
+    """
+    scale = float(scale) if scale and scale > 0 else 1.0
+    x = round(right_px / scale) - _BAR_W - 8
+    y = round(top_px / scale) + 8
+    if geom is not None:
+        # QRect.right()/bottom() are inclusive, so +1 gives the screen's exclusive edge.
+        x = min(max(geom.left() + 8, x), geom.right() + 1 - _BAR_W - 8)
+        y = min(max(geom.top() + 8, y), geom.bottom() + 1 - 120)
+    return max(0, x), max(0, y)
 
 
 class _BorderWidget(QWidget):
@@ -221,6 +241,8 @@ class TestFillBar(QWidget):
         self._testing = False
         self._fill_acked = False
         self._last_save: Any = None
+        self._drag_offset: Any = None
+        self._user_moved = False
 
         # Open an attempt session immediately.
         self._attempt = self._session.open(
@@ -258,8 +280,17 @@ class TestFillBar(QWidget):
         self._fill_timer.setSingleShot(True)
         self._fill_timer.timeout.connect(self._on_fill_ack_timeout)
 
-        # Dock to the browser.
+        # Drag the frameless bar by its labels too, not just its own background.
+        for child in self.findChildren(QLabel):
+            child.installEventFilter(self)
+
+        # Dock to the browser, then follow it when the window is moved or resized.
         self._dock_to_browser(self._hwnd)
+        self._dock_timer = QTimer(self)
+        self._dock_timer.setInterval(1000)
+        self._dock_timer.timeout.connect(self._follow_browser)
+        if self._hwnd:
+            self._dock_timer.start()
 
     # ── Window setup ─────────────────────────────────────────────────────────
 
@@ -368,26 +399,94 @@ class TestFillBar(QWidget):
     def _dock_to_browser(self, hwnd: int) -> None:
         """Place the bar at the top-right corner of the browser window (screen corner without
         a valid HWND)."""
+        self.setFixedWidth(_BAR_W)
+        pos = self._dock_position(hwnd)
+        if pos is None:
+            screen = QApplication.primaryScreen()
+            if screen is None:
+                return
+            geom = screen.availableGeometry()
+            pos = (geom.right() - _BAR_W - 16, geom.top() + 16)
+        self.move(*pos)
+
+    def _dock_position(self, hwnd: int):
+        """(x, y) for the browser's top-right corner, in Qt's logical pixels; None if the
+        window is not there. Always clamped so the bar cannot hang off the screen edge."""
         try:
             import ctypes
             import ctypes.wintypes
             if not hwnd:
-                raise ValueError("no browser window")
+                return None
             rect = ctypes.wintypes.RECT()
             # GetWindowRect returns 0 for a stale HWND without raising; treat that as no window.
             if not ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect)):
-                raise OSError("stale browser window")
-            bar_w = _BAR_W
-            x = rect.right - bar_w - 8
-            y = rect.top + 8
-            self.setFixedWidth(bar_w)
-            self.move(max(0, x), max(0, y))
+                return None
+            right, top = int(rect.right), int(rect.top)
         except Exception:
-            # Fall back to top-right of the primary screen.
-            screen = QApplication.primaryScreen()
-            if screen:
-                geom = screen.availableGeometry()
-                self.move(geom.right() - _BAR_W - 16, geom.top() + 16)
+            return None
+        # Win32 reports physical pixels while Qt moves in device-independent pixels: the
+        # screen's devicePixelRatio is the same factor Qt uses, so a 125%/150% display does
+        # not push the bar off the right edge.
+        primary = QApplication.primaryScreen()
+        scale = float(primary.devicePixelRatio()) if primary is not None else 1.0
+        rough = _dock_xy(right, top, scale, None)
+        screen = QApplication.screenAt(QPoint(rough[0] + _BAR_W // 2, rough[1] + 20))
+        screen = screen or primary
+        if screen is None:
+            return rough
+        return _dock_xy(right, top, float(screen.devicePixelRatio()),
+                        screen.availableGeometry())
+
+    def _follow_browser(self) -> None:
+        """Keep the bar on the browser's corner when the window is moved or resized - unless
+        staff dragged the bar somewhere themselves."""
+        if self._user_moved or not self._hwnd:
+            return
+        try:
+            import ctypes
+            if ctypes.windll.user32.IsIconic(self._hwnd):
+                return                      # minimised: the rect is meaningless
+        except Exception:
+            pass
+        pos = self._dock_position(self._hwnd)
+        if pos is not None and (self.x(), self.y()) != pos:
+            self.move(*pos)
+
+    # ── Dragging (frameless window) ───────────────────────────────────────────
+
+    def _drag_start(self, event: Any) -> bool:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            return True
+        return False
+
+    def mousePressEvent(self, event: Any) -> None:  # noqa: N802 — Qt override
+        if not self._drag_start(event):
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: Any) -> None:  # noqa: N802 — Qt override
+        if self._drag_offset is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            self.move(event.globalPosition().toPoint() - self._drag_offset)
+            self._user_moved = True
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: Any) -> None:  # noqa: N802 — Qt override
+        self._drag_offset = None
+        super().mouseReleaseEvent(event)
+
+    def eventFilter(self, obj: Any, event: Any) -> bool:  # noqa: N802 — Qt override
+        """Let a drag that starts on one of the labels move the window too."""
+        kind = event.type()
+        if kind == QEvent.Type.MouseButtonPress:
+            if self._drag_start(event):
+                return True
+        elif kind == QEvent.Type.MouseMove and self._drag_offset is not None:
+            self.mouseMoveEvent(event)
+            return True
+        elif kind == QEvent.Type.MouseButtonRelease:
+            self._drag_offset = None
+        return super().eventFilter(obj, event)
 
     # ── UI interaction ────────────────────────────────────────────────────────
 
@@ -632,6 +731,7 @@ class TestFillBar(QWidget):
         self._poll_timer.stop()
         self._ttl_timer.stop()
         self._fill_timer.stop()
+        self._dock_timer.stop()
         self._session.close(self._attempt.attempt_id)
         self.close()
 
@@ -640,5 +740,6 @@ class TestFillBar(QWidget):
         self._poll_timer.stop()
         self._ttl_timer.stop()
         self._fill_timer.stop()
+        self._dock_timer.stop()
         self._session.close(self._attempt.attempt_id)
         super().closeEvent(event)

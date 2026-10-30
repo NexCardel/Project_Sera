@@ -18,6 +18,7 @@ from unittest.mock import patch
 
 import pytest
 
+from PySide6.QtCore import QRect
 from PySide6.QtWidgets import QApplication
 
 from ui.components import test_fill_bar as tfb
@@ -267,6 +268,31 @@ def test_without_a_browser_window_the_bar_uses_the_screen_corner(bar):
         pytest.skip("no screen")
     geom = screen.availableGeometry()
     assert (b.x(), b.y()) == (geom.right() - tfb._BAR_W - 16, geom.top() + 16)
+
+
+# ── Positioning: Win32 physical pixels -> Qt logical pixels, kept on screen ────────────────
+
+GEOM = QRect(0, 0, 1920, 1080)
+
+
+def test_dock_xy_uses_the_window_corner_at_100_percent():
+    assert tfb._dock_xy(1920, 0, 1.0, GEOM) == (1920 - tfb._BAR_W - 8, 8)
+
+
+def test_dock_xy_scales_a_high_dpi_window_down():
+    # A 125% display: the maximised window's right edge is 2400 physical px = 1920 logical.
+    assert tfb._dock_xy(2400, 0, 1.25, GEOM) == (1920 - tfb._BAR_W - 8, 8)
+
+
+def test_dock_xy_never_leaves_the_bar_off_screen():
+    x, y = tfb._dock_xy(4000, 0, 1.0, GEOM)
+
+    assert x + tfb._BAR_W <= GEOM.right()
+    assert y >= GEOM.top()
+
+
+def test_dock_xy_tolerates_a_bad_scale():
+    assert tfb._dock_xy(1920, 0, 0, GEOM) == tfb._dock_xy(1920, 0, 1.0, GEOM)
 
 
 # ── automation.sck_fill: one browser only ─────────────────────────────────────────────────
