@@ -70,9 +70,9 @@ def _tracker_history_entries(db) -> list[tuple[Any, str, dict]]:
     for row in rows or []:
         ident = str(row.get("unassigned_identity") or "").strip().upper()
         raw_json_str = row.get("raw_payload_json") or ""
-        orig_author = ""
+        orig_author = str(row.get("original_author") or row.get("payload_original_author") or "").strip()
         pj = {}
-        if raw_json_str:
+        if not orig_author and raw_json_str:
             try:
                 pj = json.loads(raw_json_str) if isinstance(raw_json_str, str) else raw_json_str
                 if isinstance(pj, dict):
@@ -145,12 +145,27 @@ def detect_forms_and_services(db, containers: list | None = None) -> list[dict[s
     # Map canon_form -> (display_form, portal_base, sample_entry)
     detected: dict[str, tuple[str, str, dict]] = {}
 
+    _NON_RETURN_LABELS = {
+        "portal", "gst portal", "income tax portal", "income tax", "gst",
+        "gst return", "gst returns", "gst returns calendar", "gst submission",
+        "dashboard", "returns dashboard", "track return status"
+    }
+
     for c in (containers or []):
         for h in _history_of(c):
             raw = entry_form(h).strip()
             key = canon(raw)
-            if not key:
+            if not key or raw.lower() in _NON_RETURN_LABELS or key in (
+                "PORTAL", "GSTPORTAL", "INCOMETAXPORTAL", "GSTRETURN", "GSTRETURNS",
+                "GSTRETURNSCALENDAR", "GSTSUBMISSION", "DASHBOARD", "RETURNSDASHBOARD", "TRACKRETURNSTATUS"
+            ):
                 continue
+            if key == "GSTRIA":
+                key = "GSTR1A"
+                raw = "GSTR-1A"
+            elif key == "GSTR38":
+                key = "GSTR3B"
+                raw = "GSTR-3B"
             portal_raw = str(h.get("portal") or "")
             base_portal = _portal_base_name(portal_raw)
             if key not in detected or ("-" in raw and "-" not in detected[key][0]):
@@ -597,7 +612,15 @@ def _build_single_row(
                 elif field == "capture_method":
                     row[lbl] = str(h.get("capture_method") or "")
                 elif field == "original_author":
-                    row[lbl] = str(h.get("original_author") or "")
+                    orig_a = str(h.get("original_author") or "").strip()
+                    if not orig_a and h.get("raw_payload_json"):
+                        try:
+                            rp = json.loads(h["raw_payload_json"]) if isinstance(h["raw_payload_json"], str) else h["raw_payload_json"]
+                            if isinstance(rp, dict):
+                                orig_a = str(rp.get("original_author") or rp.get("raw_payload", {}).get("original_author") or "").strip()
+                        except Exception:
+                            pass
+                    row[lbl] = orig_a
                 elif field == "notes":
                     c_note = str(h.get("notes") or "").strip()
                     if not c_note:

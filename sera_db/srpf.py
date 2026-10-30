@@ -65,7 +65,16 @@ def valid_gstin(text) -> str:
 
 def _light_history(hist: list) -> list:
     """A filing history without the (large) raw payload of each filing."""
-    return [{k: v for k, v in h.items() if k != "raw_payload_json"} for h in hist]
+    from sera_db.common import payload_original_author
+    out = []
+    for h in hist:
+        entry = {k: v for k, v in h.items() if k != "raw_payload_json"}
+        if not entry.get("original_author") and h.get("raw_payload_json"):
+            author = payload_original_author(h["raw_payload_json"])
+            if author:
+                entry["original_author"] = author
+        out.append(entry)
+    return out
 
 
 _MONTHS = {m: i + 1 for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"))}
@@ -293,6 +302,8 @@ class SrpfMixin:
         # the registration this filing belongs to (a PAN can hold several GSTINs, each filing its own returns)
         entry_gstin = (valid_gstin(payload_obj.get("gstin") if isinstance(payload_obj, dict) else "")
                        or valid_gstin(new_profile.get("gstin")))
+        from sera_db.common import payload_original_author
+        entry_author = payload_original_author(payload_obj)
 
         if existing:
             # existing schema: (identity_key, client_id, company_name, proprietor_name, pan, gstin, tan, phone, email, dob, user_id, portal_profiles, filing_history, raw_aggregates, total_captures, last_updated)
@@ -346,6 +357,8 @@ class SrpfMixin:
                     hist[matched_idx]["created_at"] = dump_ts
                     if entry_gstin:
                         hist[matched_idx]["gstin"] = entry_gstin
+                    if not hist[matched_idx].get("original_author") and entry_author:
+                        hist[matched_idx]["original_author"] = entry_author
                 else:
                     hist.append({
                         "portal": dump_row.get("portal"),
@@ -356,7 +369,8 @@ class SrpfMixin:
                         "raw_payload_json": payload_str,
                         "captured_by": dump_row.get("captured_by"),
                         "created_at": dump_ts,
-                        "gstin": entry_gstin
+                        "gstin": entry_gstin,
+                        "original_author": entry_author,
                     })
             elif dump_row.get("period_label"):
                 hist.append({
@@ -368,7 +382,8 @@ class SrpfMixin:
                     "raw_payload_json": payload_str,
                     "captured_by": dump_row.get("captured_by"),
                     "created_at": dump_ts,
-                    "gstin": entry_gstin
+                    "gstin": entry_gstin,
+                    "original_author": entry_author,
                 })
 
             hist.sort(key=lambda h: str(h.get("created_at") or ""))
@@ -399,7 +414,8 @@ class SrpfMixin:
                     "raw_payload_json": payload_str,
                     "captured_by": dump_row.get("captured_by"),
                     "created_at": dump_ts,
-                    "gstin": entry_gstin
+                    "gstin": entry_gstin,
+                    "original_author": entry_author,
                 })
             elif dump_row.get("period_label"):
                 hist.append({
@@ -411,7 +427,8 @@ class SrpfMixin:
                     "raw_payload_json": payload_str,
                     "captured_by": dump_row.get("captured_by"),
                     "created_at": dump_ts,
-                    "gstin": entry_gstin
+                    "gstin": entry_gstin,
+                    "original_author": entry_author,
                 })
             r_conn.execute("""
                 INSERT INTO client_raw_containers
@@ -539,6 +556,20 @@ class SrpfMixin:
                WHERE NOT EXISTS (SELECT 1 FROM client_raw_container_light l WHERE l.identity_key = c.identity_key)"""
         ).fetchall()
         for key, raw, total, last_updated in todo:
+            try:
+                hist = json.loads(raw) if raw else []
+            except Exception:
+                hist = []
+            self._write_container_light(r_conn, key, hist, total or 0, last_updated)
+
+        # Also refresh any cached light rows where full filing_history carries original_author but history_light is missing it
+        stale = r_conn.execute(
+            """SELECT c.identity_key, c.filing_history, c.total_captures, c.last_updated
+               FROM client_raw_containers c
+               JOIN client_raw_container_light l ON l.identity_key = c.identity_key
+               WHERE c.filing_history LIKE '%original_author%' AND l.history_light NOT LIKE '%original_author%'"""
+        ).fetchall()
+        for key, raw, total, last_updated in stale:
             try:
                 hist = json.loads(raw) if raw else []
             except Exception:

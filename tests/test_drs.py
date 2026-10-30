@@ -115,8 +115,11 @@ def test_drs_default_columns():
     cols = config.default_drs_columns(db)
     col_labels = [c["label"] for c in cols]
 
-    # Password column must NEVER be exposed
-    assert "Password" not in col_labels
+    # Password / secret column is available in configurable suite, disabled by default
+    assert "Password" in col_labels
+    pwd_col = next(c for c in cols if c["label"] == "Password")
+    assert pwd_col["enabled"] is False
+    assert pwd_col.get("is_secret") is True
 
     # PAN, GSTIN, Name, Fixed columns and Tracker fields present
     assert "PAN" in col_labels
@@ -262,6 +265,26 @@ def test_per_form_column_mapping():
     # Beta Services (uncaptured, whole MCL roster) receives its Master DB client notes
     beta = next(r for r in dataset["GSTR-3B"] if r.get("Client Name") == "Beta Services")
     assert beta.get("Notes") == "Beta client note from Master DB"
+
+
+def test_secret_mcl_column_can_be_enabled_and_flows_to_drs():
+    """MCL columns with 'password' / secret field type appear in config and flow to DRS when enabled."""
+    db = DummyDB()
+    # Add password value to Alpha Traders (MCL column id=4 is 'Password')
+    db._clients[0]["values"][4] = "AlphaSecretPass123"
+
+    cfg = config.load_drs_config(db, detected_forms=["GSTR-3B"])
+    pwd_col = next(c for c in cfg["forms"]["GSTR-3B"]["columns"] if c["label"] == "Password")
+    assert pwd_col["enabled"] is False
+    assert pwd_col.get("is_secret") is True
+
+    # User explicitly enables the Password column
+    pwd_col["enabled"] = True
+    config.save_drs_config(db, cfg)
+
+    dataset = engine.build_drs_dataset(db, config=cfg)
+    alpha = next(r for r in dataset["GSTR-3B"] if r.get("Client Name") == "Alpha Traders")
+    assert alpha.get("Password") == "AlphaSecretPass123"
 
 
 def test_tracker_dump_raw_payload_json_notes_flow_to_drs():
@@ -447,3 +470,166 @@ def test_scheduled_export_debounce():
     assert t2 is not None
     assert t1 is not t2
     t2.cancel()
+
+
+def test_drs_original_author_from_tracker_dump_slim():
+    """Fallback tracker dump path: Original author flows to DRS rows under slim=True."""
+    db = DummyDB()
+    db._containers = []
+    db._tracker_dumps = [{
+        "client_id": 103,
+        "unassigned_identity": "CDEFG3456H",
+        "portal": "GST (GSTR-3B)",
+        "period_label": "September (FY 2026-27)",
+        "arn_number": "AA2709260000099",
+        "status": "Filed",
+        "created_at": "2026-10-20T10:00:00Z",
+        "captured_by": "PC-02",
+        "original_author": "PC-DESK-99",
+        "payload_original_author": "PC-DESK-99",
+        "raw_payload_json": "",  # slim rows have empty raw_payload_json
+    }]
+
+    cfg = config.load_drs_config(db, detected_forms=["GSTR-3B"])
+    for c in cfg["forms"]["GSTR-3B"]["columns"]:
+        if c["label"] == "Original author":
+            c["enabled"] = True
+    config.save_drs_config(db, cfg)
+
+    dataset = engine.build_drs_dataset(db, config=cfg)
+    gamma = next(r for r in dataset["GSTR-3B"] if r.get("Client Name") == "Gamma Industries")
+    assert gamma.get("Original author") == "PC-DESK-99"
+
+
+def test_drs_original_author_from_srpf_container_light():
+    """SRPF container path: Original author preserved in light history and flows to DRS."""
+    db = DummyDB()
+    db._containers = [{
+        "identity_key": "ABCDE1234F",
+        "client_id": 101,
+        "pan": "ABCDE1234F",
+        "gstin": "27ABCDE1234F1Z5",
+        "company_name": "Alpha Traders",
+        "filing_history": [{
+            "portal": "GST (GSTR-3B)",
+            "period_label": "September (FY 2026-27)",
+            "status": "Filed",
+            "arn": "AA2709260000001",
+            "created_at": "2026-10-20T10:00:00Z",
+            "captured_by": "PC-01",
+            "capture_method": "DOM_Tracker",
+            "original_author": "ACCOUNTANT-PC-01",
+        }],
+    }]
+
+    cfg = config.load_drs_config(db, detected_forms=["GSTR-3B"])
+    for c in cfg["forms"]["GSTR-3B"]["columns"]:
+        if c["label"] == "Original author":
+            c["enabled"] = True
+    config.save_drs_config(db, cfg)
+
+    dataset = engine.build_drs_dataset(db, config=cfg)
+    alpha = next(r for r in dataset["GSTR-3B"] if r.get("Client Name") == "Alpha Traders")
+    assert alpha.get("Original author") == "ACCOUNTANT-PC-01"
+
+
+def test_srpf_and_tracker_dump_original_author_flow(tmp_path):
+    """End-to-end SQLite integration: tests that _update_srpf_container, _light_history,
+    and get_tracker_dumps(slim=True) all retain and expose original_author."""
+    import json
+    import sqlite3
+    from sera_db.srpf import SrpfMixin
+    from sera_db.tracker_dump import TrackerDumpMixin
+
+    db_file = str(tmp_path / "rawPayload.db")
+    master_file = str(tmp_path / "master.db")
+
+    class TestFullDB(SrpfMixin, TrackerDumpMixin):
+        def _connect_raw(self):
+            return sqlite3.connect(db_file)
+        def _connect(self):
+            return sqlite3.connect(master_file)
+
+    # Initialize tables
+    with sqlite3.connect(db_file) as r_conn:
+        r_conn.execute("""
+            CREATE TABLE tracker_dump (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, client_id INTEGER, unassigned_identity TEXT,
+                service_id INTEGER, portal TEXT, period_label TEXT, arn_number TEXT,
+                capture_method TEXT, status TEXT, raw_payload_json TEXT, captured_by TEXT,
+                created_at TEXT, dataset_key TEXT, notes TEXT
+            )
+        """)
+        r_conn.execute("""
+            CREATE TABLE client_raw_containers (
+                identity_key TEXT PRIMARY KEY, client_id INTEGER, company_name TEXT,
+                proprietor_name TEXT, pan TEXT, gstin TEXT, tan TEXT, phone TEXT,
+                email TEXT, dob TEXT, user_id TEXT, portal_profiles TEXT, filing_history TEXT,
+                raw_aggregates TEXT, total_captures INTEGER, last_updated TEXT, notes TEXT,
+                screenshot_path TEXT, screenshot_path_2 TEXT
+            )
+        """)
+        r_conn.execute("""
+            CREATE TABLE client_raw_container_light (
+                identity_key TEXT PRIMARY KEY, history_light TEXT, payload_status TEXT,
+                total_captures INTEGER, last_updated TEXT, notes TEXT
+            )
+        """)
+        r_conn.execute("""
+            CREATE TABLE client_container_notes (
+                identity_key TEXT PRIMARY KEY, client_id INTEGER, notes TEXT,
+                screenshot_path TEXT, screenshot_path_2 TEXT, updated_at TEXT
+            )
+        """)
+
+    with sqlite3.connect(master_file) as m_conn:
+        m_conn.execute("CREATE TABLE clients (id INTEGER PRIMARY KEY, is_archived INTEGER DEFAULT 0)")
+
+    db = TestFullDB()
+
+    # 1. Insert a tracker dump record with original_author inside raw_payload_json
+    payload = {
+        "status": "Filed",
+        "arn": "AA2709260000077",
+        "original_author": "OFFICE-PC-77",
+        "raw_payload": {"original_author": "OFFICE-PC-77"},
+    }
+    dump_row = {
+        "portal": "GST (GSTR-3B)",
+        "period_label": "September (FY 2026-27)",
+        "arn_number": "AA2709260000077",
+        "capture_method": "DOM_Tracker",
+        "status": "Filed",
+        "raw_payload_json": json.dumps(payload),
+        "captured_by": "OFFICE-PC-77",
+        "created_at": "2026-10-25T12:00:00Z",
+    }
+    with sqlite3.connect(db_file) as r_conn:
+        r_conn.execute(
+            """INSERT INTO tracker_dump
+               (client_id, unassigned_identity, portal, period_label, arn_number,
+                capture_method, status, raw_payload_json, captured_by, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (None, "ABCDE1234F", dump_row["portal"], dump_row["period_label"],
+             dump_row["arn_number"], dump_row["capture_method"], dump_row["status"],
+             dump_row["raw_payload_json"], dump_row["captured_by"], dump_row["created_at"]),
+        )
+
+    # 2. Check get_tracker_dumps with slim=True
+    slim_dumps = db.get_tracker_dumps(limit=10, slim=True)
+    assert len(slim_dumps) == 1
+    assert slim_dumps[0]["original_author"] == "OFFICE-PC-77"
+    assert slim_dumps[0]["payload_original_author"] == "OFFICE-PC-77"
+
+    # 3. Update SRPF container
+    with sqlite3.connect(db_file) as r_conn:
+        db._update_srpf_container(r_conn, identity_key="ABCDE1234F", client_id=None, dump_row=dump_row)
+
+    # 4. Check get_srpf_containers with slim=True (reading client_raw_container_light)
+    containers = db.get_srpf_containers(limit=10, slim=True)
+    assert len(containers) == 1
+    c = containers[0]
+    hist = c.get("filing_history") or []
+    assert len(hist) == 1
+    assert hist[0]["original_author"] == "OFFICE-PC-77"
+

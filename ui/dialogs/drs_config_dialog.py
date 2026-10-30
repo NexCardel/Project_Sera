@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -63,8 +64,16 @@ class DRSConfigDialog(QDialog):
         self.db = db
         self.app_dir = db.app_dir
         self.setWindowTitle("Deadline Reminder System (DRS) — Configuration")
-        self.setMinimumSize(940, 680)
-        self.resize(980, 720)
+        self.setMinimumSize(860, 480)
+        from PySide6.QtWidgets import QApplication
+        screen = QApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen else None
+        if avail:
+            target_w = min(960, max(860, avail.width() - 40))
+            target_h = min(580, max(480, avail.height() - 70))
+            self.resize(target_w, target_h)
+        else:
+            self.resize(920, 560)
 
         self.setStyleSheet("""
             QDialog {
@@ -180,8 +189,8 @@ class DRSConfigDialog(QDialog):
 
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 22, 24, 20)
-        root.setSpacing(14)
+        root.setContentsMargins(16, 12, 16, 12)
+        root.setSpacing(10)
 
         # Header with Material Icon
         hdr_layout = QHBoxLayout()
@@ -229,7 +238,7 @@ class DRSConfigDialog(QDialog):
         ctrl_bar.addLayout(form_sel_layout)
 
         # Tracker-only Checkbox for this form
-        self.chk_tracker_only = QCheckBox("Extract from tracker dump only (LTT mode: only clients with captures)")
+        self.chk_tracker_only = QCheckBox("Extract from tracker dump only (LTT mode)")
         self.chk_tracker_only.setToolTip(
             "When checked, this return form tab will act like LTT by only displaying clients "
             "with recorded captures in Tracker Dump. Clients without captures are omitted."
@@ -321,14 +330,20 @@ class DRSConfigDialog(QDialog):
         self.forms_card = QFrame()
         self.forms_card.setObjectName("card")
         forms_card_layout = QVBoxLayout(self.forms_card)
-        forms_card_layout.setContentsMargins(12, 12, 12, 12)
-        forms_card_layout.setSpacing(10)
+        forms_card_layout.setContentsMargins(8, 8, 8, 8)
+        forms_card_layout.setSpacing(6)
+
+        forms_scroll = QScrollArea()
+        forms_scroll.setWidgetResizable(True)
+        forms_scroll.setFrameShape(QFrame.NoFrame)
+        forms_scroll.setStyleSheet("background: transparent; border: none;")
+        forms_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         self.lbl_forms_summary = QLabel("Scanning filing history…")
         self.lbl_forms_summary.setWordWrap(True)
-        self.lbl_forms_summary.setStyleSheet("color: #C9D1D9; font-size: 12px; line-height: 1.5;")
-        forms_card_layout.addWidget(self.lbl_forms_summary)
-        forms_card_layout.addStretch()
+        self.lbl_forms_summary.setStyleSheet("color: #C9D1D9; font-size: 12px; line-height: 1.5; background: transparent;")
+        forms_scroll.setWidget(self.lbl_forms_summary)
+        forms_card_layout.addWidget(forms_scroll)
 
         right_box.addWidget(self.forms_card, stretch=1)
 
@@ -336,8 +351,8 @@ class DRSConfigDialog(QDialog):
         info_card = QFrame()
         info_card.setObjectName("card")
         info_card_layout = QVBoxLayout(info_card)
-        info_card_layout.setContentsMargins(12, 12, 12, 12)
-        info_card_layout.setSpacing(6)
+        info_card_layout.setContentsMargins(10, 8, 10, 8)
+        info_card_layout.setSpacing(4)
 
         lbl_info_title = QLabel("DRS Multi-Form Engine")
         lbl_info_title.setStyleSheet("color: #4CF9B7; font-weight: 600; font-size: 12.5px;")
@@ -430,7 +445,8 @@ class DRSConfigDialog(QDialog):
             enabled = bool(col.get("enabled", True))
 
             if ctype == "mcl":
-                badge = "[MCL]"
+                is_sec = col.get("is_secret") or col.get("field_type") == "password"
+                badge = "[MCL: Secret]" if is_sec else "[MCL]"
             elif ctype == "fixed":
                 badge = "[Fixed: DRS Core]"
             elif ctype == "tracker":

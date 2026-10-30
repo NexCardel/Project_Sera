@@ -1251,7 +1251,8 @@ class TrackerDumpMixin:
                          + ", " + self._payload_field_sql("$.client_name", "$.name", "$.taxpayer_name",
                                                           "$.raw_payload.client_name", "$.raw_payload.client_temp_name")
                          + " AS payload_name"
-                         + ", " + self._payload_field_sql("$.raw_payload.recovered_by.tool", "$.recovered_by.tool") + " AS recovered_tool")
+                         + ", " + self._payload_field_sql("$.raw_payload.recovered_by.tool", "$.recovered_by.tool") + " AS recovered_tool"
+                         + ", " + self._payload_field_sql("$.original_author", "$.raw_payload.original_author") + " AS payload_original_author")
             payload_col = "''" if slim else "raw_payload_json"
             sql = ("SELECT id, client_id, unassigned_identity, service_id, portal, "
                    "period_label, arn_number, capture_method, status, "
@@ -1366,7 +1367,22 @@ class TrackerDumpMixin:
                 "created_at": r[11], "dataset_key": r[12] if len(r) > 12 else "", "notes": r[13] if len(r) > 13 else ""
             }
             if slim:
-                row.update({"_slim": True, "payload_status": r[14], "device_name": r[15] or ""})
+                orig_author_val = (r[18] if len(r) > 18 else "") or ""
+                row.update({
+                    "_slim": True,
+                    "payload_status": r[14],
+                    "device_name": r[15] or "",
+                    "original_author": orig_author_val,
+                    "payload_original_author": orig_author_val,
+                })
+            else:
+                orig_author_val = ""
+                if isinstance(p_obj, dict):
+                    orig_author_val = (
+                        p_obj.get("original_author") or
+                        (p_obj.get("raw_payload", {}).get("original_author") if isinstance(p_obj.get("raw_payload"), dict) else "") or ""
+                    )
+                row["original_author"] = orig_author_val
             results.append(row)
 
         # Default chronological entry organisation: latest entry at top

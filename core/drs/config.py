@@ -167,20 +167,24 @@ def default_drs_columns_for_form(db, form_name: str = "", is_gst: bool | None = 
     priority_order = {"pan": 0, "name": 1, "gstin": 2}
     ordered_mcl = []
     rest_mcl = []
+    secret_mcl = []
     for c in mcl_cols:
-        # Never expose password fields in workbooks or exports
-        if c.get("field_type") == "password":
-            continue
         lbl = (c.get("label") or "").strip()
+        ftype = c.get("field_type", "text")
+        is_secret = (ftype == "password")
         col_def = {
             "key": f"mcl:{c['id']}",
             "label": lbl,
             "type": "mcl",
             "mcl_id": c["id"],
-            "field_type": c.get("field_type", "text"),
+            "field_type": ftype,
             "enabled": False,
-            "description": f"Master Client List ({c.get('field_type', 'text')})",
+            "is_secret": is_secret,
+            "description": f"Master Client List ({'Secret' if is_secret else ftype})",
         }
+        if is_secret:
+            secret_mcl.append(col_def)
+            continue
         role = _mcl_role(lbl)
         if role:
             # For non-GST forms, keep GSTIN disabled by default
@@ -196,9 +200,10 @@ def default_drs_columns_for_form(db, form_name: str = "", is_gst: bool | None = 
 
     columns = []
     columns.extend(col_def for _, col_def in ordered_mcl)
+    columns.extend(rest_mcl)
+    columns.extend(secret_mcl)
     columns.extend([dict(f) for f in FIXED_COLUMNS])
     columns.extend([dict(t) for t in TRACKER_FIELDS if t["enabled"]])
-    columns.extend(rest_mcl)
     columns.extend([dict(t) for t in TRACKER_FIELDS if not t["enabled"]])
     return columns
 
@@ -241,11 +246,11 @@ def _reconcile_column_list(saved_cols: list[dict], db) -> list[dict[str, Any]]:
                 continue
             if mcl_id in mcl_cols:
                 c = mcl_cols[mcl_id]
-                if c.get("field_type") == "password":
-                    continue
+                ftype = c.get("field_type", "text")
                 col["label"] = c.get("label", col.get("label", ""))
-                col["field_type"] = c.get("field_type", "text")
+                col["field_type"] = ftype
                 col["mcl_id"] = mcl_id
+                col["is_secret"] = (ftype == "password")
                 result_cols.append(col)
                 seen_keys.add(key)
         elif key.startswith("fixed:"):
@@ -270,22 +275,40 @@ def _reconcile_column_list(saved_cols: list[dict], db) -> list[dict[str, Any]]:
             result_cols.append(dict(f))
             seen_keys.add(f["key"])
 
-    # Append any missing MCL columns (disabled by default)
+    # Locate last MCL column in result_cols to keep MCL columns grouped together
+    last_mcl_idx = -1
+    for i, col in enumerate(result_cols):
+        if col.get("type") == "mcl":
+            last_mcl_idx = i
+
+    missing_mcl = []
+    missing_secrets = []
     for mcl_id, c in mcl_cols.items():
-        if c.get("field_type") == "password":
-            continue
         k = f"mcl:{mcl_id}"
         if k not in seen_keys:
-            result_cols.append({
+            ftype = c.get("field_type", "text")
+            is_secret = (ftype == "password")
+            item = {
                 "key": k,
                 "label": c.get("label", ""),
                 "type": "mcl",
                 "mcl_id": mcl_id,
-                "field_type": c.get("field_type", "text"),
+                "field_type": ftype,
                 "enabled": False,
-                "description": f"Master Client List ({c.get('field_type', 'text')})",
-            })
+                "is_secret": is_secret,
+                "description": f"Master Client List ({'Secret' if is_secret else ftype})",
+            }
+            if is_secret:
+                missing_secrets.append(item)
+            else:
+                missing_mcl.append(item)
             seen_keys.add(k)
+
+    new_mcl_items = missing_mcl + missing_secrets
+    if last_mcl_idx >= 0 and new_mcl_items:
+        result_cols[last_mcl_idx + 1:last_mcl_idx + 1] = new_mcl_items
+    elif new_mcl_items:
+        result_cols.extend(new_mcl_items)
 
     # Append any missing tracker fields (disabled by default)
     for t in TRACKER_FIELDS:
@@ -294,6 +317,21 @@ def _reconcile_column_list(saved_cols: list[dict], db) -> list[dict[str, Any]]:
             item["enabled"] = False
             result_cols.append(item)
             seen_keys.add(t["key"])
+
+    # Reposition any misplaced secret MCL columns that were previously placed after tracker fields
+    misplaced_secrets = [
+        col for col in result_cols
+        if col.get("type") == "mcl" and (col.get("is_secret") or col.get("field_type") == "password")
+        and not col.get("enabled")
+    ]
+    if misplaced_secrets:
+        first_tracker_idx = next((i for i, c in enumerate(result_cols) if c.get("type") == "tracker"), -1)
+        if first_tracker_idx >= 0 and any(result_cols.index(sec) > first_tracker_idx for sec in misplaced_secrets):
+            for sec in misplaced_secrets:
+                result_cols.remove(sec)
+            last_std_mcl = max((i for i, c in enumerate(result_cols) if c.get("type") == "mcl"), default=-1)
+            insert_pos = last_std_mcl + 1 if last_std_mcl >= 0 else 0
+            result_cols[insert_pos:insert_pos] = misplaced_secrets
 
     return result_cols
 
