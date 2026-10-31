@@ -1,8 +1,8 @@
 {
-  "version": "2.13.6",
+  "version": "2.13.7",
   "min_required_version": "2.9.9",
-  "mandatory": false,
-  "download_url": "https://github.com/NexCardel/Project_Sera/releases/download/v2.13.6/Amas_Sera_Setup_v2.13.6.exe",
-  "sha256": "24b0e02ffaff7c894bab4d6056b6ea238db69523df8644b249f7830fef27ccde",
-  "release_notes": "Project Sera v2.13.6 - VSDC background capture & OCR resilience: background window watching, WinRT OCR runner timeout protection, Notes & Media autosave evidence protection, and SCA audit logging"
+  "mandatory": true,
+  "download_url": "https://github.com/NexCardel/Project_Sera/releases/download/v2.13.7/Amas_Sera_Setup_v2.13.7.exe",
+  "sha256": "78beb25e644554b54991740ab45e711dd8ed289a71132e042dd24906d2fd3356",
+  "release_notes": "Project Sera v2.13.7 - Sera Credential Keeper (SCK) Test & Fill card, Firefox companion parity, DRS 768p layout overflow fixes, and original_author tracking propagation"
 }
