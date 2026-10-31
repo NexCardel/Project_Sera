@@ -26,8 +26,8 @@ repeated firing.
 
 While a failure is pending, ``on_outcome(service_id, kind)`` reports a retry rejection
 (``wrong_password`` / ``locked``) and the success transition (``worked``) to the desktop
-Test & Fill bar. A ``worked`` on a dashboard page is reported even with nothing pending, because
-the bar's own idle TTL (restarted by every fill) can outlive the pending failure.
+card. A ``worked`` on a dashboard page is reported even with nothing pending, because the card
+can stay open after its pending failure was cleared or expired.
 
 Reads around the login page
 ---------------------------
@@ -151,12 +151,12 @@ class SckWatcher:
         # card is per service too (one host element), so a second client on the same service
         # would only replace the first one's card.
         self._pending: Dict[int, Tuple[float, SckFailure]] = {}
-        # (service id, outcome kind) -> monotonic time of the last on_outcome call. The desktop
-        # Test & Fill bar needs to hear about a retry rejection and the dashboard transition
-        # while its attempt is open; the page keeps showing the same line, so it must be throttled.
+        # (service id, outcome kind) -> monotonic time of the last on_outcome call. The card
+        # needs to hear about a retry rejection and the dashboard transition while staff are
+        # still working; the page keeps showing the same line, so it must be throttled.
         self._last_outcome: Dict[Tuple[int, str], float] = {}
         # service id -> (kind, line) of the page last read. A rejection line that is still on
-        # screen is not a new rejection: the bar would otherwise call the password it just filled
+        # screen is not a new rejection: the card would otherwise call the password it just filled
         # "rejected" while staff are still solving the CAPTCHA. The line is forgotten as soon as
         # the page shows something else (a submit reloads the page).
         self._last_page_outcome: Dict[int, Tuple[str, str]] = {}
@@ -212,7 +212,7 @@ class SckWatcher:
             cleared = self._clear(sid)
             if cleared is not None:
                 self._send(self._on_clear, cleared)
-            # The desktop bar may still be open after its pending failure was cleared or expired,
+            # The card may still be open after its pending failure was cleared or expired,
             # so the dashboard is also reported as an outcome rather than only through on_clear.
             self._notify(sid, "worked", throttle_sec=10.0)
             return "cleared" if cleared is not None else None
@@ -245,7 +245,7 @@ class SckWatcher:
         if out.kind == "worked":
             # The portal's own wording says the login succeeded (some portals keep the login
             # route and swap the form for a welcome page). The failure is resolved and the
-            # desktop bar saves the candidate it filled.
+            # desktop saves the candidate the card filled.
             cleared = self._clear(sid)
             if cleared is not None:
                 self._send(self._on_clear, cleared)
@@ -253,7 +253,7 @@ class SckWatcher:
             return "cleared" if cleared is not None else None
 
         if pending:
-            # The card already exists; the bar still needs to know a retry was rejected - but
+            # The card already exists; it still needs to know a retry was rejected - but
             # only when the page actually changed, not while the old error line is still shown.
             if out.kind in ("wrong_password", "locked") and not same_page:
                 self._notify(sid, out.kind, throttle_sec=5.0)
@@ -299,7 +299,8 @@ class SckWatcher:
         return hit[1] if hit else None
 
     def _notify(self, sid: int, kind: str, throttle_sec: float) -> None:
-        """Send one page outcome to the desktop bar, at most once per `throttle_sec` per kind."""
+        """Send one page outcome to the desktop (for the card), at most once per `throttle_sec`
+        per kind."""
         if self._on_outcome is None:
             return
         now = self._now()

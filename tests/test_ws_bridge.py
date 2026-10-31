@@ -444,28 +444,60 @@ def test_sck_edit_request_with_no_client_id(bridge):
     assert received[0]["portal"] == "Income Tax"
 
 
-def test_sck_fill_result_reaches_the_desktop(bridge):
+def test_sck_candidate_reaches_the_desktop(bridge):
+    """The card's Fill & Test hands the candidate to the desktop, which saves it on success."""
     received = []
-    bridge.sck_fill_result_received.connect(received.append)
-    bridge.dispatch({"type": "sck_fill_result", "service_id": 3, "ok": True, "reason": ""})
-    assert received == [{"type": "sck_fill_result", "service_id": 3, "ok": True, "reason": ""}]
+    bridge.sck_candidate_received.connect(received.append)
+    bridge.dispatch({
+        "type": "sck_candidate",
+        "service_id": 3,
+        "client_id": 42,
+        "portal": "GST Portal",
+        "password": "s3cret-new",
+    })
+    assert received == [{
+        "type": "sck_candidate",
+        "service_id": 3,
+        "client_id": 42,
+        "portal": "GST Portal",
+        "password": "s3cret-new",
+    }]
 
 
-def test_sck_fill_result_carries_the_reason_and_is_truncated(bridge):
+def test_sck_candidate_without_a_client_id_still_arrives(bridge):
+    """A failure that could not be matched to a client still reaches the card's save path."""
     received = []
-    bridge.sck_fill_result_received.connect(received.append)
-    bridge.dispatch({"type": "sck_fill_result", "service_id": 3, "ok": False,
-                     "reason": "x" * 300})
+    bridge.sck_candidate_received.connect(received.append)
+    bridge.dispatch({"type": "sck_candidate", "service_id": 5, "password": "p",
+                     "portal": "  Income Tax  "})
     assert len(received) == 1
-    assert received[0]["ok"] is False
-    assert received[0]["reason"] == "x" * 100
+    assert received[0]["client_id"] is None
+    assert received[0]["portal"] == "Income Tax"
 
 
-def test_sck_fill_result_without_a_service_id_is_dropped(bridge):
+def test_sck_candidate_accepts_a_password_at_the_bound(bridge):
     received = []
-    bridge.sck_fill_result_received.connect(received.append)
-    bridge.dispatch({"type": "sck_fill_result", "ok": True})
-    bridge.dispatch({"type": "sck_fill_result", "service_id": 0, "ok": True})
+    bridge.sck_candidate_received.connect(received.append)
+    bridge.dispatch({"type": "sck_candidate", "service_id": 3, "password": "x" * 256})
+    assert len(received) == 1
+    assert received[0]["password"] == "x" * 256
+
+
+@pytest.mark.parametrize("msg", [
+    {"type": "sck_candidate", "password": "p"},                        # no service id
+    {"type": "sck_candidate", "service_id": 0, "password": "p"},       # not a positive id
+    {"type": "sck_candidate", "service_id": 3},                        # no password
+    {"type": "sck_candidate", "service_id": 3, "password": ""},        # empty password
+    {"type": "sck_candidate", "service_id": 3, "password": "x" * 257},  # too long
+    {"type": "sck_candidate", "service_id": 3, "password": 5},         # not a string
+    {"type": "sck_candidate", "service_id": 3, "password": "p", "client_id": 0},
+    {"type": "sck_candidate", "service_id": 3, "password": "p", "portal": "x" * 101},
+    {"type": "sck_candidate", "service_id": 3, "password": "p", "portal": 7},
+])
+def test_a_malformed_sck_candidate_is_dropped(bridge, msg):
+    received = []
+    bridge.sck_candidate_received.connect(received.append)
+    bridge.dispatch(msg)
     assert received == []
 
 

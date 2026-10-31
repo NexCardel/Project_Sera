@@ -230,7 +230,7 @@ class FailureDetector:
         self._on_trigger = on_trigger
         self._lock = threading.Lock()
         # Maps client_id -> True once we have fired on_trigger for them,
-        # to avoid double-firing before the rotation bar suppresses them.
+        # to avoid double-firing before the rotation card suppresses them.
         self._pending: Dict[Optional[int], bool] = {}
 
     def observe(
@@ -263,7 +263,7 @@ class FailureDetector:
             return
 
         with self._lock:
-            # Skip if already suppressed (rotation bar is open) or already pending.
+            # Skip if already suppressed (rotation card is open) or already pending.
             if client_id is not None and client_id in self._session.suppressed_clients:
                 return
             if self._pending.get(client_id):

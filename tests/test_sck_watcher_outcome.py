@@ -1,13 +1,13 @@
 """
-SCK: the failed-login watcher's outcome stream for the desktop Test & Fill bar.
+SCK: the failed-login watcher's outcome stream for the new-password card.
 
-The bar is opened by ``on_failure`` and then needs to hear three things while it stays open:
+The card is opened by ``on_failure`` and then needs to hear three things while it stays open:
 
 * ``wrong_password`` when the portal rejects a *retry* (the failure is already pending, so
   ``on_failure`` does not fire again),
 * ``locked`` for the same reason,
 * ``worked`` when the service's dashboard page is reached - with or without a pending failure,
-  because the bar's own idle TTL can outlive the pending failure.
+  because the card can stay open after its pending failure was cleared or expired.
 
 These tests use a fake rule set so the wording of the portal's pages never matters here.
 """
@@ -102,7 +102,7 @@ def _reload(h):
     h.watcher.observe(_obs(LOGIN), hwnd=1)
 
 
-def test_pending_retry_rejection_is_reported_to_the_bar():
+def test_pending_retry_rejection_is_reported_to_the_card():
     h = _Harness()
     h.rules.next = _Outcome("wrong_password")
     h.watcher.observe(_obs(LOGIN), hwnd=1)
@@ -117,7 +117,7 @@ def test_pending_retry_rejection_is_reported_to_the_bar():
     assert h.outcomes == [(7, "wrong_password")]
 
 
-def test_pending_locked_is_reported_to_the_bar():
+def test_pending_locked_is_reported_to_the_card():
     h = _Harness()
     h.rules.next = _Outcome("wrong_password")
     h.watcher.observe(_obs(LOGIN), hwnd=1)
@@ -175,7 +175,7 @@ def test_dashboard_clears_and_reports_worked():
 
 
 def test_dashboard_reports_worked_without_a_pending_failure():
-    """The bar can still be open after its pending failure was cleared: no failure fires now."""
+    """The card can still be open after its pending failure was cleared: no failure fires now."""
     h = _Harness()
 
     h.watcher.observe(_obs(DASHBOARD), hwnd=1)
@@ -219,7 +219,7 @@ def test_outcome_errors_never_break_detection():
     h.watcher.observe(_obs(LOGIN), hwnd=1)
 
     def boom(sid, kind):
-        raise RuntimeError("bar gone")
+        raise RuntimeError("card gone")
 
     h.watcher._on_outcome = boom
     h.clock.now += 10.0

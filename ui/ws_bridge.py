@@ -137,6 +137,38 @@ def _clean_sck_password(msg: dict) -> Optional[dict]:
     }
 
 
+def _clean_sck_candidate(msg: dict) -> Optional[dict]:
+    """Validate the candidate the card filled, before the desktop holds it in memory.
+
+    Same bounds as ``_clean_sck_password``: the password is 1-256 chars and lives only in the
+    returned dict (the caller stores it in a private in-memory map, never in a setting, log or
+    audit line). A malformed page message is dropped whole.
+    """
+    service_id = _as_positive_int(msg.get("service_id"))
+    if service_id is None:
+        return None
+    password = msg.get("password")
+    if not isinstance(password, str) or not 1 <= len(password) <= 256:
+        return None
+    client_id = msg.get("client_id")
+    if client_id in (None, ""):
+        client_id = None
+    else:
+        client_id = _as_positive_int(client_id)
+        if client_id is None:
+            return None
+    portal = msg.get("portal") or ""
+    if not isinstance(portal, str) or len(portal) > 100:
+        return None
+    return {
+        "type": "sck_candidate",
+        "service_id": service_id,
+        "client_id": client_id,
+        "portal": portal.strip(),
+        "password": password,
+    }
+
+
 class WSBridge(QObject):
     # Fed only by core/vsdc's filing_captured signal (SGT/VSDC desktop capture), connected
     # directly to main.py's _handle_extension_result - not by anything over this websocket.
@@ -159,14 +191,12 @@ class WSBridge(QObject):
     # SCK: staff pressed the ✎ edit button on SMTI / MECP / SCA widget to update a
     # password without a detected failure.  {service_id, client_id, portal}
     sck_edit_requested = Signal(dict)
-    # SCK: the browser finished (or refused) a "fill the password field" request from the
-    # desktop Test & Fill bar. {service_id, ok, reason}
-    sck_fill_result_received = Signal(dict)
-    # SCK: internal only - the failed-login watcher runs on SCC-U's thread and must ask the
-    # Qt thread to create the desktop bar. Carries the bar's arguments as a dict.
-    sck_bar_requested = Signal(dict)
-    # SCK: internal only - one page outcome from the watcher (SCC-U's thread) for the desktop
-    # bar. (service_id, kind) where kind is worked / wrong_password / locked.
+    # SCK: the card's Fill & Test succeeded. The browser hands the candidate password to the
+    # desktop (memory only) so a login that succeeds after the page navigates can still be saved.
+    # Carries the password - the handler must never log, print or store the message.
+    sck_candidate_received = Signal(dict)
+    # SCK: internal only - one page outcome from the watcher (SCC-U's thread), marshalled to the
+    # Qt thread. (service_id, kind) where kind is worked / wrong_password / locked.
     sck_outcome_received = Signal(object, str)
     extension_settings_updated_received = Signal(dict)
 
@@ -471,14 +501,10 @@ class WSBridge(QObject):
                 self.sck_edit_requested.emit({
                     "type": mtype, "service_id": service_id,
                     "client_id": client_id, "portal": portal.strip()})
-        elif mtype == "sck_fill_result":
-            service_id = _as_positive_int(msg.get("service_id"))
-            if service_id is not None:
-                reason = msg.get("reason") or ""
-                self.sck_fill_result_received.emit({
-                    "type": mtype, "service_id": service_id,
-                    "ok": bool(msg.get("ok")),
-                    "reason": reason.strip()[:100] if isinstance(reason, str) else ""})
+        elif mtype == "sck_candidate":
+            clean = _clean_sck_candidate(msg)
+            if clean is not None:
+                self.sck_candidate_received.emit(clean)
         elif mtype == "extension_settings_updated":
             self.extension_settings_updated_received.emit(msg)
         elif mtype in ("request_settings", "get_settings"):

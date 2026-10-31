@@ -211,9 +211,10 @@ class SeraApp:
         # that arrive before the handlers are connected are held (see WSBridge.mark_ready).
         from ui import ws_bridge as _ws_bridge_module
         self.bridge = WSBridge(self.app)
-        # SCK desktop Test & Fill bars, one per service: service_id -> TestFillBar. Owned by the
-        # Qt thread; the failed-login watcher asks for one through sck_bar_requested.
-        self._sck_bars = {}
+        # SCK candidates the card filled, held in memory only: service_id -> {password, client_id,
+        # portal}. The desktop saves one when the watcher sees the login succeed, even if the page
+        # has navigated and the card is gone. Never written to a setting, log or audit line.
+        self._sck_candidates = {}
         self.app.aboutToQuit.connect(self.bridge.stop)
         self.bridge.start(chrome_manifest_path=self._permanent_extension_dir / "manifest.json")
         _ws_bridge_module.set_active_bridge(self.bridge)
@@ -638,9 +639,8 @@ class SeraApp:
         self.bridge.sck_save_password_received.connect(self._handle_sck_save_password)
         self.bridge.sck_widget_closed_received.connect(self._handle_sck_widget_closed)
         self.bridge.sck_edit_requested.connect(self._handle_sck_edit_requested)
-        self.bridge.sck_fill_result_received.connect(self._handle_sck_fill_result)
-        self.bridge.sck_bar_requested.connect(self._open_sck_bar)
-        self.bridge.sck_outcome_received.connect(self._deliver_sck_outcome)
+        self.bridge.sck_candidate_received.connect(self._handle_sck_candidate)
+        self.bridge.sck_outcome_received.connect(self._handle_sck_outcome)
         self.bridge.extension_settings_updated_received.connect(self._handle_extension_settings_updated)
         self.bridge.settings_provider = self._get_extension_settings_payload
         self.bridge.sca_password_requested.connect(self._handle_sca_password_request)
@@ -1454,32 +1454,23 @@ class SeraApp:
         return watcher
 
     def _sck_show(self, failure):
-        """SCC-U's thread: a login was refused. Ask the Qt thread to open (or nudge) the desktop
-        Test & Fill bar for this service. The in-browser card is only the fallback."""
+        """SCC-U's thread: a login was refused. Ask every connected browser to show the
+        new-password card for this service. The card is the only SCK widget: it fills through the
+        extension, and the desktop holds the candidate until the outcome is known."""
+        import automation
         try:
-            self.bridge.sck_bar_requested.emit({
-                "service": dict(getattr(failure, "service", {}) or {}),
-                "service_id": getattr(failure, "service_id", None),
-                "client_id": getattr(failure, "client_id", None),
-                "client_name": getattr(failure, "client_name", "") or "",
-                "portal": getattr(failure, "portal", "") or "",
-                "pan": getattr(failure, "pan", "") or "",
-                "hwnd": int(getattr(failure, "hwnd", 0) or 0),
-            })
+            automation.show_sck_widget(
+                dict(getattr(failure, "service", {}) or {}),
+                getattr(failure, "client_id", None),
+                getattr(failure, "client_name", "") or "",
+                getattr(failure, "portal", "") or "")
         except Exception as exc:
             print(f"[main._sck_show error] {type(exc).__name__}")
-            import automation
-            automation.show_sck_widget(failure.service, failure.client_id, failure.client_name,
-                                       failure.portal)
 
     def _sck_hide(self, failure):
-        """SCC-U's thread: the service's dashboard page was reached. Tell an open bar the login
-        worked; the bar saves the candidate it filled. The in-browser card manages its own
-        confirmation/save timer and notifies desktop via sck_widget_done when closed."""
-        try:
-            self.bridge.sck_outcome_received.emit(getattr(failure, "service_id", None), "worked")
-        except Exception:
-            pass
+        """SCC-U's thread: the service's dashboard page was reached. The watcher also reports
+        "worked" as an outcome; the card closes itself and the desktop saves the candidate."""
+        return
 
     def _sck_outcome(self, service_id, kind):
         """SCC-U's thread: one page outcome (worked / wrong_password / locked) for this service.
@@ -1489,145 +1480,109 @@ class SeraApp:
         except Exception:
             pass
 
-    # ── SCK desktop Test & Fill bar (Qt thread) ─────────────────────────────────
+    # ── SCK card (Qt thread) ────────────────────────────────────────────────────
 
-    def _sck_bar(self, service_id):
-        """The open Test & Fill bar for this service, or None. Qt thread only."""
-        bars = getattr(self, "_sck_bars", None)
-        if not bars:
-            return None
-        return bars.get(service_id)
-
-    def _open_sck_bar(self, req: dict):
-        """Qt thread: open the desktop Test & Fill bar for a refused login, or nudge the bar that
-        is already open for the service. Falls back to the in-browser card if the bar cannot be
-        built, so a failure is never silently dropped."""
-        if not isinstance(req, dict):
-            return
-        service_id = req.get("service_id")
-        service = dict(req.get("service") or {})
-
-        existing = self._sck_bar(service_id)
-        if existing is not None:
-            self._sck_reset_outcome(service_id)
-            existing.deliver_outcome("wrong_password")
-            existing.show()
-            existing.raise_()
-            return
-
-        if service_id is None or not service:
-            self._sck_fallback_card(req)
-            return
-
-        try:
-            from ui.components.test_fill_bar import TestFillBar
-            bar = TestFillBar(
-                db=self.db,
-                client_id=req.get("client_id"),
-                pan=str(req.get("pan") or ""),
-                portal=str(req.get("portal") or service.get("name") or ""),
-                hwnd=int(req.get("hwnd") or 0),
-                client_name=str(req.get("client_name") or ""),
-                actor_fn=lambda: getattr(self, "actor", "Staff"),
-                service=service,
-                on_fill_started=lambda: self._sck_reset_outcome(service_id),
-            )
-        except Exception as exc:
-            print(f"[main._open_sck_bar error] {type(exc).__name__}")
-            self._sck_fallback_card(req)
-            return
-
-        if not hasattr(self, "_sck_bars") or self._sck_bars is None:
-            self._sck_bars = {}
-        self._sck_bars[service_id] = bar
-        bar.rotation_succeeded.connect(
-            lambda cid, _pan, _portal, sid=service_id: self._on_sck_bar_saved(sid, cid))
-        bar.rotation_failed.connect(
-            lambda _cid, _pan, _portal, _reason, sid=service_id: self._on_sck_bar_closed(sid))
-        # WA_DeleteOnClose: the C++ object is gone after close, so drop our reference then too.
-        bar.destroyed.connect(lambda *_a, sid=service_id: self._sck_bars.pop(sid, None))
-
-        # One surface per service: take the in-browser card down so staff see only the bar.
-        try:
-            import automation
-            automation.hide_sck_widget(service_id)
-        except Exception:
-            pass
-
-        bar.show()
-        bar.raise_()
-        bar.activateWindow()
-
-    def _sck_fallback_card(self, req: dict):
-        """Show the in-browser new-password card when the desktop bar is not available."""
-        import automation
-        try:
-            automation.show_sck_widget(req.get("service") or {}, req.get("client_id"),
-                                       str(req.get("client_name") or ""),
-                                       str(req.get("portal") or ""))
-        except Exception as exc:
-            print(f"[main._sck_fallback_card error] {type(exc).__name__}")
-
-    def _on_sck_bar_saved(self, service_id, client_id=None):
-        """Qt thread: the bar confirmed the login and saved the password itself. Toast + refresh,
-        then let the next failure on this service fire."""
-        bar = self._sck_bars.pop(service_id, None) if getattr(self, "_sck_bars", None) else None
-        watcher = getattr(self, "_sck_watcher", None)
-        if watcher is not None:
-            watcher.mark_resolved(service_id, client_id)
-        result = getattr(bar, "last_save", None) if bar is not None else None
-        if result is not None:
-            self._after_sck_save(result)
-
-    def _on_sck_bar_closed(self, service_id):
-        """Qt thread: the bar closed without a save (dismissed, idle timeout, account locked).
-        The next failed login on this service may open a fresh bar."""
-        if getattr(self, "_sck_bars", None):
-            self._sck_bars.pop(service_id, None)
-        watcher = getattr(self, "_sck_watcher", None)
-        if watcher is not None:
-            watcher.mark_resolved(service_id)
-
-    def _deliver_sck_outcome(self, service_id, kind):
-        """Qt thread: hand one page outcome to the bar open for this service (if any)."""
+    def _handle_sck_outcome(self, service_id, kind):
+        """Qt thread: show one page outcome on the card, and act on it. "worked" saves the
+        candidate the card filled; "locked" forgets it."""
         kind = str(kind or "")
         if not kind:
             return
-        bar = self._sck_bar(service_id)
-        if bar is not None:
-            bar.deliver_outcome(kind)
-
-    def _sck_reset_outcome(self, service_id):
-        """Qt thread: a new attempt started for this service, so its next page outcome must not
-        be swallowed by the previous attempt's throttle."""
-        watcher = getattr(self, "_sck_watcher", None)
-        if watcher is None:
-            return
+        import automation
         try:
-            watcher.reset_outcome_throttle(service_id)
+            automation.sck_outcome(service_id, kind)
+        except Exception:
+            pass
+        if kind == "worked":
+            self._save_sck_candidate(service_id)
+        elif kind == "locked":
+            self._sck_clear_candidate(service_id)
+
+    def _handle_sck_candidate(self, msg: dict):
+        """Qt thread: the card filled a password. Keep it in memory only, so a success that
+        arrives after the page has navigated can still be saved."""
+        service_id = msg.get("service_id")
+        password = msg.get("password") or ""
+        if service_id is None or not password:
+            return
+        self._sck_candidates[service_id] = {
+            "password": password,
+            "client_id": msg.get("client_id"),
+            "portal": str(msg.get("portal") or ""),
+        }
+        watcher = getattr(self, "_sck_watcher", None)
+        if watcher is not None:
+            try:
+                watcher.reset_outcome_throttle(service_id)
+            except Exception:
+                pass
+
+    def _sck_clear_candidate(self, service_id):
+        """Qt thread: forget the in-memory candidate for this service."""
+        try:
+            self._sck_candidates.pop(service_id, None)
         except Exception:
             pass
 
-    def _handle_sck_fill_result(self, msg: dict):
-        """Qt thread: the extension finished (or refused) a fill request from the bar."""
-        bar = self._sck_bar(msg.get("service_id"))
-        if bar is None:
+    def _save_sck_candidate(self, service_id):
+        """Qt thread: the login succeeded. Save the candidate the card filled, if there is one.
+        The password is never logged; the save itself records metadata only."""
+        held = self._sck_candidates.pop(service_id, None)
+        if not held:
             return
-        if msg.get("ok"):
-            bar.deliver_outcome("fill_ok")
+        self._save_sck_password(
+            service_id=service_id,
+            password=held.get("password") or "",
+            client_id=held.get("client_id"),
+            portal=str(held.get("portal") or ""))
+
+    def _save_sck_password(self, service_id, password, client_id, portal):
+        """Qt thread: write one SCK password to the vault, tell the card, and refresh the views.
+        The password is never logged, printed or stored anywhere but the vault."""
+        import automation
+        from core.rotation import save_verified_for_rotation
+
+        password = str(password or "")
+        portal = str(portal or "").strip()
+        service = {}
+        try:
+            service = self.db.get_service(service_id) or {}
+        except Exception:
+            service = {}
+        portal = portal or str(service.get("name") or "")
+
+        if not client_id:
+            automation.sck_save_result(service_id, False,
+                                       "Sera could not tell which client this login belongs to. "
+                                       "Copy the client's ID first, then try again.")
             return
-        reason = str(msg.get("reason") or "").strip().lower()
-        if reason == "no_tab":
-            message = "Open the portal's login page in the browser, then press Fill & Test."
-        elif reason == "no_dom":
-            message = ("The Sera extension is out of date. Reload it in the browser, then try again.")
-        elif "password field" in reason or reason in ("no_field", "frame"):
-            message = ("Could not find the password box on the portal page. Open the portal's "
-                       "password step (Income Tax: enter the PAN, press Continue), then press "
-                       "Fill & Test again.")
-        else:
-            message = "Could not fill the password. Reload the login page and try again."
-        bar.deliver_outcome({"kind": "fill_failed", "message": message})
+
+        try:
+            result = save_verified_for_rotation(
+                db=self.db, password=password, pan="", client_id=int(client_id),
+                portal=portal, actor=getattr(self, "actor", "Staff"),
+                service_id=service_id, method="SCK-Widget")
+        except Exception as exc:
+            print(f"[main._save_sck_password error] {type(exc).__name__}")
+            automation.sck_save_result(service_id, False, "The password could not be saved. Try again.")
+            return
+        finally:
+            password = ""       # noqa: F841 - drop our copy as soon as the write is done
+
+        if result is None:
+            automation.sck_save_result(service_id, False,
+                                       "This service has no password column in the vault. "
+                                       "Set one in Services.")
+            return
+
+        what = {"saved": "New password saved", "replaced": "Saved password replaced",
+                "verified": "Password already saved"}.get(result.outcome, "Password saved")
+        automation.sck_save_result(service_id, True, what)
+        automation.hide_sck_widget(service_id)
+        watcher = getattr(self, "_sck_watcher", None)
+        if watcher is not None:
+            watcher.mark_resolved(service_id, result.client_id)
+        self._after_sck_save(result)
 
     def _sck_resolve_client(self, service: dict, obs):
         """(client_id | None, display name) for a failed login: the PAN/GSTIN SGT read on the page,
@@ -1677,19 +1632,8 @@ class SeraApp:
     def _handle_sck_save_password(self, msg: dict):
         """SCK: the new password staff typed into the card. Runs on the Qt thread and never writes
         the message anywhere - no print, no audit detail, no log."""
-        import automation
-        from core.rotation import save_verified_for_rotation
-
         service_id = msg.get("service_id")
         password = msg.get("password") or ""
-        portal = str(msg.get("portal") or "").strip()
-        service = {}
-        try:
-            service = self.db.get_service(service_id) or {}
-        except Exception:
-            service = {}
-        portal = portal or str(service.get("name") or "")
-
         client_id = msg.get("client_id")
         if not client_id:
             arm_id = str(msg.get("arm_id") or "")
@@ -1699,39 +1643,8 @@ class SeraApp:
                     client_id = watcher.client_for_arm(arm_id)
                 except Exception:
                     client_id = None
-
-        if not client_id:
-            automation.sck_save_result(service_id, False,
-                                       "Sera could not tell which client this login belongs to. "
-                                       "Copy the client's ID first, then try again.")
-            return
-
-        try:
-            result = save_verified_for_rotation(
-                db=self.db, password=password, pan="", client_id=int(client_id),
-                portal=portal, actor=getattr(self, "actor", "Staff"),
-                service_id=service_id, method="SCK-Widget")
-        except Exception as exc:
-            print(f"[main._handle_sck_save_password error] {type(exc).__name__}")
-            automation.sck_save_result(service_id, False, "The password could not be saved. Try again.")
-            return
-        finally:
-            password = ""       # noqa: F841 - drop our copy as soon as the write is done
-
-        if result is None:
-            automation.sck_save_result(service_id, False,
-                                       "This service has no password column in the vault. "
-                                       "Set one in Services.")
-            return
-
-        what = {"saved": "New password saved", "replaced": "Saved password replaced",
-                "verified": "Password already saved"}.get(result.outcome, "Password saved")
-        automation.sck_save_result(service_id, True, what)
-        automation.hide_sck_widget(service_id)
-        watcher = getattr(self, "_sck_watcher", None)
-        if watcher is not None:
-            watcher.mark_resolved(service_id, result.client_id)
-        self._after_sck_save(result)
+        self._sck_clear_candidate(service_id)
+        self._save_sck_password(service_id, password, client_id, msg.get("portal") or "")
 
     def _after_sck_save(self, result):
         """Qt thread: toast + the same refresh SCC's save does. `result` is a RotationSave."""
@@ -1749,13 +1662,15 @@ class SeraApp:
 
     def _handle_sck_widget_closed(self, msg: dict):
         """The browser card closed itself: staff pressed x ("dismissed") or the service's dashboard
-        page was reached ("dashboard"). Either way the next failure on that service may fire -
-        unless the desktop bar owns this service, in which case the bar decides."""
+        page was reached ("dashboard"). On the dashboard the login worked, so save the candidate
+        the card filled (if the watcher did not already save it). Either way the next failure on
+        that service may fire."""
         import automation
         service_id = msg.get("service_id")
+        if str(msg.get("reason") or "") == "dashboard":
+            self._save_sck_candidate(service_id)
+        self._sck_clear_candidate(service_id)
         automation.hide_sck_widget(service_id)
-        if self._sck_bar(service_id) is not None:
-            return
         watcher = getattr(self, "_sck_watcher", None)
         if watcher is not None:
             watcher.mark_resolved(service_id)

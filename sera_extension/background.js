@@ -267,10 +267,10 @@ function handleDesktopMessage(message) {
     handleSckFailure(message);
   } else if (message.type === "sck_clear") {
     handleSckClear(message.service_id);
-  } else if (message.type === "sck_result") {
+  } else if (message.type === "sck_result" || message.type === "sck_save_result") {
     handleSckResult(message);
-  } else if (message.type === "sck_fill") {
-    handleSckFill(message);
+  } else if (message.type === "sck_outcome") {
+    handleSckOutcome(message);
   } else if (message.type === "update_settings") {
     const sca = message.sca_enabled !== false;
     const scaMode = message.sca_mode || "autofill";
@@ -1728,6 +1728,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ status: "ok" });
     return true;
   }
+  if (msg.type === "SCK_FILL_REQUEST") {
+    return handleSckFillRequest(msg, sender, sendResponse);
+  }
   if (msg.type === "SCK_SAVE_PASSWORD") {
     sendToDesktop({
       type: "sck_save_password",
@@ -1969,11 +1972,36 @@ function handleSckResult(message) {
   }));
 }
 
-// ── SCK: fill the portal's password field from the desktop Test & Fill bar ────────────────
-// SCK does not have its own field rules: it runs SCA's fillPasswordInPage (sca/sca_coordinator.js)
-// with sera_dom.js injected first, so the portal's box is found and set exactly the way SCA's
-// autofill does it. Never navigates and never submits: staff still solve the CAPTCHA and press
-// Login.
+// One page outcome (worked / wrong_password / locked) from the desktop watcher: the card shows
+// it, and on "worked" the desktop saves the candidate it is holding.
+function handleSckOutcome(message) {
+  const sid = String(message.service_id == null ? "" : message.service_id);
+  const payload = {
+    type: "SERA_SCK_OUTCOME",
+    service_id: message.service_id,
+    kind: String(message.kind || "")
+  };
+  const tabId = sckCardTabs.get(sid);
+  if (tabId !== undefined) {
+    try {
+      chrome.tabs.sendMessage(tabId, payload, () => { if (chrome.runtime.lastError) {} });
+      return;
+    } catch (_) {}
+  }
+  chrome.tabs.query({}, tabs => (tabs || []).forEach(t => {
+    if (!t || typeof t.id !== "number") return;
+    try {
+      chrome.tabs.sendMessage(t.id, payload, () => { if (chrome.runtime.lastError) {} });
+    } catch (_) {}
+  }));
+}
+
+// ── SCK: fill the portal's password field for the card ───────────────────────────────────
+// The card is the only SCK widget: it asks here, and this runs SCA's fillPasswordInPage
+// (sca/sca_coordinator.js) with sera_dom.js injected first, so the portal's box is found and
+// set exactly the way SCA's autofill does it. Never navigates and never submits: staff still
+// solve the CAPTCHA and press Login. The candidate is handed to the desktop in memory so it can
+// save it when the login succeeds, even if the page has navigated by then.
 function _sckRunFill(tabId, password, passwordSelector, armId, waitMs) {
   const fill = self.SeraSCA && self.SeraSCA.fillPasswordInPage;
   if (typeof fill !== "function") return Promise.resolve(null);
@@ -1992,63 +2020,43 @@ function _sckRunFill(tabId, password, passwordSelector, armId, waitMs) {
     });
 }
 
-function _sckFillReply(serviceId, ok, reason) {
-  sendToDesktop({ type: "sck_fill_result", service_id: serviceId, ok: !!ok,
-                  reason: String(reason || "") }, false);
-}
-
-function _sckFillHost(link) {
-  const parts = _sckUrlParts(link);
-  return parts && parts.host ? parts.host : "";
-}
-
-// Desktop asked the bar's password to be put into the portal tab staff are looking at.
-function handleSckFill(message) {
+// The card's Fill & Test. It runs in the card's own tab, so no tab hunting is needed; the
+// candidate is also sent to the desktop (memory only) so a login that succeeds after the page
+// navigates can still be saved.
+function handleSckFillRequest(message, sender, sendResponse) {
   const sid = String(message.service_id == null ? "" : message.service_id);
   const password = typeof message.password === "string" ? message.password : "";
-  if (!sid || !password) return;
-  const wantHost = _sckFillHost(message.url || "");
+  const tabId = sender && sender.tab && typeof sender.tab.id === "number" ? sender.tab.id : null;
+  if (!sid || !password || tabId === null) {
+    sendResponse({ ok: false, reason: "no_tab" });
+    return true;
+  }
   const portal = String(message.portal || "");
-
-  chrome.tabs.query({}, tabs => {
-    const matches = [];
-    (tabs || []).forEach(tab => {
-      if (!tab || typeof tab.id !== "number" || !tab.url) return;
-      const cur = _sckUrlParts(tab.url);
-      if (!cur) return;
-      const applies = wantHost
-        ? (cur.host === wantHost || cur.host.endsWith("." + wantHost) || wantHost.endsWith("." + cur.host))
-        : _sckPortalMatchesHost(cur.host, portal);
-      if (applies) matches.push(tab);
-    });
-    if (!matches.length) { _sckFillReply(sid, false, "no_tab"); return; }
-
-    // The tab staff just failed the login in is the active one; fall back to the card's tab.
-    const cardTabId = sckCardTabs.get(sid);
-    const target = matches.find(t => t.active) ||
-                   matches.find(t => t.id === cardTabId) ||
-                   matches[0];
-
-    // A fresh armId per attempt, so staff pressing Fill & Test again is never blocked by SCA's
-    // "already filled on this page" guard; the all-frames retry reuses it, so a frame that was
-    // already filled by this attempt is not filled twice.
-    const armId = "sck:" + sid + ":" + Date.now();
-    _sckRunFill(target.id, password, message.password_selector || "", armId, 3000)
-      .then(res => {
-        if (res && res.filled) {
-          _sckFillReply(sid, true, "");
-          try { chrome.tabs.update(target.id, { active: true }); } catch (_) {}
-          try {
-            if (target.windowId !== undefined) chrome.windows.update(target.windowId, { focused: true });
-          } catch (_) {}
-        } else if (res === null) {
-          _sckFillReply(sid, false, "no_dom");
-        } else {
-          _sckFillReply(sid, false, (res && res.reason) || "no_field");
-        }
-      })
-      .catch(() => _sckFillReply(sid, false, "no_field"));
-  });
+  // A fresh armId per attempt, so staff pressing Fill & Test again is never blocked by SCA's
+  // "already filled on this page" guard; the all-frames retry reuses it, so a frame that was
+  // already filled by this attempt is not filled twice.
+  const armId = "sck:" + sid + ":" + Date.now();
+  _sckRunFill(tabId, password, message.password_selector || "", armId, 3000)
+    .then(async res => {
+      if (res && res.filled) {
+        let held = false;
+        try {
+          held = !!(await sendToDesktop({
+            type: "sck_candidate",
+            service_id: message.service_id,
+            client_id: message.client_id == null ? null : message.client_id,
+            portal: portal.slice(0, 100),
+            password: password
+          }, false));
+        } catch (_) {}
+        sendResponse({ ok: true, held: held });
+        return;
+      }
+      if (res === null) sendResponse({ ok: false, reason: "no_dom" });
+      else sendResponse({ ok: false, reason: (res && res.reason) || "no_field" });
+    })
+    .catch(() => sendResponse({ ok: false, reason: "no_field" }));
+  return true;
 }
 
 function maybeReinjectSck(tabId, url) {
@@ -2135,7 +2143,7 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
     const vpW = window.innerWidth || document.documentElement.clientWidth || 1280;
     const vpH = window.innerHeight || document.documentElement.clientHeight || 800;
     const cardW = 340;
-    const cardH = 260;
+    const cardH = 270;
     const pad = 24;
 
     const obstacles = [];
@@ -2280,6 +2288,12 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
         box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45), 0 0 0 0 rgba(217, 58, 78, 0);
       }
     }
+    @keyframes sck-shake {
+      0%, 100% { transform: translateX(0); }
+      20%, 60% { transform: translateX(-6px); }
+      40%, 80% { transform: translateX(6px); }
+    }
+    .card.shake { animation: sck-shake 0.45s ease-in-out; }
     .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
     .badge { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px;
       color: #FFB3BE; background: rgba(217, 58, 78, 0.20); border: 1px solid rgba(255, 122, 140, 0.45);
@@ -2302,14 +2316,23 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
       border: none; cursor: pointer; color: #C89AA2; padding: 4px; display: flex; align-items: center;
       justify-content: center; border-radius: 4px; line-height: 1; }
     .eye-btn:hover { color: #FFFFFF; }
-    .btn-save { display: flex; align-items: center; justify-content: center; width: 100%; margin-top: 10px;
-      padding: 9px 12px; font-size: 13px; font-weight: 700; color: #FFFFFF; background: #C42F44;
-      border: 1px solid #E5484D; border-radius: 8px; cursor: pointer; box-sizing: border-box; }
-    .btn-save:hover { background: #D93A4E; }
-    .btn-save:disabled { background: #3A2025; color: #A58088; border-color: #4A2931; cursor: default; }
+    .btn-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; width: 100%; box-sizing: border-box; }
+    .btn-fill { flex: 1.15; display: flex; align-items: center; justify-content: center;
+      padding: 9px 10px; font-size: 13px; font-weight: 700; color: #FFFFFF; background: #C42F44;
+      border: 1px solid #E5484D; border-radius: 8px; cursor: pointer; box-sizing: border-box;
+      transition: background 0.15s ease, border-color 0.15s ease; }
+    .btn-fill:hover { background: #D93A4E; }
+    .btn-fill:disabled { background: #3A2025; color: #A58088; border-color: #4A2931; cursor: default; }
+    .btn-save { flex: 0.95; display: flex; align-items: center; justify-content: center;
+      padding: 9px 10px; font-size: 12.5px; font-weight: 600; color: #E8C3CA; background: #25141A;
+      border: 1px solid #5A2631; border-radius: 8px; cursor: pointer; box-sizing: border-box;
+      transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease; }
+    .btn-save:hover { background: #331A22; color: #FFFFFF; border-color: #7A3542; }
+    .btn-save:disabled { background: #1C1115; color: #6E5359; border-color: #381E24; cursor: default; }
     .status { font-size: 12px; line-height: 1.3; margin-top: 9px; min-height: 15px; color: #C9A6AD; }
-    .status.ok { color: #5EE0A0; }
-    .status.err { color: #FF8A97; }
+    .status.ok { color: #5EE0A0; font-weight: 600; }
+    .status.err { color: #FF8A97; font-weight: 600; }
+    .status.info { color: #FFD166; }
     .dash-progress-wrap { width: 100%; height: 3px; background: rgba(255, 255, 255, 0.12);
       border-radius: 2px; overflow: hidden; margin-top: 10px; display: none; }
     .dash-progress-wrap.active { display: block; }
@@ -2388,10 +2411,22 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
   };
   pwdWrap.append(pwd, eyeBtn);
 
+  const btnRow = document.createElement("div");
+  btnRow.className = "btn-row";
+
+  const fillBtn = document.createElement("button");
+  fillBtn.className = "btn-fill";
+  fillBtn.textContent = "Fill & Test";
+  fillBtn.title = "Fill this password on the portal to test it";
+  fillBtn.disabled = true;
+
   const saveBtn = document.createElement("button");
   saveBtn.className = "btn-save";
-  saveBtn.textContent = "Save new password";
+  saveBtn.textContent = "Save Directly";
+  saveBtn.title = "Save this password to Sera vault without testing";
   saveBtn.disabled = true;
+
+  btnRow.append(fillBtn, saveBtn);
 
   const status = document.createElement("div");
   status.className = "status";
@@ -2406,6 +2441,9 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
   let dashTimeout = null;
   let dashStarted = false;
   let idleTimer = null;
+  let candidatePassword = "";
+  let candidateFilled = false;
+  let candidateHeld = false;
 
   function stopHeartbeat() {
     if (idleTimer) clearTimeout(idleTimer);
@@ -2431,6 +2469,13 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
   function setStatus(text, cls) {
     status.textContent = text || "";
     status.className = "status" + (cls ? " " + cls : "");
+  }
+
+  function triggerShake() {
+    card.classList.remove("shake");
+    void card.offsetWidth;
+    card.classList.add("shake");
+    setTimeout(() => card.classList.remove("shake"), 500);
   }
 
   function removeCard() {
@@ -2459,38 +2504,72 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
     }, 60000);
   }
 
-  const onMsg = (msg) => {
-    if (!msg || !host.isConnected) {
-      try { chrome.runtime.onMessage.removeListener(onMsg); } catch (_) {}
-      return;
+  function handleDashboardReached() {
+    if (done) return;
+    if (candidatePassword && candidateFilled) {
+      setStatus("✓ Login succeeded! Saving new password…", "ok");
     }
-    if (msg.type === "SERA_SCK_RESULT" && String(msg.service_id) === String(serviceId)) {
-      if (msg.ok) {
-        done = true;
-        pwd.disabled = true;
-        saveBtn.disabled = true;
-        saveBtn.textContent = "Saved";
-        setStatus(msg.message || "New password saved", "ok");
-        setTimeout(removeCard, 1500);
-      } else {
-        saveBtn.textContent = "Save new password";
-        saveBtn.disabled = !pwd.value;
-        setStatus(msg.message || "The password could not be saved.", "err");
-      }
-    } else if (msg.type === "SERA_SCK_CLEAR" && String(msg.service_id) === String(serviceId)) {
-      removeCard();
-    }
-  };
-  try { chrome.runtime.onMessage.addListener(onMsg); } catch (_) {}
+    startDashboardCountdown();
+  }
 
-  pwd.addEventListener("input", () => {
-    if (!done && hasClient) saveBtn.disabled = !pwd.value;
-  });
-  saveBtn.onclick = () => {
+  function doFillAndTest() {
     if (done || !hasClient || !pwd.value) return;
+    const val = pwd.value;
+    candidatePassword = val;
+    candidateFilled = false;
+    candidateHeld = false;
+    fillBtn.disabled = true;
     saveBtn.disabled = true;
+    fillBtn.textContent = "Filling…";
+    setStatus("Locating password field on portal…");
+
+    try {
+      chrome.runtime.sendMessage({
+        type: "SCK_FILL_REQUEST",
+        service_id: serviceId,
+        client_id: clientId,
+        portal: portal,
+        password: val
+      }, (res) => {
+        fillBtn.textContent = "Fill & Test";
+        fillBtn.disabled = !pwd.value;
+        saveBtn.disabled = !pwd.value;
+        if (res && res.ok) {
+          candidateFilled = true;
+          candidateHeld = !!res.held;
+          setStatus("✓ Password filled. Complete CAPTCHA & submit to test.", "ok");
+          return;
+        }
+        const reason = String((res && res.reason) || "");
+        let message = "Could not find the password field on the page.";
+        if (reason === "no_tab") {
+          message = "Open the portal's login page in the browser, then press Fill & Test.";
+        } else if (reason === "no_dom") {
+          message = "The Sera extension is out of date. Reload it in the browser, then try again.";
+        } else if (reason === "no_field" || reason.indexOf("password field") >= 0) {
+          message = "Could not find the password box on the portal page. Open the portal's " +
+                    "password step (Income Tax: enter the PAN, press Continue), then press " +
+                    "Fill & Test again.";
+        }
+        setStatus(message, "err");
+        triggerShake();
+      });
+    } catch (_) {
+      fillBtn.textContent = "Fill & Test";
+      fillBtn.disabled = !pwd.value;
+      saveBtn.disabled = !pwd.value;
+      setStatus("Sera is not connected. Try again.", "err");
+      triggerShake();
+    }
+  }
+
+  function doSaveDirectly() {
+    if (done || !hasClient || !pwd.value) return;
+    candidatePassword = pwd.value;
+    saveBtn.disabled = true;
+    fillBtn.disabled = true;
     saveBtn.textContent = "Saving…";
-    setStatus("Saving…");
+    setStatus("Saving to Sera Vault…");
     try {
       chrome.runtime.sendMessage({
         type: "SCK_SAVE_PASSWORD",
@@ -2500,17 +2579,98 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
         password: pwd.value
       });
     } catch (_) {
-      saveBtn.textContent = "Save new password";
+      saveBtn.textContent = "Save Directly";
       saveBtn.disabled = false;
+      fillBtn.disabled = false;
       setStatus("Sera is not connected. Try again.", "err");
+      triggerShake();
+    }
+  }
+
+  const onMsg = (msg) => {
+    if (!msg || !host.isConnected) {
+      try { chrome.runtime.onMessage.removeListener(onMsg); } catch (_) {}
+      return;
+    }
+    if (String(msg.service_id) !== String(serviceId)) return;
+
+    if (msg.type === "SERA_SCK_RESULT") {
+      if (msg.ok) {
+        done = true;
+        pwd.disabled = true;
+        fillBtn.disabled = true;
+        saveBtn.disabled = true;
+        saveBtn.textContent = "Saved";
+        fillBtn.textContent = "✓ Verified";
+        setStatus(msg.message || "✓ New password saved to Sera Vault", "ok");
+        setTimeout(removeCard, 1800);
+      } else {
+        fillBtn.textContent = "Fill & Test";
+        saveBtn.textContent = "Save Directly";
+        fillBtn.disabled = !pwd.value;
+        saveBtn.disabled = !pwd.value;
+        setStatus(msg.message || "The password could not be saved.", "err");
+        triggerShake();
+      }
+    } else if (msg.type === "SERA_SCK_OUTCOME") {
+      const kind = String(msg.kind || "");
+      if (kind === "wrong_password") {
+        fillBtn.textContent = "Fill & Test";
+        saveBtn.textContent = "Save Directly";
+        fillBtn.disabled = !pwd.value;
+        saveBtn.disabled = !pwd.value;
+        setStatus("✕ Portal rejected this password. Check and try another.", "err");
+        triggerShake();
+      } else if (kind === "worked") {
+        // The desktop holds the candidate and saves it. If it could not be handed over, the
+        // card saves it itself so a success is never lost.
+        if (candidatePassword && candidateFilled && !candidateHeld) {
+          try {
+            chrome.runtime.sendMessage({
+              type: "SCK_SAVE_PASSWORD",
+              service_id: serviceId,
+              client_id: clientId,
+              portal: portal,
+              password: candidatePassword
+            });
+          } catch (_) {}
+        }
+        handleDashboardReached();
+      } else if (kind === "locked") {
+        fillBtn.disabled = true;
+        saveBtn.disabled = true;
+        pwd.disabled = true;
+        setStatus("✕ Account locked. Ceasing attempts.", "err");
+        triggerShake();
+        setTimeout(removeCard, 3500);
+      }
+    } else if (msg.type === "SERA_SCK_CLEAR") {
+      removeCard();
     }
   };
+  try { chrome.runtime.onMessage.addListener(onMsg); } catch (_) {}
+
+  pwd.addEventListener("input", () => {
+    const hasVal = !done && hasClient && !!pwd.value;
+    fillBtn.disabled = !hasVal;
+    saveBtn.disabled = !hasVal;
+  });
+  pwd.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !done && hasClient && pwd.value) {
+      e.preventDefault();
+      doFillAndTest();
+    }
+  });
+
+  fillBtn.onclick = doFillAndTest;
+  saveBtn.onclick = doSaveDirectly;
+
   closeBtn.onclick = () => {
     try { chrome.runtime.sendMessage({ type: "SCK_DISMISSED", service_id: serviceId }); } catch (_) {}
     removeCard();
   };
 
-  parts.push(label, pwdWrap, saveBtn, status, progressWrap);
+  parts.push(label, pwdWrap, btnRow, status, progressWrap);
   card.append(...parts);
   shadow.append(style, card);
   document.body.appendChild(host);
@@ -2522,14 +2682,14 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
   }, 40);
 
   if (onDashboard()) {
-    startDashboardCountdown();
+    handleDashboardReached();
   }
 
   const dashWatch = setInterval(() => {
     if (!host.isConnected) { clearInterval(dashWatch); return; }
     if (onDashboard()) {
       clearInterval(dashWatch);
-      startDashboardCountdown();
+      handleDashboardReached();
     }
   }, 1200);
 }
