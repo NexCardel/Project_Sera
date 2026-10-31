@@ -584,6 +584,9 @@ class SchemaMixin:
             self._ensure_column(conn, "services", "arn_selector", "TEXT")
             self._ensure_column(conn, "services", "automation_mode_2", "TEXT DEFAULT ''")
             self._ensure_column(conn, "services", "browser", "TEXT DEFAULT ''")
+            # SCK: the portal's logged-in / welcome page. The new-password card leaves when this
+            # page is reached, so SCK knows where its widget belongs and where it ends.
+            self._ensure_column(conn, "services", "dashboard_page_link", "TEXT")
             conn.execute("UPDATE services SET automation_mode = 'extension' WHERE automation_mode IN ('automated', 'playwright')")
 
             # 6. Client Services (Attachment table)

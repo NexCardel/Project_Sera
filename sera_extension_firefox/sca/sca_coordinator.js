@@ -83,6 +83,10 @@
   // Runs in the login page's frame (extension's isolated world). Waits for a visible password
   // box, fills it, returns {filled, reason}. Only a real password box (or the portal's
   // configured selector) is ever filled.
+  //
+  // SCK's desktop bar uses this same function, so the portal field rules cannot drift apart:
+  // on that path sera_dom.js is injected first and findField() is used (it also knows the
+  // "show password" box, which the portal's eye switches to type=text).
   async function fillPasswordInPage(pwd, configuredSelector, armId, waitMs) {
     if (window.__seraScaFilledArm === armId) {
       return { filled: false, reason: "already filled on this page for this copy" };
@@ -96,7 +100,29 @@
         return r.width > 0 && r.height > 0;
       } catch (_) { return true; }
     };
+    // Flutter portals (TRACES) draw their form after the HTML shell loads; the real input lives
+    // in a hidden editing host.
+    const flutterInput = () => {
+      try {
+        const host = document.querySelector("flt-text-editing-host");
+        if (host) { const inp = host.querySelector("input, textarea"); if (inp) return inp; }
+        const pane = document.querySelector("flt-glass-pane");
+        if (pane && pane.shadowRoot) {
+          const inp = pane.shadowRoot.querySelector("flt-text-editing-host input, flt-text-editing-host textarea");
+          if (inp) return inp;
+        }
+      } catch (_) {}
+      return null;
+    };
     const find = () => {
+      // One field rule for Sera's DOM work (present on SCK's fill path only).
+      const dom = window.__seraDom;
+      if (dom && typeof dom.findField === "function") {
+        try {
+          const hit = dom.findField(document, "pass", configuredSelector || "", [], "");
+          if (hit && visible(hit)) return hit;   // SCA's own disabled/read-only rule still applies
+        } catch (_) {}
+      }
       if (configuredSelector) {
         try {
           for (const el of document.querySelectorAll(configuredSelector)) {
@@ -107,7 +133,7 @@
       for (const el of document.querySelectorAll("input[type='password']")) {
         if (visible(el)) return el;
       }
-      return null;
+      return flutterInput();
     };
     const deadline = Date.now() + (waitMs || 30000);
     let field = find();
@@ -118,7 +144,9 @@
     if (!field) return { filled: false, reason: "no visible password field" };
     try { field.focus(); } catch (_) {}
     try {
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+      const proto = field.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype
+                                                : window.HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, "value").set;
       setter.call(field, pwd);
     } catch (_) { field.value = pwd; }
     field.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
@@ -132,7 +160,7 @@
   // password SCC has not verified (`note` says so; only this click can release it). When the
   // password box is in this frame the card waits for it (Income Tax: PAN page -> Continue ->
   // password page) instead of appearing on the PAN page and timing out.
-  function showWidgetInPage(armId, serviceId, fieldFrameId, bizName, ownName, portalName, note) {
+  function showWidgetInPage(armId, serviceId, fieldFrameId, bizName, ownName, portalName, note, clientId) {
     if (window.self !== window.top) return;
     const hostId = "sera-sca-widget-host";
     if (document.getElementById(hostId) || window.__seraScaCardFor === armId) return;
@@ -186,7 +214,20 @@
       const closeBtn = document.createElement("button");
       closeBtn.className = "close-btn";
       closeBtn.textContent = "✕";
-      header.append(badge, closeBtn);
+      // SCK: staff can request a new password even without a detected failure
+      const editBtn = document.createElement("button");
+      editBtn.className = "close-btn";
+      editBtn.textContent = "\u270e";
+      editBtn.title = "Enter a new password";
+      editBtn.onclick = () => {
+        try {
+          chrome.runtime.sendMessage({ type: "SCK_EDIT_REQUEST",
+            client_id: clientId == null ? null : clientId,
+            service_id: serviceId == null ? null : serviceId,
+            portal: portalName || "" });
+        } catch (_) {}
+      };
+      header.append(badge, editBtn, closeBtn);
       const title = document.createElement("div");
       title.className = "title";
       title.textContent = bizName || "Client";
@@ -468,7 +509,8 @@
             func: showWidgetInPage,
             args: [a.arm_id, service.service_id, frameId, a.business_name || "", a.owner_name || "",
                    service.name || "Portal",
-                   service.needs_confirm ? "This password has not been verified by SCC yet. Inject it only if you expect it to work." : ""],
+                   service.needs_confirm ? "This password has not been verified by SCC yet. Inject it only if you expect it to work." : "",
+                   a.client_id == null ? null : a.client_id],
           });
         } catch (_) { busy.delete(key); return "widget-failed"; }
         return "widget-shown";

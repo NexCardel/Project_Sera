@@ -272,6 +272,7 @@ _P_BACKUP    = 9
 _P_PURGE     = 10
 _P_TRACKER   = 11
 _P_SCREENTIME = 12
+_P_SCK       = 13
 
 _PAGE_MAP = {
     "general":  _P_GENERAL,
@@ -287,9 +288,10 @@ _PAGE_MAP = {
     "purge":    _P_PURGE,
     "tracker":  _P_TRACKER,
     "screentime": _P_SCREENTIME,
+    "sck":      _P_SCK,
 }
 
-_SETTINGS_PAGES = {_P_GENERAL, _P_ACTIONS, _P_SCC, _P_MAIN_VIS, _P_QC, _P_ADMIN_VIS, _P_TRACKER}
+_SETTINGS_PAGES = {_P_GENERAL, _P_ACTIONS, _P_SCC, _P_MAIN_VIS, _P_QC, _P_ADMIN_VIS, _P_TRACKER, _P_SCK}
 
 
 # ── Main Dialog ───────────────────────────────────────────────────────────────
@@ -344,6 +346,7 @@ class UnifiedSettingsDialog(QDialog):
             _P_PURGE: self._build_page_purge,
             _P_TRACKER: self._build_page_tracker,
             _P_SCREENTIME: self._build_page_screentime,
+            _P_SCK: self._build_page_sck,
         }
         self._page_widgets = {}
 
@@ -547,6 +550,7 @@ class UnifiedSettingsDialog(QDialog):
         _item("mdi.cog-outline",            "General",            _P_GENERAL)
         _item("mdi.gesture-tap-button",     "Action Buttons",     _P_ACTIONS)
         _item("mdi.shield-key-outline",     "SCC Vault Presets",  _P_SCC)
+        _item("mdi.key-change",             "Credential Keeper",  _P_SCK)
         _item("mdi.radar",                  "Tracker",            _P_TRACKER)
         _item("mdi.timer-outline",          "Screentime",         _P_SCREENTIME)
 
@@ -1001,6 +1005,90 @@ class UnifiedSettingsDialog(QDialog):
 
         lay.addStretch()
         return _wrap_scroll(w)
+
+    # ── SCK (Sera Credential Keeper) ──────────────────────────────────────────
+    def _build_page_sck(self) -> QScrollArea:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 28)
+        lay.setSpacing(0)
+
+        lay.addWidget(_page_header("Sera Credential Keeper",
+            "When a portal refuses a saved password, Sera asks for the new one in a persistent card "
+            "on the portal's own login page. Each service's links decide where the card is shown and "
+            "when it goes away."))
+
+        self.sck_check = QCheckBox()
+        self.sck_check.setChecked(True)
+        lay.addWidget(_setting_row("Enable Sera Credential Keeper",
+            "Detect failed portal logins and ask for the new password in the browser. Works "
+            "independently of Detect login automatically.",
+            self.sck_check))
+
+        lay.addWidget(_sub_header("Login and dashboard pages"))
+        lay.addWidget(_setting_row("Where the card lives",
+            "Login page: the portal page where a refused password is seen and the card is shown. "
+            "Dashboard / welcome page: the page reached after a successful login - the card "
+            "disappears there. A blank link means the service's home page of that flow.",
+            None))
+
+        self.sck_link_edits = {}
+        self._sck_services = {}
+        try:
+            services = self.db.get_services() or []
+        except Exception:
+            services = []
+        if not services:
+            empty = QLabel("No services are registered yet. Add one under Services first.")
+            empty.setStyleSheet(f"font-size: 12px; color: {_TEXT_SEC}; padding: 16px 28px;")
+            empty.setWordWrap(True)
+            lay.addWidget(empty)
+        for svc in services:
+            sid = svc.get("id")
+            if sid is None:
+                continue
+            self._sck_services[sid] = svc
+            lay.addWidget(self._sck_service_block(svc))
+
+        self.sck_check.toggled.connect(self._on_control_changed)
+        lay.addStretch()
+        return _wrap_scroll(w)
+
+    def _sck_service_block(self, svc: dict) -> QWidget:
+        """One service's two links. Plain QLineEdits: nothing is written until Save."""
+        w = QWidget()
+        w.setStyleSheet("background: transparent;")
+        v = QVBoxLayout(w)
+        v.setContentsMargins(28, 14, 28, 14)
+        v.setSpacing(6)
+
+        title = QLabel(str(svc.get("name") or "Service"))
+        title.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {_TEXT_PRI};")
+        v.addWidget(title)
+
+        def _line(text: str, value, placeholder: str):
+            row = QHBoxLayout()
+            row.setSpacing(10)
+            lbl = QLabel(text)
+            lbl.setFixedWidth(160)
+            lbl.setStyleSheet(f"font-size: 11.5px; color: {_TEXT_SEC};")
+            edit = QLineEdit()
+            edit.setPlaceholderText(placeholder)
+            edit.setText(str(value or ""))
+            edit.textChanged.connect(self._on_control_changed)
+            row.addWidget(lbl)
+            row.addWidget(edit, stretch=1)
+            return row, edit
+
+        login_row, login_edit = _line("Login page", svc.get("login_page_link"),
+                                      "https://portal.example/login")
+        dash_row, dash_edit = _line("Dashboard / welcome page", svc.get("dashboard_page_link"),
+                                    "https://portal.example/dashboard")
+        v.addLayout(login_row)
+        v.addLayout(dash_row)
+        v.addWidget(_divider())
+        self.sck_link_edits[svc["id"]] = (login_edit, dash_edit)
+        return w
 
     def _build_page_mcl(self) -> QWidget:
         container = QWidget()
@@ -1534,6 +1622,13 @@ class UnifiedSettingsDialog(QDialog):
             state["scc_opt4_label"] = getattr(self, "scc_opt4_label_edit", QLineEdit()).text()
             state["scc_opt4_str"] = getattr(self, "scc_opt4_str_edit", QLineEdit()).text()
 
+        if hasattr(self, "sck_check"):
+            state["sck_enabled"] = self.sck_check.isChecked()
+            state["sck_links"] = {
+                sid: (login_edit.text(), dash_edit.text())
+                for sid, (login_edit, dash_edit) in getattr(self, "sck_link_edits", {}).items()
+            }
+
         if hasattr(self, "vsdc_check"):
             state["vsdc_enabled"] = self.vsdc_check.isChecked()
             state["vsdc_x_enabled"] = self.vsdc_x_check.isChecked()
@@ -1650,6 +1745,16 @@ class UnifiedSettingsDialog(QDialog):
             if hasattr(self, "scc_opt4_str_edit"):
                 self.scc_opt4_str_edit.setText(g("scc_opt4_fixed_str", ""))
 
+        if self._pending("sck", "sck_check", force):
+            self.sck_check.setChecked(
+                str(g("sck_enabled", "1")).strip().lower() in ("1", "true", "on", "yes"))
+            self._sck_links_loaded = {}
+            for sid, (login_edit, dash_edit) in getattr(self, "sck_link_edits", {}).items():
+                svc = getattr(self, "_sck_services", {}).get(sid) or {}
+                login_edit.setText(str(svc.get("login_page_link") or ""))
+                dash_edit.setText(str(svc.get("dashboard_page_link") or ""))
+                self._sck_links_loaded[sid] = (login_edit.text().strip(), dash_edit.text().strip())
+
         if self._pending("actions", "show_hide_check", force):
             self.show_hide_check.setChecked(g("show_hide_btn_enabled", "1") == "1")
 
@@ -1735,6 +1840,16 @@ class UnifiedSettingsDialog(QDialog):
                     bulk_settings["scc_opt4_label"] = self.scc_opt4_label_edit.text().strip() or "Combo 4"
                 if hasattr(self, "scc_opt4_str_edit"):
                     bulk_settings["scc_opt4_fixed_str"] = self.scc_opt4_str_edit.text()
+
+            if hasattr(self, "sck_check"):
+                bulk_settings["sck_enabled"] = b(self.sck_check)
+                loaded = getattr(self, "_sck_links_loaded", {})
+                for sid, (login_edit, dash_edit) in getattr(self, "sck_link_edits", {}).items():
+                    now = (login_edit.text().strip(), dash_edit.text().strip())
+                    if loaded.get(sid) != now:
+                        self.db.update_service_links(sid, now[0], now[1])
+                        loaded[sid] = now
+                self._sck_links_loaded = loaded
 
             if hasattr(self, "show_hide_check"):
                 bulk_settings["show_hide_btn_enabled"]      = b(self.show_hide_check)

@@ -263,6 +263,14 @@ function handleDesktopMessage(message) {
     closeSccCard(message.attempt_id);
   } else if (message.type === "scc_card_update") {
     updateSccCard(message);
+  } else if (message.type === "sck_failed_login") {
+    handleSckFailure(message);
+  } else if (message.type === "sck_clear") {
+    handleSckClear(message.service_id);
+  } else if (message.type === "sck_result" || message.type === "sck_save_result") {
+    handleSckResult(message);
+  } else if (message.type === "sck_outcome") {
+    handleSckOutcome(message);
   } else if (message.type === "update_settings") {
     const sca = message.sca_enabled !== false;
     const scaMode = message.sca_mode || "autofill";
@@ -475,7 +483,10 @@ if (SERA_DEBUG) console.log('Sera: background.js module loaded, registering list
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:') || tab.url.startsWith('chrome-extension://')) return;
   // Show Manual Assist again after a reload (e.g. invalid password) in the tab SMTI opened only.
-  if (changeInfo.status === 'complete') maybeReinjectManualAssist(tabId);
+  if (changeInfo.status === 'complete') {
+    maybeReinjectManualAssist(tabId);
+    maybeReinjectSck(tabId, tab.url);
+  }
 });
 
 // Fill function injected into the page
@@ -793,7 +804,7 @@ function handleAutofillTab(message) {
   });
 }
 
-function manualAssistWidget(userid, password, usernameSelector, passwordSelector, clientName, expiresMs, clearSeconds) {
+function manualAssistWidget(userid, password, usernameSelector, passwordSelector, clientName, expiresMs, clearSeconds, clientId, serviceId, portal) {
   try {
     if (window.self !== window.top) return;
   } catch (_) {
@@ -1135,7 +1146,21 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   closeBtn.title = "Dismiss";
   closeBtn.onclick = dismiss;
 
-  header.append(badge, closeBtn);
+  // SCK: enter a new password for this client even when no failure was detected.
+  const editBtn = document.createElement("button");
+  editBtn.className = "close-btn";
+  editBtn.innerHTML = "✎";
+  editBtn.title = "Enter a new password";
+  editBtn.onclick = () => {
+    try {
+      chrome.runtime.sendMessage({ type: "SCK_EDIT_REQUEST",
+        client_id: clientId == null ? null : clientId,
+        service_id: serviceId == null ? null : serviceId,
+        portal: portal || "" });
+    } catch (_) {}
+  };
+
+  header.append(badge, editBtn, closeBtn);
 
   // Client Title
   const title = document.createElement("div");
@@ -1613,7 +1638,10 @@ function injectManualAssist(tabId, message, force = false) {
   clipboardClearSeconds()
     .then(clearSecs => injectWithDom({ tabId }, manualAssistWidget,
       [message.userid, message.password, message.username_selector, message.password_selector,
-        message.client_name || message.portal, 30000, clearSecs]))
+        message.client_name || message.portal, 30000, clearSecs,
+        message.client_id == null ? null : message.client_id,
+        message.service_id == null ? null : message.service_id,
+        message.portal || ""]))
     .then(() => { if (SMTI_DEBUG) console.log(`[SMTI DEBUG] injectManualAssist: widget injected OK into tab ${tabId}`); })
     .catch(err => console.error(`[SMTI DEBUG] injectManualAssist: executeScript FAILED on tab ${tabId} (page may block scripting, e.g. chrome:// or a PDF viewer):`, err));
 }
@@ -1686,6 +1714,50 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   // A staff click on "This one worked" on the SCC card; the label is the row's name, never its text.
+  // SCK: staff pressed the ✎ edit button in the SMTI / MECP / SCA widget — they want
+  // to update the client's password without a detected failure.  No password is sent
+  // here; the desktop responds by opening the SCK card on the login page.
+  if (msg.type === "SCK_EDIT_REQUEST") {
+    if (sender && sender.tab && typeof sender.tab.id === "number") {
+      _sckLastEditTab = sender.tab.id;
+    }
+    const sid = msg.service_id == null ? null : msg.service_id;
+    const cid = msg.client_id  == null ? null : msg.client_id;
+    sendToDesktop({ type: "sck_edit_request", service_id: sid, client_id: cid,
+                    portal: String(msg.portal || "") });
+    sendResponse({ status: "ok" });
+    return true;
+  }
+  if (msg.type === "SCK_FILL_REQUEST") {
+    return handleSckFillRequest(msg, sender, sendResponse);
+  }
+  if (msg.type === "SCK_SAVE_PASSWORD") {
+    sendToDesktop({
+      type: "sck_save_password",
+      service_id: msg.service_id,
+      client_id: msg.client_id,
+      portal: msg.portal || "",
+      password: msg.password || ""
+    });
+    sendResponse({ status: "ok" });
+    return true;
+  }
+  if (msg.type === "SCK_DISMISSED") {
+    const sid = msg.service_id == null ? "" : String(msg.service_id);
+    sckCardTabs.delete(sid);
+    sendToDesktop({ type: "sck_dismissed", service_id: msg.service_id }, false);
+    sendResponse({ status: "ok" });
+    return true;
+  }
+  // The card's 60-second dashboard confirmation ran out: it closed itself. Same handling as a
+  // dismissal, but the reason is "dashboard" so the desktop can tell them apart.
+  if (msg.type === "SCK_DASHBOARD") {
+    const sid = msg.service_id == null ? "" : String(msg.service_id);
+    sckCardTabs.delete(sid);
+    sendToDesktop({ type: "sck_widget_done", service_id: msg.service_id }, false);
+    sendResponse({ status: "ok" });
+    return true;
+  }
   if (msg.type === "scc_row_worked" && msg.attempt_id && msg.row_label) {
     sendToDesktop({ type: "scc_row_worked", attempt_id: String(msg.attempt_id), row_label: String(msg.row_label) }, false);
     sendResponse({ status: "ok" });
@@ -1736,7 +1808,893 @@ function updateSccCard(message) {
   } catch (_) {}
 }
 
-function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos, clearSeconds, attemptId) {
+// ---------------- SCK (Sera Credential Keeper) Widget ----------------
+// One persistent card per service. It carries no password and no countdown: it stays until the
+// desktop clears it (saved / dismissed) or the service's dashboard page is reached. Payloads live
+// in _passwordStore (memory only) and never contain a password.
+
+const sckCardTabs = new Map();
+let _sckLastEditTab = null;          // service_id -> tabId showing the card (this worker run)
+const _lastSckInject = {};              // "<tabId>:<service_id>" -> last inject time
+
+function _sckUrlParts(raw) {
+  try {
+    const u = new URL(raw);
+    let route = (u.pathname || "").replace(/\/+$/, "");
+    const frag = (u.hash || "").replace(/^#\/?/, "").replace(/\/+$/, "");
+    if (frag) route += "#" + frag;
+    return { host: (u.hostname || "").toLowerCase().replace(/^www\./, ""), route: route };
+  } catch (_) {
+    return null;
+  }
+}
+
+function sckUrlApplies(rawUrl, link) {
+  const cur = _sckUrlParts(rawUrl), ref = _sckUrlParts(link);
+  if (!cur || !ref || !ref.host) return false;
+  const hostMatch = cur.host === ref.host || cur.host.endsWith("." + ref.host) || ref.host.endsWith("." + cur.host);
+  if (!hostMatch) return false;
+  return !ref.route || cur.route === ref.route || cur.route.indexOf(ref.route + "/") === 0;
+}
+
+function _sckPortalMatchesHost(host, portal) {
+  if (!host || !portal) return false;
+  const p = String(portal).toLowerCase();
+  const h = String(host).toLowerCase();
+  if (p.includes("income") || p.includes("itr") || p.includes("eportal")) {
+    return h === "incometax.gov.in" || h.endsWith(".incometax.gov.in");
+  }
+  if (p.includes("gst")) {
+    return h === "gst.gov.in" || h.endsWith(".gst.gov.in");
+  }
+  if (p.includes("trace") || p.includes("tds")) {
+    return h === "tdscpc.gov.in" || h.endsWith(".tdscpc.gov.in") || h === "traces.gov.in" || h.endsWith(".traces.gov.in");
+  }
+  return false;
+}
+
+function sckOnDashboard(rawUrl, dashboardLink) {
+  return !!dashboardLink && sckUrlApplies(rawUrl, dashboardLink);
+}
+
+function removeSckFromTab(tabId) {
+  if (typeof tabId !== "number") return;
+  try {
+    chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => { const h = document.getElementById("sera-sck-host"); if (h) h.remove(); }
+    }, () => { if (chrome.runtime.lastError) {} });
+  } catch (_) {}
+}
+
+function injectSck(tabId, payload) {
+  const sid = String((payload && payload.service_id) || "");
+  if (typeof tabId !== "number" || !sid) return;
+  const key = tabId + ":" + sid;
+  const now = Date.now();
+  if (_lastSckInject[key] && (now - _lastSckInject[key]) < 1200) return;
+  _lastSckInject[key] = now;
+  sckCardTabs.set(sid, tabId);
+  injectWithDom({ tabId }, sckWidget, [
+    payload.service_id,
+    payload.client_id,
+    payload.client_name || "",
+    payload.portal || "",
+    payload.login_page_link || "",
+    payload.dashboard_page_link || ""
+  ]).catch(err => { if (SERA_DEBUG) console.warn("Sera: SCK injection failed", err); });
+}
+
+function injectSckEverywhere(payload) {
+  if (!payload) return;
+  const link = (payload.login_page_link || "").trim();
+  chrome.tabs.query({}, tabs => {
+    (tabs || []).forEach(tab => {
+      if (!tab || !tab.url) return;
+      let applies = false;
+      if (link) {
+        applies = sckUrlApplies(tab.url, link);
+      } else {
+        const cur = _sckUrlParts(tab.url);
+        applies = !!(cur && _sckPortalMatchesHost(cur.host, payload.portal));
+      }
+      if (!applies && sckOnDashboard(tab.url, payload.dashboard_page_link)) {
+        applies = true;
+      }
+      if (applies || (typeof _sckLastEditTab === "number" && tab.id === _sckLastEditTab)) {
+        injectSck(tab.id, payload);
+      }
+    });
+    _sckLastEditTab = null;
+  });
+}
+
+function handleSckFailure(message) {
+  const sid = String(message.service_id == null ? "" : message.service_id);
+  if (!sid) return;
+  _passwordStore.get(['sckPayloads'], data => {
+    const all = Object.assign({}, data && data.sckPayloads);
+    all[sid] = {
+      service_id: message.service_id,
+      portal: String(message.portal || ""),
+      client_id: message.client_id == null ? null : message.client_id,
+      client_name: String(message.client_name || ""),
+      login_page_link: String(message.login_page_link || ""),
+      dashboard_page_link: String(message.dashboard_page_link || "")
+    };
+    _passwordStore.set({ sckPayloads: all });
+    injectSckEverywhere(all[sid]);
+  });
+}
+
+function handleSckClear(serviceId) {
+  const sid = String(serviceId == null ? "" : serviceId);
+  if (!sid) return;
+  _passwordStore.get(['sckPayloads'], data => {
+    const all = Object.assign({}, data && data.sckPayloads);
+    delete all[sid];
+    _passwordStore.set({ sckPayloads: all });
+    const tabId = sckCardTabs.get(sid);
+    sckCardTabs.delete(sid);
+    if (tabId !== undefined) removeSckFromTab(tabId);
+    // A worker restart loses sckCardTabs: tell every tab too (the card ignores other services).
+    chrome.tabs.query({}, tabs => (tabs || []).forEach(t => {
+      if (!t || typeof t.id !== "number" || t.id === tabId) return;
+      try {
+        chrome.tabs.sendMessage(t.id, { type: "SERA_SCK_CLEAR", service_id: serviceId },
+          () => { if (chrome.runtime.lastError) {} });
+      } catch (_) {}
+    }));
+  });
+}
+
+function handleSckResult(message) {
+  const sid = String(message.service_id == null ? "" : message.service_id);
+  const payload = {
+    type: "SERA_SCK_RESULT",
+    service_id: message.service_id,
+    ok: !!message.ok,
+    message: String(message.message || "")
+  };
+  const tabId = sckCardTabs.get(sid);
+  if (tabId !== undefined) {
+    try {
+      chrome.tabs.sendMessage(tabId, payload, () => { if (chrome.runtime.lastError) {} });
+      return;
+    } catch (_) {}
+  }
+  // A worker restart loses sckCardTabs: tell every tab instead (the card ignores other services).
+  chrome.tabs.query({}, tabs => (tabs || []).forEach(t => {
+    if (!t || typeof t.id !== "number") return;
+    try {
+      chrome.tabs.sendMessage(t.id, payload, () => { if (chrome.runtime.lastError) {} });
+    } catch (_) {}
+  }));
+}
+
+// One page outcome (worked / wrong_password / locked) from the desktop watcher: the card shows
+// it, and on "worked" the desktop saves the candidate it is holding.
+function handleSckOutcome(message) {
+  const sid = String(message.service_id == null ? "" : message.service_id);
+  const payload = {
+    type: "SERA_SCK_OUTCOME",
+    service_id: message.service_id,
+    kind: String(message.kind || "")
+  };
+  const tabId = sckCardTabs.get(sid);
+  if (tabId !== undefined) {
+    try {
+      chrome.tabs.sendMessage(tabId, payload, () => { if (chrome.runtime.lastError) {} });
+      return;
+    } catch (_) {}
+  }
+  chrome.tabs.query({}, tabs => (tabs || []).forEach(t => {
+    if (!t || typeof t.id !== "number") return;
+    try {
+      chrome.tabs.sendMessage(t.id, payload, () => { if (chrome.runtime.lastError) {} });
+    } catch (_) {}
+  }));
+}
+
+// ── SCK: fill the portal's password field for the card ───────────────────────────────────
+// The card is the only SCK widget: it asks here, and this runs SCA's fillPasswordInPage
+// (sca/sca_coordinator.js) with sera_dom.js injected first, so the portal's box is found and
+// set exactly the way SCA's autofill does it. Never navigates and never submits: staff still
+// solve the CAPTCHA and press Login. The candidate is handed to the desktop in memory so it can
+// save it when the login succeeds, even if the page has navigated by then.
+function _sckRunFill(tabId, password, passwordSelector, armId, waitMs) {
+  const fill = self.SeraSCA && self.SeraSCA.fillPasswordInPage;
+  if (typeof fill !== "function") return Promise.resolve(null);
+  const args = [password, passwordSelector, armId, waitMs];
+  return injectWithDom({ tabId }, fill, args)
+    .then(results => {
+      const hit = (results || []).find(r => r && r.result && r.result.filled);
+      if (hit) return hit.result;
+      // Some portals wrap the form in a frame; try every frame only after the main one failed.
+      return injectWithDom({ tabId, allFrames: true }, fill, args)
+        .then(all => {
+          const f = (all || []).find(r => r && r.result && r.result.filled);
+          return f ? f.result : ((results || [])[0] || {}).result || null;
+        })
+        .catch(() => ((results || [])[0] || {}).result || null);
+    });
+}
+
+// The card's Fill & Test. It runs in the card's own tab, so no tab hunting is needed; the
+// candidate is also sent to the desktop (memory only) so a login that succeeds after the page
+// navigates can still be saved.
+function handleSckFillRequest(message, sender, sendResponse) {
+  const sid = String(message.service_id == null ? "" : message.service_id);
+  const password = typeof message.password === "string" ? message.password : "";
+  const tabId = sender && sender.tab && typeof sender.tab.id === "number" ? sender.tab.id : null;
+  if (!sid || !password || tabId === null) {
+    sendResponse({ ok: false, reason: "no_tab" });
+    return true;
+  }
+  const portal = String(message.portal || "");
+  // A fresh armId per attempt, so staff pressing Fill & Test again is never blocked by SCA's
+  // "already filled on this page" guard; the all-frames retry reuses it, so a frame that was
+  // already filled by this attempt is not filled twice.
+  const armId = "sck:" + sid + ":" + Date.now();
+  _sckRunFill(tabId, password, message.password_selector || "", armId, 3000)
+    .then(async res => {
+      if (res && res.filled) {
+        let held = false;
+        try {
+          held = !!(await sendToDesktop({
+            type: "sck_candidate",
+            service_id: message.service_id,
+            client_id: message.client_id == null ? null : message.client_id,
+            portal: portal.slice(0, 100),
+            password: password
+          }, false));
+        } catch (_) {}
+        sendResponse({ ok: true, held: held });
+        return;
+      }
+      if (res === null) sendResponse({ ok: false, reason: "no_dom" });
+      else sendResponse({ ok: false, reason: (res && res.reason) || "no_field" });
+    })
+    .catch(() => sendResponse({ ok: false, reason: "no_field" }));
+  return true;
+}
+
+function maybeReinjectSck(tabId, url) {
+  if (typeof tabId !== "number" || !url) return;
+  _passwordStore.get(['sckPayloads'], data => {
+    const all = Object.assign({}, data && data.sckPayloads);
+    let changed = false;
+    Object.keys(all).forEach(key => {
+      const p = all[key];
+      if (!p) return;
+      if (sckOnDashboard(url, p.dashboard_page_link)) {
+        if (!p.dashTime) {
+          p.dashTime = Date.now();
+          changed = true;
+          setTimeout(() => injectSck(tabId, p), 700);
+        } else if (Date.now() - p.dashTime > 65000) {
+          delete all[key];
+          changed = true;
+          sckCardTabs.delete(String(p.service_id));
+          removeSckFromTab(tabId);
+          sendToDesktop({ type: "sck_widget_done", service_id: p.service_id }, false);
+          return;
+        } else {
+          setTimeout(() => injectSck(tabId, p), 700);
+        }
+        return;
+      }
+      const link = (p.login_page_link || "").trim();
+      let applies = false;
+      if (link) {
+        applies = sckUrlApplies(url, link);
+      } else {
+        const cur = _sckUrlParts(url);
+        applies = !!(cur && _sckPortalMatchesHost(cur.host, p.portal));
+      }
+      if (applies) {
+        // Flutter portals (TRACES) draw their form after the HTML shell has loaded.
+        const delay = /tdscpc\.gov\.in|traces\.gov\.in|flutter/i.test(url) ? 3000 : 700;
+        setTimeout(() => injectSck(tabId, p), delay);
+      }
+    });
+    if (changed) _passwordStore.set({ sckPayloads: all });
+  });
+}
+
+function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboardLink) {
+  // Runs in the portal page. No password is received here; only the service and the client.
+  try { if (window.self !== window.top) return; } catch (_) { return; }
+
+  const hostId = "sera-sck-host";
+  const old = document.getElementById(hostId);
+  if (old) {
+    if (old.getAttribute("data-service-id") === String(serviceId)) return;
+    old.remove();
+  }
+
+  function urlParts(raw) {
+    try {
+      const u = new URL(raw);
+      let route = (u.pathname || "").replace(/\/+$/, "");
+      const frag = (u.hash || "").replace(/^#\/?/, "").replace(/\/+$/, "");
+      if (frag) route += "#" + frag;
+      return { host: (u.hostname || "").toLowerCase().replace(/^www\./, ""), route: route };
+    } catch (_) { return null; }
+  }
+  function onLink(url, link) {
+    const a = urlParts(url), b = urlParts(link);
+    if (!a || !b || !b.host) return false;
+    const hostMatch = a.host === b.host || a.host.endsWith("." + b.host) || b.host.endsWith("." + a.host);
+    return hostMatch && (!b.route || a.route === b.route || a.route.indexOf(b.route + "/") === 0);
+  }
+  function onDashboard() {
+    return !!dashboardLink && onLink(String(location.href || ""), dashboardLink);
+  }
+
+  const hasClient = clientId !== null && clientId !== undefined && clientId !== "";
+  const host = document.createElement("div");
+  host.id = hostId;
+  host.setAttribute("data-service-id", String(serviceId));
+  const shadow = host.attachShadow({ mode: "closed" });
+
+  // Dynamic placement avoiding other widgets
+  function getPlacement() {
+    const vpW = window.innerWidth || document.documentElement.clientWidth || 1280;
+    const vpH = window.innerHeight || document.documentElement.clientHeight || 800;
+    const cardW = 340;
+    const cardH = 270;
+    const pad = 24;
+
+    const obstacles = [];
+    const knownHosts = [
+      "#sera-manual-assist-host",
+      "#sera-mecp-host",
+      "#sera-vsdc-hud-pill",
+      "#sera-hud-root",
+      "#vsdc-crosshair-container"
+    ];
+    knownHosts.forEach(sel => {
+      const el = document.querySelector(sel);
+      if (el) {
+        const r = el.getBoundingClientRect();
+        if (r.width > 20 && r.height > 20) obstacles.push(r);
+      }
+    });
+
+    try {
+      document.querySelectorAll("body > *").forEach(el => {
+        if (el.id === hostId) return;
+        const s = window.getComputedStyle(el);
+        if (s && (s.position === "fixed" || s.position === "sticky")) {
+          const r = el.getBoundingClientRect();
+          if (r.width > 40 && r.height > 40 && r.width < vpW * 0.95 && r.height < vpH * 0.95) {
+            obstacles.push(r);
+          }
+        }
+      });
+    } catch (_) {}
+
+    function boxOverlaps(b) {
+      const buf = 14;
+      return obstacles.some(obs => {
+        return !(
+          b.right + buf < obs.left ||
+          b.left - buf > obs.right ||
+          b.bottom + buf < obs.top ||
+          b.top - buf > obs.bottom
+        );
+      });
+    }
+
+    const corners = [
+      {
+        id: "bottom-right",
+        css: { bottom: `${pad}px`, right: `${pad}px`, top: "auto", left: "auto" },
+        box: { left: vpW - cardW - pad, right: vpW - pad, top: vpH - cardH - pad, bottom: vpH - pad }
+      },
+      {
+        id: "bottom-left",
+        css: { bottom: `${pad}px`, left: `${pad}px`, top: "auto", right: "auto" },
+        box: { left: pad, right: pad + cardW, top: vpH - cardH - pad, bottom: vpH - pad }
+      },
+      {
+        id: "top-right",
+        css: { top: `${pad}px`, right: `${pad}px`, bottom: "auto", left: "auto" },
+        box: { left: vpW - cardW - pad, right: vpW - pad, top: pad, bottom: pad + cardH }
+      },
+      {
+        id: "top-left",
+        css: { top: `${pad}px`, left: `${pad}px`, bottom: "auto", right: "auto" },
+        box: { left: pad, right: pad + cardW, top: pad, bottom: pad + cardH }
+      }
+    ];
+
+    let chosen = corners[0];
+    for (const c of corners) {
+      if (!boxOverlaps(c.box)) {
+        chosen = c;
+        break;
+      }
+    }
+
+    let outTransform = "translateY(40px)";
+    if (chosen.id === "bottom-right") {
+      const blockedBottom = obstacles.some(o => o.bottom >= vpH - pad && o.right >= vpW - cardW - pad);
+      outTransform = blockedBottom ? "translateX(50px)" : "translateY(50px)";
+    } else if (chosen.id === "bottom-left") {
+      const blockedBottom = obstacles.some(o => o.bottom >= vpH - pad && o.left <= pad + cardW);
+      outTransform = blockedBottom ? "translateX(-50px)" : "translateY(50px)";
+    } else if (chosen.id === "top-right") {
+      const blockedTop = obstacles.some(o => o.top <= pad + 30 && o.right >= vpW - cardW - pad);
+      outTransform = blockedTop ? "translateX(50px)" : "translateY(-50px)";
+    } else if (chosen.id === "top-left") {
+      const blockedTop = obstacles.some(o => o.top <= pad + 30 && o.left <= pad + cardW);
+      outTransform = blockedTop ? "translateX(-50px)" : "translateY(-50px)";
+    }
+
+    return {
+      css: chosen.css,
+      inTransform: "translate(0, 0)",
+      outTransform: outTransform
+    };
+  }
+
+  const placement = getPlacement();
+
+  const style = document.createElement("style");
+  style.textContent = `
+    .card { position: fixed; z-index: 2147483647; width: 340px;
+      padding: 14px 16px; box-sizing: border-box; color: #FFFFFF;
+      background: linear-gradient(145deg, #1B0E12, #12080B);
+      border: 1.5px solid #D93A4E; border-radius: 12px;
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      opacity: 0;
+      transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.3s ease; }
+    .card.in { opacity: 1; }
+    .card.heartbeat {
+      animation: sck-heartbeat 2.6s ease-in-out infinite;
+    }
+    @keyframes sck-heartbeat {
+      0% {
+        transform: scale(1);
+        border-color: #D93A4E;
+        box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45), 0 0 0 0 rgba(217, 58, 78, 0);
+      }
+      14% {
+        transform: scale(1.02);
+        border-color: #FF5E72;
+        box-shadow: 0 14px 40px rgba(217, 58, 78, 0.35), 0 0 12px 2px rgba(217, 58, 78, 0.35);
+      }
+      28% {
+        transform: scale(1);
+        border-color: #D93A4E;
+        box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45), 0 0 0 0 rgba(217, 58, 78, 0);
+      }
+      42% {
+        transform: scale(1.025);
+        border-color: #FF7082;
+        box-shadow: 0 16px 44px rgba(217, 58, 78, 0.45), 0 0 16px 3px rgba(217, 58, 78, 0.45);
+      }
+      70% {
+        transform: scale(1);
+        border-color: #D93A4E;
+        box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45), 0 0 0 0 rgba(217, 58, 78, 0);
+      }
+      100% {
+        transform: scale(1);
+        border-color: #D93A4E;
+        box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45), 0 0 0 0 rgba(217, 58, 78, 0);
+      }
+    }
+    @keyframes sck-shake {
+      0%, 100% { transform: translateX(0); }
+      20%, 60% { transform: translateX(-6px); }
+      40%, 80% { transform: translateX(6px); }
+    }
+    .card.shake { animation: sck-shake 0.45s ease-in-out; }
+    .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+    .badge { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px;
+      color: #FFB3BE; background: rgba(217, 58, 78, 0.20); border: 1px solid rgba(255, 122, 140, 0.45);
+      padding: 3px 7px; border-radius: 6px; }
+    .close-btn { background: transparent; border: none; cursor: pointer; font-size: 14px;
+      color: #C89AA2; line-height: 1; padding: 2px 5px; border-radius: 4px; }
+    .close-btn:hover { color: #FFFFFF; }
+    .title { font-size: 14px; font-weight: 700; margin-bottom: 2px; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; }
+    .subtitle { font-size: 12px; color: #C9A6AD; line-height: 1.3; margin-bottom: 10px; }
+    .note { font-size: 12px; color: #FFD166; line-height: 1.35; margin-bottom: 10px; }
+    .field-label { font-size: 11px; font-weight: 600; color: #E8C3CA; text-transform: uppercase;
+      letter-spacing: 0.5px; margin-bottom: 4px; }
+    .pwd-wrap { position: relative; width: 100%; box-sizing: border-box; display: flex; align-items: center; }
+    .pwd { width: 100%; box-sizing: border-box; padding: 9px 36px 9px 10px; font-size: 13px; color: #FFFFFF;
+      background: #25141A; border: 1px solid #5A2631; border-radius: 8px; outline: none; }
+    .pwd:focus { border-color: #D93A4E; }
+    .pwd:disabled { opacity: 0.55; }
+    .eye-btn { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: transparent;
+      border: none; cursor: pointer; color: #C89AA2; padding: 4px; display: flex; align-items: center;
+      justify-content: center; border-radius: 4px; line-height: 1; }
+    .eye-btn:hover { color: #FFFFFF; }
+    .btn-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; width: 100%; box-sizing: border-box; }
+    .btn-fill { flex: 1.15; display: flex; align-items: center; justify-content: center;
+      padding: 9px 10px; font-size: 13px; font-weight: 700; color: #FFFFFF; background: #C42F44;
+      border: 1px solid #E5484D; border-radius: 8px; cursor: pointer; box-sizing: border-box;
+      transition: background 0.15s ease, border-color 0.15s ease; }
+    .btn-fill:hover { background: #D93A4E; }
+    .btn-fill:disabled { background: #3A2025; color: #A58088; border-color: #4A2931; cursor: default; }
+    .btn-save { flex: 0.95; display: flex; align-items: center; justify-content: center;
+      padding: 9px 10px; font-size: 12.5px; font-weight: 600; color: #E8C3CA; background: #25141A;
+      border: 1px solid #5A2631; border-radius: 8px; cursor: pointer; box-sizing: border-box;
+      transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease; }
+    .btn-save:hover { background: #331A22; color: #FFFFFF; border-color: #7A3542; }
+    .btn-save:disabled { background: #1C1115; color: #6E5359; border-color: #381E24; cursor: default; }
+    .status { font-size: 12px; line-height: 1.3; margin-top: 9px; min-height: 15px; color: #C9A6AD; }
+    .status.ok { color: #5EE0A0; font-weight: 600; }
+    .status.err { color: #FF8A97; font-weight: 600; }
+    .status.info { color: #FFD166; }
+    .dash-progress-wrap { width: 100%; height: 3px; background: rgba(255, 255, 255, 0.12);
+      border-radius: 2px; overflow: hidden; margin-top: 10px; display: none; }
+    .dash-progress-wrap.active { display: block; }
+    .dash-progress-bar { width: 100%; height: 100%; background: #5EE0A0; transform-origin: left; transform: scaleX(1); }
+  `;
+
+  const card = document.createElement("div");
+  card.className = "card";
+  Object.assign(card.style, placement.css);
+  card.style.transform = placement.outTransform;
+
+  const header = document.createElement("div");
+  header.className = "header";
+  const badge = document.createElement("div");
+  badge.className = "badge";
+  badge.textContent = "Sera Credential Keeper";
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "close-btn";
+  closeBtn.textContent = "✕";
+  closeBtn.title = "Dismiss";
+  header.append(badge, closeBtn);
+
+  const title = document.createElement("div");
+  title.className = "title";
+  title.textContent = clientName ? `${clientName} • ${portal}` : String(portal || "Portal");
+
+  const subtitle = document.createElement("div");
+  subtitle.className = "subtitle";
+  subtitle.textContent = hasClient
+    ? "The portal refused the saved password. Enter the new password."
+    : "Sera could not match this login to a client.";
+
+  const parts = [header, title, subtitle];
+  if (!hasClient) {
+    const note = document.createElement("div");
+    note.className = "note";
+    note.textContent = "Copy the client's ID first, then try again.";
+    parts.push(note);
+  }
+
+  const label = document.createElement("div");
+  label.className = "field-label";
+  label.textContent = "New password";
+
+  const pwdWrap = document.createElement("div");
+  pwdWrap.className = "pwd-wrap";
+
+  const pwd = document.createElement("input");
+  pwd.type = "password";
+  pwd.className = "pwd";
+  pwd.autocomplete = "new-password";
+  pwd.placeholder = "Type the new password";
+  pwd.disabled = !hasClient;
+
+  const eyeBtn = document.createElement("button");
+  eyeBtn.type = "button";
+  eyeBtn.className = "eye-btn";
+  eyeBtn.title = "Show password";
+  const eyeOpenSvg = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>`;
+  const eyeClosedSvg = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>`;
+  eyeBtn.innerHTML = eyeOpenSvg;
+
+  eyeBtn.onclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (pwd.type === "password") {
+      pwd.type = "text";
+      eyeBtn.innerHTML = eyeClosedSvg;
+      eyeBtn.title = "Hide password";
+    } else {
+      pwd.type = "password";
+      eyeBtn.innerHTML = eyeOpenSvg;
+      eyeBtn.title = "Show password";
+    }
+    pwd.focus();
+  };
+  pwdWrap.append(pwd, eyeBtn);
+
+  const btnRow = document.createElement("div");
+  btnRow.className = "btn-row";
+
+  const fillBtn = document.createElement("button");
+  fillBtn.className = "btn-fill";
+  fillBtn.textContent = "Fill & Test";
+  fillBtn.title = "Fill this password on the portal to test it";
+  fillBtn.disabled = true;
+
+  const saveBtn = document.createElement("button");
+  saveBtn.className = "btn-save";
+  saveBtn.textContent = "Save Directly";
+  saveBtn.title = "Save this password to Sera vault without testing";
+  saveBtn.disabled = true;
+
+  btnRow.append(fillBtn, saveBtn);
+
+  const status = document.createElement("div");
+  status.className = "status";
+
+  const progressWrap = document.createElement("div");
+  progressWrap.className = "dash-progress-wrap";
+  const progressBar = document.createElement("div");
+  progressBar.className = "dash-progress-bar";
+  progressWrap.appendChild(progressBar);
+
+  let done = false;
+  let dashTimeout = null;
+  let dashStarted = false;
+  let idleTimer = null;
+  let candidatePassword = "";
+  let candidateFilled = false;
+  let candidateHeld = false;
+
+  function stopHeartbeat() {
+    if (idleTimer) clearTimeout(idleTimer);
+    card.classList.remove("heartbeat");
+  }
+  function scheduleHeartbeat() {
+    if (done) return;
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      if (!done && !card.matches(":hover") && shadow.activeElement !== pwd) {
+        card.classList.add("heartbeat");
+      }
+    }, 2500);
+  }
+
+  card.addEventListener("mouseenter", stopHeartbeat);
+  card.addEventListener("mouseleave", scheduleHeartbeat);
+  card.addEventListener("focusin", stopHeartbeat);
+  card.addEventListener("focusout", scheduleHeartbeat);
+  card.addEventListener("input", stopHeartbeat);
+  card.addEventListener("mousemove", stopHeartbeat);
+
+  function setStatus(text, cls) {
+    status.textContent = text || "";
+    status.className = "status" + (cls ? " " + cls : "");
+  }
+
+  function triggerShake() {
+    card.classList.remove("shake");
+    void card.offsetWidth;
+    card.classList.add("shake");
+    setTimeout(() => card.classList.remove("shake"), 500);
+  }
+
+  function removeCard() {
+    try { chrome.runtime.onMessage.removeListener(onMsg); } catch (_) {}
+    try { clearInterval(dashWatch); } catch (_) {}
+    if (dashTimeout) clearTimeout(dashTimeout);
+    stopHeartbeat();
+    card.classList.remove("in");
+    card.style.opacity = "0";
+    card.style.transform = placement.outTransform;
+    setTimeout(() => { if (host.isConnected) host.remove(); }, 350);
+  }
+
+  function startDashboardCountdown() {
+    if (dashStarted || done) return;
+    dashStarted = true;
+    progressWrap.classList.add("active");
+    subtitle.textContent = "Dashboard reached. Confirm or enter new password.";
+    requestAnimationFrame(() => {
+      progressBar.style.transition = "transform 60000ms linear";
+      progressBar.style.transform = "scaleX(0)";
+    });
+    dashTimeout = setTimeout(() => {
+      try { chrome.runtime.sendMessage({ type: "SCK_DASHBOARD", service_id: serviceId }); } catch (_) {}
+      removeCard();
+    }, 60000);
+  }
+
+  function handleDashboardReached() {
+    if (done) return;
+    if (candidatePassword && candidateFilled) {
+      setStatus("✓ Login succeeded! Saving new password…", "ok");
+    }
+    startDashboardCountdown();
+  }
+
+  function doFillAndTest() {
+    if (done || !hasClient || !pwd.value) return;
+    const val = pwd.value;
+    candidatePassword = val;
+    candidateFilled = false;
+    candidateHeld = false;
+    fillBtn.disabled = true;
+    saveBtn.disabled = true;
+    fillBtn.textContent = "Filling…";
+    setStatus("Locating password field on portal…");
+
+    try {
+      chrome.runtime.sendMessage({
+        type: "SCK_FILL_REQUEST",
+        service_id: serviceId,
+        client_id: clientId,
+        portal: portal,
+        password: val
+      }, (res) => {
+        fillBtn.textContent = "Fill & Test";
+        fillBtn.disabled = !pwd.value;
+        saveBtn.disabled = !pwd.value;
+        if (res && res.ok) {
+          candidateFilled = true;
+          candidateHeld = !!res.held;
+          setStatus("✓ Password filled. Complete CAPTCHA & submit to test.", "ok");
+          return;
+        }
+        const reason = String((res && res.reason) || "");
+        let message = "Could not find the password field on the page.";
+        if (reason === "no_tab") {
+          message = "Open the portal's login page in the browser, then press Fill & Test.";
+        } else if (reason === "no_dom") {
+          message = "The Sera extension is out of date. Reload it in the browser, then try again.";
+        } else if (reason === "no_field" || reason.indexOf("password field") >= 0) {
+          message = "Could not find the password box on the portal page. Open the portal's " +
+                    "password step (Income Tax: enter the PAN, press Continue), then press " +
+                    "Fill & Test again.";
+        }
+        setStatus(message, "err");
+        triggerShake();
+      });
+    } catch (_) {
+      fillBtn.textContent = "Fill & Test";
+      fillBtn.disabled = !pwd.value;
+      saveBtn.disabled = !pwd.value;
+      setStatus("Sera is not connected. Try again.", "err");
+      triggerShake();
+    }
+  }
+
+  function doSaveDirectly() {
+    if (done || !hasClient || !pwd.value) return;
+    candidatePassword = pwd.value;
+    saveBtn.disabled = true;
+    fillBtn.disabled = true;
+    saveBtn.textContent = "Saving…";
+    setStatus("Saving to Sera Vault…");
+    try {
+      chrome.runtime.sendMessage({
+        type: "SCK_SAVE_PASSWORD",
+        service_id: serviceId,
+        client_id: clientId,
+        portal: portal,
+        password: pwd.value
+      });
+    } catch (_) {
+      saveBtn.textContent = "Save Directly";
+      saveBtn.disabled = false;
+      fillBtn.disabled = false;
+      setStatus("Sera is not connected. Try again.", "err");
+      triggerShake();
+    }
+  }
+
+  const onMsg = (msg) => {
+    if (!msg || !host.isConnected) {
+      try { chrome.runtime.onMessage.removeListener(onMsg); } catch (_) {}
+      return;
+    }
+    if (String(msg.service_id) !== String(serviceId)) return;
+
+    if (msg.type === "SERA_SCK_RESULT") {
+      if (msg.ok) {
+        done = true;
+        pwd.disabled = true;
+        fillBtn.disabled = true;
+        saveBtn.disabled = true;
+        saveBtn.textContent = "Saved";
+        fillBtn.textContent = "✓ Verified";
+        setStatus(msg.message || "✓ New password saved to Sera Vault", "ok");
+        setTimeout(removeCard, 1800);
+      } else {
+        fillBtn.textContent = "Fill & Test";
+        saveBtn.textContent = "Save Directly";
+        fillBtn.disabled = !pwd.value;
+        saveBtn.disabled = !pwd.value;
+        setStatus(msg.message || "The password could not be saved.", "err");
+        triggerShake();
+      }
+    } else if (msg.type === "SERA_SCK_OUTCOME") {
+      const kind = String(msg.kind || "");
+      if (kind === "wrong_password") {
+        fillBtn.textContent = "Fill & Test";
+        saveBtn.textContent = "Save Directly";
+        fillBtn.disabled = !pwd.value;
+        saveBtn.disabled = !pwd.value;
+        setStatus("✕ Portal rejected this password. Check and try another.", "err");
+        triggerShake();
+      } else if (kind === "worked") {
+        // The desktop holds the candidate and saves it. If it could not be handed over, the
+        // card saves it itself so a success is never lost.
+        if (candidatePassword && candidateFilled && !candidateHeld) {
+          try {
+            chrome.runtime.sendMessage({
+              type: "SCK_SAVE_PASSWORD",
+              service_id: serviceId,
+              client_id: clientId,
+              portal: portal,
+              password: candidatePassword
+            });
+          } catch (_) {}
+        }
+        handleDashboardReached();
+      } else if (kind === "locked") {
+        fillBtn.disabled = true;
+        saveBtn.disabled = true;
+        pwd.disabled = true;
+        setStatus("✕ Account locked. Ceasing attempts.", "err");
+        triggerShake();
+        setTimeout(removeCard, 3500);
+      }
+    } else if (msg.type === "SERA_SCK_CLEAR") {
+      removeCard();
+    }
+  };
+  try { chrome.runtime.onMessage.addListener(onMsg); } catch (_) {}
+
+  pwd.addEventListener("input", () => {
+    const hasVal = !done && hasClient && !!pwd.value;
+    fillBtn.disabled = !hasVal;
+    saveBtn.disabled = !hasVal;
+  });
+  pwd.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !done && hasClient && pwd.value) {
+      e.preventDefault();
+      doFillAndTest();
+    }
+  });
+
+  fillBtn.onclick = doFillAndTest;
+  saveBtn.onclick = doSaveDirectly;
+
+  closeBtn.onclick = () => {
+    try { chrome.runtime.sendMessage({ type: "SCK_DISMISSED", service_id: serviceId }); } catch (_) {}
+    removeCard();
+  };
+
+  parts.push(label, pwdWrap, btnRow, status, progressWrap);
+  card.append(...parts);
+  shadow.append(style, card);
+  document.body.appendChild(host);
+
+  setTimeout(() => {
+    card.style.transform = placement.inTransform;
+    card.classList.add("in");
+    card.classList.add("heartbeat");
+  }, 40);
+
+  if (onDashboard()) {
+    handleDashboardReached();
+  }
+
+  const dashWatch = setInterval(() => {
+    if (!host.isConnected) { clearInterval(dashWatch); return; }
+    if (onDashboard()) {
+      clearInterval(dashWatch);
+      handleDashboardReached();
+    }
+  }, 1200);
+}
+
+function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos, clearSeconds, attemptId, clientId, serviceId, portal) {
   // sera_dom.js (shared clipboard clearing) is injected just before this function.
   const seraDom = window.__seraDom;
   if (!seraDom) return;
@@ -1879,7 +2837,21 @@ function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos,
     if (host.isConnected) host.remove();
   }
   close.onclick = () => closeCard("MECP_DISMISSED");
-  header.append(badgeWrap, close);
+
+  // SCK: enter a new password for this client even when no failure was detected.
+  const edit = document.createElement("button");
+  edit.className = "close-btn";
+  edit.textContent = "✎";
+  edit.title = "Enter a new password";
+  edit.onclick = () => {
+    try {
+      chrome.runtime.sendMessage({ type: "SCK_EDIT_REQUEST",
+        client_id: clientId == null ? null : clientId,
+        service_id: serviceId == null ? null : serviceId,
+        portal: portal || "" });
+    } catch (_) {}
+  };
+  header.append(badgeWrap, edit, close);
 
   // Toast banner
   const toast = document.createElement("div");
@@ -2163,7 +3135,10 @@ function injectMECP(tabId, message) {
     message.scc_mode === true,
     message.scc_combos || [],
     clearSecs,
-    message.attempt_id || ""
+    message.attempt_id || "",
+    message.client_id == null ? null : message.client_id,
+    message.service_id == null ? null : message.service_id,
+    message.portal || ""
   ])).then(() => console.log("Sera: MECP widget injected"))
     .catch(err => console.error("Sera: MECP injection failed", err));
 }

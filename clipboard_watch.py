@@ -141,6 +141,33 @@ class ClipboardWatchService(QObject):
         if not self.enabled:
             self._arm = None
 
+    # ------------------------------------------------------------------ SCK
+    def client_for_arm(self, arm_id: str) -> Optional[int]:
+        """The client the live SCA arm belongs to, when `arm_id` is that arm. Read-only; used by
+        SCK to name a failed login the portal page itself did not."""
+        arm = self._arm
+        if arm is None or not arm_id:
+            return None
+        return arm.client_id if str(arm.arm_id) == str(arm_id) else None
+
+    def client_for_portal(self, service: dict, portal: str = "") -> Optional[int]:
+        """The client SCA is working for on this portal, when that is unambiguous: the live arm
+        filled this portal, or the arm covers exactly one service. Read-only."""
+        arm = self._arm
+        if arm is None or time.time() > arm.expires_at:
+            return None
+        svc_id = service.get("id") if isinstance(service, dict) else service
+        names = {str(portal or "").strip().lower()}
+        if isinstance(service, dict):
+            names.add(str(service.get("name") or "").strip().lower())
+        names.discard("")
+        if any(str(f).strip().lower() in names for f in arm.fills):
+            return arm.client_id
+        if svc_id is not None and svc_id in arm.services:
+            if len(arm.services) == 1:
+                return arm.client_id
+        return None
+
     def _generation(self):
         gen = getattr(self.db, "data_generation", None)
         return gen() if callable(gen) else None

@@ -158,7 +158,8 @@ class MclServicesMixin:
             cur = conn.execute(
                 """SELECT id, name, login_page_link, userid_column_id, password_column_id,
                           username_selector, password_selector, automation_mode, extension_flow,
-                          success_selector, arn_selector, sort_order, automation_mode_2, browser
+                          success_selector, arn_selector, sort_order, automation_mode_2, browser,
+                          dashboard_page_link
                    FROM services ORDER BY sort_order"""
             )
             return [
@@ -171,6 +172,7 @@ class MclServicesMixin:
                     "success_selector": r[9], "arn_selector": r[10], "sort_order": r[11],
                     "automation_mode_2": r[12] if len(r) > 12 and r[12] else "",
                     "browser": r[13] if len(r) > 13 and r[13] else "",
+                    "dashboard_page_link": r[14] if len(r) > 14 and r[14] else "",
                 }
                 for r in cur.fetchall()
             ]
@@ -186,7 +188,8 @@ class MclServicesMixin:
                        password_column_id: int, username_selector: str, password_selector: str,
                        automation_mode: str = "extension", extension_flow: str = "double",
                        success_selector: str = "", arn_selector: str = "",
-                       automation_mode_2: str = "", browser: str = "") -> int:
+                       automation_mode_2: str = "", browser: str = "",
+                       dashboard_page_link: str = "") -> int:
         u_sel = (username_selector or "").strip()
         p_sel = (password_selector or "").strip()
         link = (login_page_link or "").strip()
@@ -219,11 +222,13 @@ class MclServicesMixin:
             cur = conn.execute(
                 """INSERT INTO services (name, login_page_link, userid_column_id, password_column_id,
                                          username_selector, password_selector, automation_mode, automation_mode_2,
-                                         extension_flow, success_selector, arn_selector, sort_order, browser)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                         extension_flow, success_selector, arn_selector, sort_order, browser,
+                                         dashboard_page_link)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (name.strip(), link, userid_column_id, password_column_id,
                  u_sel, p_sel, automation_mode, (automation_mode_2 or "").strip(), extension_flow,
-                 success_selector, arn_selector, next_order, (browser or "").strip().lower())
+                 success_selector, arn_selector, next_order, (browser or "").strip().lower(),
+                 (dashboard_page_link or "").strip())
             )
             return cur.lastrowid
 
@@ -231,7 +236,10 @@ class MclServicesMixin:
                        password_column_id: int, username_selector: str, password_selector: str,
                        automation_mode: str = "extension", extension_flow: str = "double",
                        success_selector: str = "", arn_selector: str = "",
-                       automation_mode_2: str = "", browser: str = ""):
+                       automation_mode_2: str = "", browser: str = "",
+                       dashboard_page_link: str | None = None):
+        """Writes a service row. `dashboard_page_link` is left as it is when None, so a caller that
+        does not know about it (the Services dialog) never clears the SCK link by accident."""
         u_sel = (username_selector or "").strip()
         p_sel = (password_selector or "").strip()
         link = (login_page_link or "").strip()
@@ -263,10 +271,22 @@ class MclServicesMixin:
                 """UPDATE services SET name=?, login_page_link=?, userid_column_id=?,
                                        password_column_id=?, username_selector=?, password_selector=?,
                                        automation_mode=?, automation_mode_2=?, extension_flow=?,
-                                       success_selector=?, arn_selector=?, browser=? WHERE id=?""",
+                                       success_selector=?, arn_selector=?, browser=?,
+                                       dashboard_page_link=COALESCE(?, dashboard_page_link) WHERE id=?""",
                 (name.strip(), link, userid_column_id, password_column_id,
                  u_sel, p_sel, automation_mode, (automation_mode_2 or "").strip(), extension_flow,
-                 success_selector, arn_selector, (browser or "").strip().lower(), service_id)
+                 success_selector, arn_selector, (browser or "").strip().lower(),
+                 None if dashboard_page_link is None else str(dashboard_page_link).strip(), service_id)
+            )
+
+    def update_service_links(self, service_id: int, login_page_link: str,
+                             dashboard_page_link: str) -> None:
+        """SCK's settings page: the two links that decide where the new-password card is shown
+        and where it goes away. Nothing else on the service row is touched."""
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE services SET login_page_link = ?, dashboard_page_link = ? WHERE id = ?",
+                ((login_page_link or "").strip(), (dashboard_page_link or "").strip(), service_id)
             )
 
     def auto_populate_service_selectors(self):
