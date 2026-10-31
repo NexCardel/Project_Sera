@@ -85,6 +85,9 @@ function makeWorld(build, opts) {
   pagePasswordField.id = 'portal-password';
   pagePasswordField.isConnected = true;
 
+  // The SCC card, when the test wants it on screen, is what getPlacement() looks for.
+  const sccEl = opts.sccOnScreen ? fakeEl('div') : null;
+
   const win = {
     document: {
       getElementById: (id) => (id === 'sera-sck-host' ? null : null),
@@ -95,7 +98,9 @@ function makeWorld(build, opts) {
         if (sel === "input[type='password']") return [pagePasswordField];
         return [];
       },
-      querySelector: () => null,
+      querySelector: (sel) => (
+        opts.sccOnScreen && sel === '#sera-mecp-host[data-scc="1"]' ? sccEl : null
+      ),
     },
     location: { href: 'https://eportal.incometax.gov.in/iec/foservices/#/login' },
     chrome: {
@@ -312,6 +317,22 @@ function makeWorld(build, opts) {
       w.open();
       w.query('close-btn')[0].onclick();
       assert(w.messages.includes('SCK_DISMISSED'), label + 'dismiss sent');
+    }
+
+    // 12. With the SCC card on screen the card moves to the top-left corner
+    {
+      const w = makeWorld(build);
+      w.open();
+      const card = w.query('card')[0];
+      assert.strictEqual(card.style.bottom, '24px', label + 'default placement is bottom-right');
+      assert.strictEqual(card.style.right, '24px', label + 'default placement is bottom-right');
+    }
+    {
+      const w = makeWorld(build, { sccOnScreen: true });
+      w.open();
+      const card = w.query('card')[0];
+      assert.strictEqual(card.style.top, '24px', label + 'SCC on screen moves the card to the top');
+      assert.strictEqual(card.style.left, '24px', label + 'SCC on screen moves the card to the left');
     }
   }
 

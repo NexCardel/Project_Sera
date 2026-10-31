@@ -801,7 +801,7 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
       align-items: center;
       gap: 5px;
     }
-    .close-btn {
+    .close-btn, .edit-btn {
       background: transparent;
       border: none;
       color: #7E9388;
@@ -812,7 +812,7 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
       border-radius: 4px;
       transition: color 0.15s ease, background 0.15s ease;
     }
-    .close-btn:hover {
+    .close-btn:hover, .edit-btn:hover {
       color: #FFFFFF;
       background: rgba(255, 255, 255, 0.1);
     }
@@ -1077,7 +1077,7 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
 
   // SCK: enter a new password for this client even when no failure was detected.
   const editBtn = document.createElement("button");
-  editBtn.className = "close-btn";
+  editBtn.className = "edit-btn";
   editBtn.innerHTML = "✎";
   editBtn.title = "Enter a new password";
   editBtn.onclick = () => {
@@ -1764,6 +1764,9 @@ function _sckPortalMatchesHost(host, portal) {
   if (p.includes("trace") || p.includes("tds")) {
     return h === "tdscpc.gov.in" || h.endsWith(".tdscpc.gov.in") || h === "traces.gov.in" || h.endsWith(".traces.gov.in");
   }
+  if (p.includes("mca")) {
+    return h === "mca.gov.in" || h.endsWith(".mca.gov.in");
+  }
   return false;
 }
 
@@ -2045,6 +2048,12 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
   function onDashboard() {
     return !!dashboardLink && onLink(String(location.href || ""), dashboardLink);
   }
+  // The SCC card (the clipboard card that asks which password worked) is the same widget host
+  // as MECP, marked with data-scc. It sits at the top-right; when it is on screen the SCK card
+  // moves to the top-left so the two never fight over the same corner.
+  function sccCardOnScreen() {
+    try { return !!document.querySelector('#sera-mecp-host[data-scc="1"]'); } catch (_) { return false; }
+  }
 
   const hasClient = clientId !== null && clientId !== undefined && clientId !== "";
   const host = document.createElement("div");
@@ -2056,8 +2065,8 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
   function getPlacement() {
     const vpW = window.innerWidth || document.documentElement.clientWidth || 1280;
     const vpH = window.innerHeight || document.documentElement.clientHeight || 800;
-    const cardW = 340;
-    const cardH = 270;
+    const cardW = 300;
+    const cardH = 230;
     const pad = 24;
 
     const obstacles = [];
@@ -2075,6 +2084,13 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
         if (r.width > 20 && r.height > 20) obstacles.push(r);
       }
     });
+
+    // The SCC card's box is fixed inside a closed shadow root, so its host has no measurable
+    // rect of its own. Its CSS pins it to the top-right; mirror that box here.
+    const sccOnScreen = sccCardOnScreen();
+    if (sccOnScreen) {
+      obstacles.push({ left: vpW - 360 - 18, right: vpW - 18, top: 18, bottom: 18 + 320 });
+    }
 
     try {
       document.querySelectorAll("body > *").forEach(el => {
@@ -2124,6 +2140,9 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
       }
     ];
 
+    // With the SCC card on screen, prefer the top-left corner; otherwise keep the usual order.
+    if (sccOnScreen) corners.unshift(corners.pop());
+
     let chosen = corners[0];
     for (const c of corners) {
       if (!boxOverlaps(c.box)) {
@@ -2154,15 +2173,15 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
     };
   }
 
-  const placement = getPlacement();
+  let placement = getPlacement();
 
   const style = document.createElement("style");
   style.textContent = `
-    .card { position: fixed; z-index: 2147483647; width: 340px;
-      padding: 14px 16px; box-sizing: border-box; color: #FFFFFF;
+    .card { position: fixed; z-index: 2147483647; width: 300px;
+      padding: 10px 12px; box-sizing: border-box; color: #FFFFFF;
       background: linear-gradient(145deg, #1B0E12, #12080B);
-      border: 1.5px solid #D93A4E; border-radius: 12px;
-      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
+      border: 1.5px solid #D93A4E; border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       opacity: 0;
       transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.3s ease; }
@@ -2208,47 +2227,47 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
       40%, 80% { transform: translateX(6px); }
     }
     .card.shake { animation: sck-shake 0.45s ease-in-out; }
-    .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-    .badge { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px;
+    .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+    .badge { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
       color: #FFB3BE; background: rgba(217, 58, 78, 0.20); border: 1px solid rgba(255, 122, 140, 0.45);
-      padding: 3px 7px; border-radius: 6px; }
-    .close-btn { background: transparent; border: none; cursor: pointer; font-size: 14px;
-      color: #C89AA2; line-height: 1; padding: 2px 5px; border-radius: 4px; }
+      padding: 2px 6px; border-radius: 5px; }
+    .close-btn { background: transparent; border: none; cursor: pointer; font-size: 12px;
+      color: #C89AA2; line-height: 1; padding: 1px 4px; border-radius: 4px; }
     .close-btn:hover { color: #FFFFFF; }
-    .title { font-size: 14px; font-weight: 700; margin-bottom: 2px; white-space: nowrap;
+    .title { font-size: 13px; font-weight: 700; margin-bottom: 1px; white-space: nowrap;
       overflow: hidden; text-overflow: ellipsis; }
-    .subtitle { font-size: 12px; color: #C9A6AD; line-height: 1.3; margin-bottom: 10px; }
-    .note { font-size: 12px; color: #FFD166; line-height: 1.35; margin-bottom: 10px; }
-    .field-label { font-size: 11px; font-weight: 600; color: #E8C3CA; text-transform: uppercase;
-      letter-spacing: 0.5px; margin-bottom: 4px; }
+    .subtitle { font-size: 11px; color: #C9A6AD; line-height: 1.3; margin-bottom: 8px; }
+    .note { font-size: 11px; color: #FFD166; line-height: 1.3; margin-bottom: 8px; }
+    .field-label { font-size: 10px; font-weight: 600; color: #E8C3CA; text-transform: uppercase;
+      letter-spacing: 0.5px; margin-bottom: 3px; }
     .pwd-wrap { position: relative; width: 100%; box-sizing: border-box; display: flex; align-items: center; }
-    .pwd { width: 100%; box-sizing: border-box; padding: 9px 36px 9px 10px; font-size: 13px; color: #FFFFFF;
-      background: #25141A; border: 1px solid #5A2631; border-radius: 8px; outline: none; }
+    .pwd { width: 100%; box-sizing: border-box; padding: 7px 32px 7px 9px; font-size: 12.5px; color: #FFFFFF;
+      background: #25141A; border: 1px solid #5A2631; border-radius: 7px; outline: none; }
     .pwd:focus { border-color: #D93A4E; }
     .pwd:disabled { opacity: 0.55; }
-    .eye-btn { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: transparent;
-      border: none; cursor: pointer; color: #C89AA2; padding: 4px; display: flex; align-items: center;
+    .eye-btn { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); background: transparent;
+      border: none; cursor: pointer; color: #C89AA2; padding: 3px; display: flex; align-items: center;
       justify-content: center; border-radius: 4px; line-height: 1; }
     .eye-btn:hover { color: #FFFFFF; }
-    .btn-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; width: 100%; box-sizing: border-box; }
+    .btn-row { display: flex; align-items: center; gap: 6px; margin-top: 8px; width: 100%; box-sizing: border-box; }
     .btn-fill { flex: 1.15; display: flex; align-items: center; justify-content: center;
-      padding: 9px 10px; font-size: 13px; font-weight: 700; color: #FFFFFF; background: #C42F44;
-      border: 1px solid #E5484D; border-radius: 8px; cursor: pointer; box-sizing: border-box;
+      padding: 7px 8px; font-size: 12px; font-weight: 700; color: #FFFFFF; background: #C42F44;
+      border: 1px solid #E5484D; border-radius: 7px; cursor: pointer; box-sizing: border-box;
       transition: background 0.15s ease, border-color 0.15s ease; }
     .btn-fill:hover { background: #D93A4E; }
     .btn-fill:disabled { background: #3A2025; color: #A58088; border-color: #4A2931; cursor: default; }
     .btn-save { flex: 0.95; display: flex; align-items: center; justify-content: center;
-      padding: 9px 10px; font-size: 12.5px; font-weight: 600; color: #E8C3CA; background: #25141A;
-      border: 1px solid #5A2631; border-radius: 8px; cursor: pointer; box-sizing: border-box;
+      padding: 7px 8px; font-size: 11.5px; font-weight: 600; color: #E8C3CA; background: #25141A;
+      border: 1px solid #5A2631; border-radius: 7px; cursor: pointer; box-sizing: border-box;
       transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease; }
     .btn-save:hover { background: #331A22; color: #FFFFFF; border-color: #7A3542; }
     .btn-save:disabled { background: #1C1115; color: #6E5359; border-color: #381E24; cursor: default; }
-    .status { font-size: 12px; line-height: 1.3; margin-top: 9px; min-height: 15px; color: #C9A6AD; }
+    .status { font-size: 11px; line-height: 1.3; margin-top: 7px; min-height: 13px; color: #C9A6AD; }
     .status.ok { color: #5EE0A0; font-weight: 600; }
     .status.err { color: #FF8A97; font-weight: 600; }
     .status.info { color: #FFD166; }
     .dash-progress-wrap { width: 100%; height: 3px; background: rgba(255, 255, 255, 0.12);
-      border-radius: 2px; overflow: hidden; margin-top: 10px; display: none; }
+      border-radius: 2px; overflow: hidden; margin-top: 8px; display: none; }
     .dash-progress-wrap.active { display: block; }
     .dash-progress-bar { width: 100%; height: 100%; background: #5EE0A0; transform-origin: left; transform: scaleX(1); }
   `;
@@ -2305,8 +2324,8 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
   eyeBtn.type = "button";
   eyeBtn.className = "eye-btn";
   eyeBtn.title = "Show password";
-  const eyeOpenSvg = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>`;
-  const eyeClosedSvg = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>`;
+  const eyeOpenSvg = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>`;
+  const eyeClosedSvg = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>`;
   eyeBtn.innerHTML = eyeOpenSvg;
 
   eyeBtn.onclick = (e) => {
@@ -2358,6 +2377,8 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
   let candidatePassword = "";
   let candidateFilled = false;
   let candidateHeld = false;
+  let sccObserver = null;
+  let sccWasOnScreen = false;
 
   function stopHeartbeat() {
     if (idleTimer) clearTimeout(idleTimer);
@@ -2395,6 +2416,7 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
   function removeCard() {
     try { chrome.runtime.onMessage.removeListener(onMsg); } catch (_) {}
     try { clearInterval(dashWatch); } catch (_) {}
+    try { if (sccObserver) sccObserver.disconnect(); } catch (_) {}
     if (dashTimeout) clearTimeout(dashTimeout);
     stopHeartbeat();
     card.classList.remove("in");
@@ -2589,6 +2611,22 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
   shadow.append(style, card);
   document.body.appendChild(host);
 
+  // If the SCC card comes or goes while this card is open, re-place it so the top-left move
+  // happens (or is undone) without waiting for a reload.
+  sccWasOnScreen = sccCardOnScreen();
+  try {
+    sccObserver = new MutationObserver(() => {
+      if (done) return;
+      const now = sccCardOnScreen();
+      if (now === sccWasOnScreen) return;
+      sccWasOnScreen = now;
+      placement = getPlacement();
+      Object.assign(card.style, placement.css);
+      card.style.transform = card.classList.contains("in") ? placement.inTransform : placement.outTransform;
+    });
+    sccObserver.observe(document.body, { childList: true });
+  } catch (_) {}
+
   setTimeout(() => {
     card.style.transform = placement.inTransform;
     card.classList.add("in");
@@ -2624,6 +2662,9 @@ function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos,
   const shadow = host.attachShadow({ mode: "closed" });
 
   const isSCC = !!(sccMode && sccCombos && sccCombos.length > 0);
+  // Lets the SCK card see that the SCC card is on screen (its shadow root is closed) and move
+  // itself to the top-left corner.
+  if (isSCC) host.setAttribute("data-scc", "1");
 
   const style = document.createElement("style");
   style.textContent = `
@@ -2647,11 +2688,11 @@ function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos,
     .client-title {
       font-weight: 700; color: #F0F6FC; font-size: 13px; word-break: break-word; line-height: 1.3;
     }
-    .close-btn {
+    .close-btn, .edit-btn {
       background: transparent; border: none; color: #8B949E; font-size: 18px;
       cursor: pointer; padding: 0 4px; line-height: 1; border-radius: 4px;
     }
-    .close-btn:hover { color: #F0F6FC; background: #21262D; }
+    .close-btn:hover, .edit-btn:hover { color: #F0F6FC; background: #21262D; }
     .section-title {
       font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px;
       color: #8B949E; margin: 10px 0 6px 2px;
@@ -2754,7 +2795,7 @@ function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos,
 
   // SCK: enter a new password for this client even when no failure was detected.
   const edit = document.createElement("button");
-  edit.className = "close-btn";
+  edit.className = "edit-btn";
   edit.textContent = "✎";
   edit.title = "Enter a new password";
   edit.onclick = () => {
@@ -2802,7 +2843,7 @@ function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos,
   let passwordCopied = false;
   let finishing = false;
   function closeWhenBothCopied() {
-    if (finishing || isSCC || !passwordCopied) return;
+    if (finishing || isSCC || !passwordCopied || (hasUserId && !userIdCopied)) return;
     finishing = true;
     if (timerTimeout) clearTimeout(timerTimeout);
     timerTimeout = null;

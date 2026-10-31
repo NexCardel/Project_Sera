@@ -4,5 +4,5 @@
   "mandatory": false,
   "download_url": "https://github.com/NexCardel/Project_Sera/releases/download/v2.13.6/Amas_Sera_Setup_v2.13.6.exe",
   "sha256": "24b0e02ffaff7c894bab4d6056b6ea238db69523df8644b249f7830fef27ccde",
-  "release_notes": "Project Sera v2.13.6: Record SCA ambient autofill and widget actions in audit log."
+  "release_notes": "Project Sera v2.13.6 - VSDC background capture & OCR resilience: background window watching, WinRT OCR runner timeout protection, Notes & Media autosave evidence protection, and SCA audit logging"
 }
