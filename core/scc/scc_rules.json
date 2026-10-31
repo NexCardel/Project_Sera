@@ -9,7 +9,7 @@
     "no_conclusion"
   ],
   "messages": {
-    "wrong_password": "The portal did not accept that password (marked \u2717). The highlighted row is next.",
+    "wrong_password": "The portal did not accept that password (marked ✗). The highlighted row is next.",
     "locked": "The portal says this account is locked. Stop here: do not try any more passwords.",
     "ask_which": "Logged in. Which password did you use? Press \"This one worked\" on it, or \"None - I typed my own\"."
   },
@@ -239,7 +239,9 @@
       "name": "gst_wrong_password",
       "outcome": "wrong_password",
       "portals": [
-        "GST"
+        "GST",
+        "GST Portal",
+        "gst"
       ],
       "unconfirmed": true,
       "patterns": [
@@ -266,7 +268,9 @@
       "name": "gst_logged_in",
       "outcome": "worked",
       "portals": [
-        "GST"
+        "GST",
+        "GST Portal",
+        "gst"
       ],
       "unconfirmed": true,
       "patterns": [
@@ -290,7 +294,9 @@
       "name": "gst_locked",
       "outcome": "locked",
       "portals": [
-        "GST"
+        "GST",
+        "GST Portal",
+        "gst"
       ],
       "unconfirmed": true,
       "patterns": [
@@ -315,7 +321,12 @@
       "name": "traces_wrong_password",
       "outcome": "wrong_password",
       "portals": [
-        "TRACES"
+        "TRACES",
+        "TRACES Portal",
+        "tdscpc",
+        "traces",
+        "TDS CPC",
+        "TDS"
       ],
       "unconfirmed": true,
       "patterns": [
@@ -342,7 +353,12 @@
       "name": "traces_logged_in",
       "outcome": "worked",
       "portals": [
-        "TRACES"
+        "TRACES",
+        "TRACES Portal",
+        "tdscpc",
+        "traces",
+        "TDS CPC",
+        "TDS"
       ],
       "unconfirmed": true,
       "patterns": [
@@ -368,7 +384,12 @@
       "name": "traces_locked",
       "outcome": "locked",
       "portals": [
-        "TRACES"
+        "TRACES",
+        "TRACES Portal",
+        "tdscpc",
+        "traces",
+        "TDS CPC",
+        "TDS"
       ],
       "unconfirmed": true,
       "patterns": [
