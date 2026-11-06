@@ -644,6 +644,7 @@ class SeraApp:
         self.bridge.extension_settings_updated_received.connect(self._handle_extension_settings_updated)
         self.bridge.settings_provider = self._get_extension_settings_payload
         self.bridge.sca_password_requested.connect(self._handle_sca_password_request)
+        self.bridge.sca_uid_probed.connect(self.clipboard_watcher.handle_uid_probe)
         self.bridge.sca_fill_result_received.connect(self.clipboard_watcher.handle_fill_result)
         self.app.aboutToQuit.connect(self._on_app_about_to_quit)
         # Screentime: when Sera opened / closed on this PC (core/screentime.py), published to the office

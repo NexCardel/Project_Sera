@@ -374,6 +374,35 @@ test("no password box is reported as a failed fill after the wait", async () => 
   assert.ok(Date.now() - started >= 100, "it waited for the box instead of failing at once");
 });
 
+test("an id with no arm asks the desktop whose it is, once, and only on approved hosts", async () => {
+  const env = makeEnv();
+  const c = SCA.createCoordinator(env);
+  assert.strictEqual(await c.onCandidate({ candidate: "abcpd1234e" }, portalTab()), "not-armed");
+  await c.onCandidate({ candidate: "ABCPD1234E" }, portalTab());
+  const probes = env.native.filter(m => m.type === "SCA_UID_PROBE");
+  assert.strictEqual(probes.length, 1);
+  assert.deepStrictEqual(probes[0], { type: "SCA_UID_PROBE", candidate: "ABCPD1234E", page_host: "eportal.incometax.gov.in" });
+  await c.onCandidate({ candidate: "ABCPD1234E" }, portalTab("https://evil.example.com/login"));
+  assert.strictEqual(env.native.filter(m => m.type === "SCA_UID_PROBE").length, 1);
+});
+
+test("another client's id on an armed page is probed too, and a matching id is not", async () => {
+  const env = makeEnv();
+  const c = await armed(env);
+  await c.onCandidate({ candidate: "XYZAB9876C" }, portalTab());
+  assert.strictEqual(env.native.filter(m => m.type === "SCA_UID_PROBE").length, 1);
+  await c.onCandidate({ candidate: "ABCPD1234E" }, portalTab());
+  assert.strictEqual(env.native.filter(m => m.type === "SCA_UID_PROBE").length, 1);
+});
+
+test("an arm that follows the probe fills the id that was typed", async () => {
+  const env = makeEnv();
+  const c = SCA.createCoordinator(env);
+  await c.onCandidate({ candidate: "ABCPD1234E" }, portalTab());
+  await c.handleDesktopMessage({ type: "SCA_ARM_REQUEST", command_id: "cmd_p", arm: makeArm({ trigger: "page" }) });
+  assert.ok(env.native.some(m => m.type === "SCA_PASSWORD_REQUEST"));
+});
+
 (async () => {
   let failed = 0;
   for (const [name, fn] of tests) {

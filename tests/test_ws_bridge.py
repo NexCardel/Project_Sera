@@ -94,13 +94,14 @@ def test_dispatch_routes_each_message_type(bridge):
         (bridge.sca_error_received, "SCA_ERROR"),
         (bridge.sca_fill_result_received, "SCA_FILL_RESULT"),
         (bridge.sca_password_requested, "SCA_PASSWORD_REQUEST"),
+        (bridge.sca_uid_probed, "SCA_UID_PROBE"),
         (bridge.extension_settings_updated_received, "extension_settings_updated"),
     ]:
         sig.connect(lambda m, k=kind: got.setdefault(k, m))
         bridge.dispatch({"type": kind})
     assert set(got) == {
         "SCA_STATE", "SCA_ERROR", "SCA_FILL_RESULT",
-        "SCA_PASSWORD_REQUEST", "extension_settings_updated",
+        "SCA_PASSWORD_REQUEST", "SCA_UID_PROBE", "extension_settings_updated",
     }
 
 

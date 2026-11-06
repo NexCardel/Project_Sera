@@ -104,6 +104,7 @@ class Arm:
     fills: List[str] = field(default_factory=list)
     max_uses: int = 1
     sca_mode: str = "autofill"
+    trigger: str = "clipboard"
 
 
 class ClipboardWatchService(QObject):
@@ -289,14 +290,14 @@ class ClipboardWatchService(QObject):
         old = self._arm
         if old is None:
             return
-        if old.grants == 0:
+        if old.grants == 0 and old.trigger == "clipboard":   # a page arm is followed by a login by definition
             streak = self._unused_streak.get(old.client_id, 0) + 1
             self._unused_streak[old.client_id] = streak
             if streak >= UNUSED_ARMS_BEFORE_PAUSE:
                 self._paused_clients.add(old.client_id)
         self._arm = None
 
-    def _arm_client_services(self, client_id: int, client_token: str, matched_uid: str):
+    def _arm_client_services(self, client_id: int, client_token: str, matched_uid: str, trigger: str = "clipboard"):
         try:
             ctx = self._client_context(client_id)
             if not ctx:
@@ -357,18 +358,46 @@ class ClipboardWatchService(QObject):
             request = sca_protocol.build_arm_request(
                 client_id=client_id, client_token=client_token, matched_uid=matched_uid,
                 candidate_uids=candidates, services=services, business_name=business_name,
-                owner_name=owner_name, sca_mode=sca_mode, max_uses=max_uses)
+                owner_name=owner_name, sca_mode=sca_mode, max_uses=max_uses, trigger=trigger)
             self._retire_current_arm()
             arm = request["arm"]
             self._arm = Arm(arm_id=arm["arm_id"], client_id=client_id, client_token=client_token,
                             matched_uid=matched_uid, services=arm_services,
                             expires_at=arm["expires_at"] / 1000.0, uses_remaining=max_uses,
-                            max_uses=max_uses, sca_mode=sca_mode)
-            print(f"[SCA] Armed client {client_token}: {len(services)} portal(s) [mode: {sca_mode}]")
+                            max_uses=max_uses, sca_mode=sca_mode, trigger=trigger)
+            print(f"[SCA] Armed client {client_token}: {len(services)} portal(s) [mode: {sca_mode}, {trigger}]")
             automation.arm_sca(request)
             self.sca_armed.emit(client_id, client_token, services)
         except Exception as e:
             print(f"[SCA] _arm_client_services error: {e}")
+
+    # ------------------------------------------------------------------ login page -> arm
+    def handle_uid_probe(self, msg: dict) -> None:
+        """SCA_UID_PROBE {candidate, page_host}: a login page shows an id no live arm covers. Arms
+        the same way a copy does, but only for a client with a portal on THIS host. Never replies
+        (a page must not be able to ask whether a string is a client id): any refusal is silent,
+        and the only effect is an arm that goes to the extension background."""
+        try:
+            if not self.enabled:
+                return
+            candidate = sca_protocol.normalize_uid(msg.get("candidate"))
+            if not (3 <= len(candidate) <= 80) or not sca_protocol.looks_like_uid(candidate):
+                return
+            self._ensure_index_fresh()
+            client_id = self._uid_index.get(candidate)
+            if not client_id or is_suppressed(client_id) or client_id in self._paused_clients:
+                return
+            arm = self._arm
+            if arm is not None and arm.client_id == client_id and time.time() < arm.expires_at:
+                return                      # already armed for this client: the arm stays valid
+            page_host = str(msg.get("page_host") or "")
+            portals = self.db.get_client_services(client_id) or self.db.get_services()
+            if not any(sca_protocol.host_matches(page_host, s.get("login_page_link") or "") for s in portals):
+                return                      # not one of this client's portals: no arm at all
+            print(f"[SCA] Login page showed an id of client {client_id}. Arming...")
+            self._arm_client_services(client_id, str(client_id), candidate, trigger="page")
+        except Exception as e:
+            print(f"[SCA] uid probe error: {e}")
 
     # ------------------------------------------------------------------ extension -> desktop
     def handle_password_request(self, msg: dict) -> dict:

@@ -37,6 +37,7 @@ MSG_SCA_PASSWORD_DENIED = "SCA_PASSWORD_DENIED"
 MSG_SCA_ACK = "SCA_ACK"
 MSG_SCA_STATE = "SCA_STATE"
 MSG_SCA_PASSWORD_REQUEST = "SCA_PASSWORD_REQUEST"
+MSG_SCA_UID_PROBE = "SCA_UID_PROBE"   # a login page showed an id no arm covers: whose is it?
 MSG_SCA_FILL_RESULT = "SCA_FILL_RESULT"
 MSG_SCA_ERROR = "SCA_ERROR"
 
@@ -109,6 +110,7 @@ def build_arm_request(
     ttl_ms: int = ARM_TTL_MS,
     sca_mode: str = "autofill",
     max_uses: int = 1,
+    trigger: str = "clipboard",
 ) -> Dict[str, Any]:
     """An SCA_ARM_REQUEST. `services` must not contain passwords - build_arm_service() makes
     the entries; this refuses anything with a password field as a last line of defence."""
@@ -128,6 +130,7 @@ def build_arm_request(
         "owner_name": owner_name,
         "sca_mode": sca_mode,
         "max_uses": max_uses,
+        "trigger": trigger,          # "clipboard" (a copy) or "page" (the id typed on the login page)
         "created_at": now,
         "expires_at": now + ttl_ms,
         "state": STATE_ARMED,
