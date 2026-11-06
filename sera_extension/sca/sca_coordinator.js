@@ -278,6 +278,36 @@
     }, 250);
   }
 
+  // A two-second confirmation after every fill: "Filled for <client>". A typed id can hit the
+  // wrong client; this is where staff would notice. Holds no password, only the names.
+  function showFillChipInPage(bizName, portalName, token) {
+    if (window.self !== window.top || !document.body) return;
+    const old = document.getElementById("sera-sca-chip-host");
+    if (old) old.remove();
+    const host = document.createElement("div");
+    host.id = "sera-sca-chip-host";
+    const shadow = host.attachShadow({ mode: "closed" });
+    const style = document.createElement("style");
+    style.textContent = `.chip { position: fixed; top: 20px; right: 24px; z-index: 2147483647;
+      max-width: 340px; padding: 8px 12px; background: #111814; border: 1.5px solid #2E9B5F;
+      border-radius: 10px; color: #FFFFFF; font: 12.5px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      box-sizing: border-box; opacity: 0; transform: translateY(-6px);
+      transition: opacity 0.25s ease, transform 0.25s ease; }
+      b { color: #4CF9B7; margin-right: 6px; }`;
+    const chip = document.createElement("div");
+    chip.className = "chip";
+    const tag = document.createElement("b");
+    tag.textContent = "SCA";
+    const text = document.createElement("span");
+    text.textContent = `Filled ${portalName || "password"} for ${bizName || "client"}${token ? " (" + token + ")" : ""}`;
+    chip.append(tag, text);
+    shadow.append(style, chip);
+    document.body.appendChild(host);
+    setTimeout(() => { chip.style.opacity = "1"; chip.style.transform = "none"; }, 30);
+    setTimeout(() => { chip.style.opacity = "0"; }, 2400);
+    setTimeout(() => { if (host.isConnected) host.remove(); }, 2800);
+  }
+
   // ---------------------------------------------------------------- coordinator
   function createCoordinator(env) {
     // env: { postNative(msg) -> bool, postDesktop(msg), getSettings() -> Promise<{scaEnabled,
@@ -475,6 +505,12 @@
       report({ type: "SCA_FILL_RESULT", arm_id: p.armId, service_id: p.service.service_id,
                result: result.filled ? "filled" : "failed", reason: result.reason || "" });
       if (result.filled && arm && arm.arm_id === p.armId) {
+        try {
+          await env.executeScript({
+            target: { tabId: p.tabId, frameIds: [0] }, func: showFillChipInPage,
+            args: [arm.business_name || "", p.service.name || "", arm.client_id_token || ""],
+          });
+        } catch (_) {}
         arm.fills = (arm.fills || 0) + 1;
         if (arm.fills >= (arm.max_uses || 1)) await clearArm("CONSUMED");
         else await saveArm();
@@ -569,7 +605,7 @@
 
   const api = {
     normalizeUid, looksLikeUid, hostOf, hostMatches, isApprovedDomain, pickService, isArmLive,
-    candidateMatches, fillPasswordInPage, showWidgetInPage, createCoordinator,
+    candidateMatches, fillPasswordInPage, showWidgetInPage, showFillChipInPage, createCoordinator,
   };
   root.SeraSCA = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
