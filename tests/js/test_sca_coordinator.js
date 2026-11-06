@@ -403,6 +403,26 @@ test("an arm that follows the probe fills the id that was typed", async () => {
   assert.ok(env.native.some(m => m.type === "SCA_PASSWORD_REQUEST"));
 });
 
+test("a fill shows the client chip in the top frame; a failed fill does not", async () => {
+  const env = makeEnv();
+  const c = await armed(env);
+  await c.onCandidate({ candidate: "ABCPD1234E" }, portalTab());
+  const req = env.native.find(m => m.type === "SCA_PASSWORD_REQUEST");
+  await c.handleDesktopMessage({ type: "SCA_PASSWORD_GRANT", request_id: req.request_id, arm_id: "arm_1",
+                                 service_id: 1, password: "pw" });
+  const chip = env.scripts.find(d => d.func === SCA.showFillChipInPage);
+  assert.deepStrictEqual(chip.target.frameIds, [0]);
+  assert.deepStrictEqual(chip.args, ["Test Co", "Income Tax", "7"]);
+  assert.ok(!JSON.stringify(chip.args).includes("pw"));
+  const env2 = makeEnv();
+  env2.fillResult = { filled: false, reason: "no visible password field" };
+  const c2 = await armed(env2);
+  await c2.onCandidate({ candidate: "ABCPD1234E" }, portalTab());
+  const r2 = env2.native.find(m => m.type === "SCA_PASSWORD_REQUEST");
+  await c2.handleDesktopMessage({ type: "SCA_PASSWORD_GRANT", request_id: r2.request_id, arm_id: "arm_1", service_id: 1, password: "pw" });
+  assert.ok(!env2.scripts.some(d => d.func === SCA.showFillChipInPage));
+});
+
 (async () => {
   let failed = 0;
   for (const [name, fn] of tests) {
