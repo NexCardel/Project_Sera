@@ -56,7 +56,9 @@ def _node(el, parent: int, depth: int, uia_nodes) -> Dict[str, Any]:
     }
     if c(el, uia_nodes.PID_SELECTION_IS_SELECTED) is True:
         n["selected"] = True
-    if ctype in _WITH_VALUE and not c(el, uia_nodes.PID_IS_PASSWORD):
+    if c(el, uia_nodes.PID_IS_PASSWORD):
+        n["pw"] = True                       # a password box: its value is never read
+    elif ctype in _WITH_VALUE:
         n["value"] = _s(c(el, uia_nodes.PID_VALUE))
     return n
 
@@ -122,6 +124,48 @@ class UiaReader:
             return docs
         except Exception:
             return []
+
+    def find_fast(self, hwnd: int, automation_id: str) -> Optional[Dict[str, Any]]:
+        """The SCA watcher's fast path (docs/sca-uid-node-plan.md WP4): ONE provider-side search for the
+        elements whose HTML id is automation_id, or that are a password box - no subtree cache, no walk.
+        {"hits": [{ctype, name, value}], "pw": number of password boxes}, both on-screen only;
+        None on any failure (the caller then does a full read)."""
+        try:
+            from core.sgt_i import uia_nodes
+            uia, client = self._ensure()
+            root = uia.ElementFromHandle(hwnd)
+            if not root or not automation_id:
+                return None
+            request = uia.CreateCacheRequest()
+            for pid in (uia_nodes.PID_CONTROL_TYPE, uia_nodes.PID_NAME, uia_nodes.PID_VALUE,
+                        uia_nodes.PID_IS_PASSWORD, uia_nodes.PID_IS_OFFSCREEN, uia_nodes.PID_AUTOMATION_ID):
+                try:
+                    request.AddProperty(pid)
+                except Exception:
+                    pass
+            request.TreeScope = 1                                           # TreeScope_Element
+            request.TreeFilter = uia.RawViewCondition
+            cond = uia.CreateOrCondition(
+                uia.CreatePropertyCondition(client.UIA_AutomationIdPropertyId, automation_id),
+                uia.CreatePropertyCondition(client.UIA_IsPasswordPropertyId, True))
+            found = root.FindAllBuildCache(4, cond, request)                # TreeScope_Descendants
+            c = uia_nodes._cached
+            hits, pw = [], 0
+            for i in range(found.Length if found else 0):
+                el = found.GetElement(i)
+                if c(el, uia_nodes.PID_IS_OFFSCREEN):
+                    continue
+                if c(el, uia_nodes.PID_IS_PASSWORD):
+                    pw += 1
+                    continue
+                if _s(c(el, uia_nodes.PID_AUTOMATION_ID)) != automation_id:
+                    continue
+                ctype = c(el, uia_nodes.PID_CONTROL_TYPE) or 0
+                hits.append({"ctype": ctype, "name": _s(c(el, uia_nodes.PID_NAME)),
+                             "value": _s(c(el, uia_nodes.PID_VALUE)) if ctype in _WITH_VALUE else ""})
+            return {"hits": hits, "pw": pw}
+        except Exception:
+            return None
 
     def read_url(self, hwnd: int) -> str:
         """The browser's address bar text ('' when not found); a property read only."""

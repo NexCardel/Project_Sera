@@ -111,7 +111,8 @@ class ClipboardWatchService(QObject):
     """Watches the clipboard for client ids and runs the desktop half of SCA."""
     sca_armed = Signal(int, str, list)  # client_id, client_token, services (no passwords)
     sca_notice = Signal(str, str)       # message for staff, level ("info" | "warning")
-    source_texts = Signal(list)         # the text of a service's UID page (from the watcher thread)
+    source_uid = Signal(object, str)    # service_id, UID read from its UID page's picked node (watcher thread)
+    source_warn = Signal(object, str)   # service_id, "missing" | "ambiguous" (watcher thread)
 
     def __init__(self, db, parent=None, actor: str = "Staff"):
         super().__init__(parent)
@@ -126,7 +127,7 @@ class ClipboardWatchService(QObject):
         self._last_copy = ("", 0.0)
         self._unused_streak: Dict[int, int] = {}
         self._paused_clients: set = set()
-        self._uid_pages: list = []         # services' UID page links (Settings -> SCA)
+        self._uid_sources: list = []       # [{id, name, uid_page_link, uid_node}] (Settings -> SCA)
         self._source_watcher = None
 
         self.refresh_index()
@@ -301,7 +302,9 @@ class ClipboardWatchService(QObject):
                 self._paused_clients.add(old.client_id)
         self._arm = None
 
-    def _arm_client_services(self, client_id: int, client_token: str, matched_uid: str, trigger: str = "clipboard"):
+    def _arm_client_services(self, client_id: int, client_token: str, matched_uid: str, trigger: str = "clipboard",
+                             only_service_id=None):
+        """only_service_id: arm for that one service of the client (a UID page arm), never the others."""
         try:
             ctx = self._client_context(client_id)
             if not ctx:
@@ -309,6 +312,8 @@ class ClipboardWatchService(QObject):
             client, mcl_cols, values = ctx
             client_services = self.db.get_client_services(client_id)
             target_services = client_services or self.db.get_services()
+            if only_service_id is not None:
+                target_services = [x for x in (client_services or []) if x.get("id") == only_service_id]
             if not target_services:
                 print(f"[SCA] Client {client_id} has no attached or configured services; not arming.")
                 return
@@ -376,51 +381,70 @@ class ClipboardWatchService(QObject):
             print(f"[SCA] _arm_client_services error: {e}")
 
     # ------------------------------------------------------------------ UID page -> arm
+    SOURCES_REFRESH_MS = 10000
+
     def refresh_sources(self):
-        """The UID page links of the services (Settings -> SCA, services.uid_page_link)."""
+        """The services' UID pages and picked nodes (Settings -> SCA). Read on the UI thread; the watcher
+        thread only reads the list (swapped whole), never the database."""
         try:
-            self._uid_pages = [str(s.get("uid_page_link") or "").strip()
-                               for s in self.db.get_services() if str(s.get("uid_page_link") or "").strip()]
+            self._uid_sources = [
+                {"id": s.get("id"), "name": str(s.get("name") or ""),
+                 "uid_page_link": str(s.get("uid_page_link") or "").strip(), "uid_node": s.get("uid_node") or ""}
+                for s in self.db.get_services()
+                if str(s.get("uid_page_link") or "").strip() and s.get("uid_node")]
         except Exception:
-            self._uid_pages = []
+            self._uid_sources = []
 
     def start_source_watch(self):
-        """Starts the watcher thread once. It does no UIA work until a UID page is in front."""
+        """Starts the watcher thread once. It does no UIA work until a UID page is in front. A pick saved in
+        Settings is picked up within SOURCES_REFRESH_MS (no restart)."""
         if self._source_watcher is not None:
             return
         from core.sca.uid_source_watch import UidSourceWatcher
-        self.source_texts.connect(self.handle_source_texts)
+        self.source_uid.connect(self.handle_source_uid)
+        self.source_warn.connect(self.handle_source_warn)
+        self._sources_timer = QTimer(self)
+        self._sources_timer.timeout.connect(self.refresh_sources)
+        self._sources_timer.start(self.SOURCES_REFRESH_MS)
         self._source_watcher = UidSourceWatcher(
-            lambda: self._uid_pages, lambda: self.enabled, self.source_texts.emit)
+            lambda: self._uid_sources, lambda: self.enabled, self.source_uid.emit, self.source_warn.emit)
         self._source_watcher.start()
 
-    def handle_source_texts(self, texts: list) -> None:
-        """A UID page shows these strings. Those that are a known client's id are matched against the
-        same index a copy uses; it arms only when they all belong to ONE client (a list of many clients
-        is ambiguous: no guess). No host check, because the page is a client page, not a portal."""
+    def _source_name(self, service_id) -> str:
+        return next((x["name"] for x in self._uid_sources if x["id"] == service_id), "this service")
+
+    def handle_source_uid(self, service_id, uid: str) -> None:
+        """A service's UID page shows this (cleaned) UID in its picked node. Arms that client for THAT
+        service only, and only when the client has it."""
         try:
             if not self.enabled:
                 return
             self._ensure_index_fresh()
-            ids = set()
-            for t in texts or []:
-                cand = sca_protocol.normalize_uid(t)
-                if 3 <= len(cand) <= 80 and sca_protocol.looks_like_uid(cand):
-                    cid = self._uid_index.get(cand)
-                    if cid:
-                        ids.add((cid, cand))
-            if len({cid for cid, _ in ids}) != 1:
+            cand = sca_protocol.normalize_uid(uid)
+            client_id = self._uid_index.get(cand)
+            if not client_id:
+                print(f"[SCA] UID page of service {service_id}: the UID is not a known client id.")
                 return
-            client_id, candidate = next(iter(ids))
             if is_suppressed(client_id) or client_id in self._paused_clients:
                 return
-            arm = self._arm
-            if arm is not None and arm.client_id == client_id and time.time() < arm.expires_at:
+            if not any(x.get("id") == service_id for x in (self.db.get_client_services(client_id) or [])):
+                print(f"[SCA] Client {client_id} does not have service {service_id}; not arming.")
                 return
-            print(f"[SCA] UID page shows an id of client {client_id}. Arming...")
-            self._arm_client_services(client_id, str(client_id), candidate, trigger="source")
+            arm = self._arm
+            if (arm is not None and arm.client_id == client_id and time.time() < arm.expires_at
+                    and service_id in arm.services):
+                return                      # already armed for this client and service
+            print(f"[SCA] UID page of service {service_id} shows client {client_id}. Arming...")
+            self._arm_client_services(client_id, str(client_id), cand, trigger="source", only_service_id=service_id)
         except Exception as e:
             print(f"[SCA] UID page error: {e}")
+
+    def handle_source_warn(self, service_id, why: str) -> None:
+        """The picked UID box is not on the page (once per visit): staff must pick it again."""
+        name = self._source_name(service_id)
+        detail = "found more than one box like it" if why == "ambiguous" else "can't find it"
+        self.sca_notice.emit(f"SCA: the UID box on {name}'s login page changed ({detail}). "
+                             f"Pick it again in Settings \u2192 SCA.", "warning")
 
     # ------------------------------------------------------------------ extension -> desktop
     def handle_password_request(self, msg: dict) -> dict:

@@ -480,14 +480,20 @@ def _pick_docs(docs, doc):
     return [int(doc)]
 
 
-def build(docs, meta, doc="auto", comp_view="present", groups=False, arrange=False, outline=False):
+def build(docs, meta, doc="auto", comp_view="present", groups=False, arrange=False, outline=False, pick=None):
     """(html, summary). The summary has counts only: the caller may print it. groups=True draws the
     repeating groups of cards.py on top (plan docs/cards_rows/plan.md section 7); outline=True outlines
-    every container and highlights same-shape containers on hover."""
+    every container and highlights same-shape containers on hover.
+
+    pick (the SCA UID picker, docs/sca-uid-node-plan.md WP3): {"service", "post", "token",
+    "cands": {"<doc>:<node>": {"text", "rules": {rule: uid}, "auto"}}}. The candidate nodes become
+    clickable and a bar sends {token, doc, i, rule} to pick["post"]. Without pick the page is unchanged."""
     sections = [_section(k, docs[k], comp_view, groups, arrange, outline) for k in _pick_docs(docs, doc)]
     data = {"title": meta.get("title", ""), "page": meta.get("page", ""), "browser": meta.get("browser", ""),
             "source": meta.get("source", ""), "index": meta.get("label", ""), "comp_view": comp_view,
             "anchor": meta.get("anchor", ""), "outline": bool(outline), "docs": sections}
+    if pick:
+        data["pick"] = pick
     blob = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":")).replace("</", "<\\/")
     summary = {"sections": [{"label": s["label"], **s["stats"]} for s in sections]}
     return TEMPLATE.replace("/*DATA*/null", blob), summary
@@ -650,6 +656,16 @@ TEMPLATE = r"""<!doctype html>
   .olc { display:none; }
   body.has-ol .olc { display:flex; }
   #olpin { color:#e8590c; }
+  .ghost.cand { display:block; pointer-events:auto; cursor:pointer; outline:2px dashed #2a9d8f; background:rgba(42,157,143,.08); z-index:7; }
+  .ghost.cand:hover { background:rgba(42,157,143,.2); }
+  .ghost.cand.sel { outline:3px solid #2a9d8f; background:rgba(42,157,143,.25); }
+  #pickbar { position:fixed; left:0; right:0; bottom:0; z-index:15; background:var(--bar); border-top:2px solid #2a9d8f;
+             padding:10px 16px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  #pickbar[hidden] { display:none; }
+  #pickbar code { font:13px ui-monospace,Consolas,monospace; background:rgba(42,157,143,.15); padding:2px 6px; border-radius:3px; }
+  #pickbar button { font:inherit; padding:6px 14px; border-radius:4px; border:1px solid #2a9d8f; background:#2a9d8f; color:#fff; cursor:pointer; }
+  #pickbar button:disabled { opacity:.5; cursor:default; }
+  body.picking main { padding-bottom:90px; }
   #tip { position:fixed; z-index:20; pointer-events:none; background:#222; color:#fff; font:12px/1.4 ui-monospace,Consolas,monospace;
          padding:6px 8px; border-radius:4px; max-width:520px; display:none; white-space:pre-wrap; }
 </style>
@@ -668,6 +684,7 @@ TEMPLATE = r"""<!doctype html>
 </header>
 <main id="docs"></main>
 <div id="tip"></div>
+<div id="pickbar" hidden></div>
 <script>
 const D = /*DATA*/null;
 const FIT_MIN = 7;
@@ -912,6 +929,66 @@ const shrunk = fits.reduce((a, f) => a + f.shrunk, 0);
 document.getElementById('meta').textContent = [D.page, D.browser, D.source, D.index, D.comp_view ? 'comp view: ' + D.comp_view : ''].filter(Boolean).join(' · ');
 document.getElementById('sum').textContent = nodes + ' UIA nodes · ' + texts + ' texts · ' + shrunk + ' shrunk to fit';
 body.dataset.fit = JSON.stringify(fits);
+
+// SCA UID picker (pick mode): only nodes whose text holds a UID are clickable
+if (D.pick) {
+  const P = D.pick, bar = document.getElementById('pickbar');
+  body.classList.add('picking');
+  document.querySelector('header b').textContent = 'Pick the UID for ' + P.service;
+  let sel = null, done = false;
+  const pages = document.querySelectorAll('.page');
+  function show() {
+    bar.textContent = '';
+    bar.hidden = false;
+    if (!sel) { bar.appendChild(mk('span', null, 'Click the box that shows the client\u2019s UID (green dashed boxes hold one).')); return; }
+    const c = P.cands[sel.key];
+    bar.appendChild(mk('span', null, 'Text: '));
+    bar.appendChild(mk('code', null, c.text));
+    const lab = mk('label', null, 'Rule ');
+    const s = document.createElement('select');
+    for (const r of Object.keys(c.rules)) { const o = document.createElement('option'); o.value = r; o.textContent = r; s.appendChild(o); }
+    s.value = sel.rule;
+    s.addEventListener('change', () => { sel.rule = s.value; show(); });
+    lab.appendChild(s);
+    bar.appendChild(lab);
+    bar.appendChild(mk('span', null, 'UID: '));
+    bar.appendChild(mk('code', null, c.rules[sel.rule] || ''));
+    const b = mk('button', null, 'Use this');
+    b.addEventListener('click', send);
+    bar.appendChild(b);
+  }
+  async function send() {
+    if (!sel || done) return;
+    bar.querySelector('button').disabled = true;
+    try {
+      const r = await fetch(P.post, {method: 'POST', headers: {'Content-Type': 'text/plain'},
+        body: JSON.stringify({token: P.token, doc: sel.doc, i: sel.i, rule: sel.rule})});
+      done = r.ok;
+      bar.textContent = r.ok ? 'Saved. Sera now reads this box on ' + P.service + '\u2019s UID page. You can close this tab.'
+                             : 'Not saved (' + r.status + '). Press Pick UID in Sera again.';
+    } catch (e) {
+      bar.textContent = 'Sera did not answer. Press Pick UID in Sera again.';
+    }
+  }
+  D.docs.forEach((d, n) => {
+    const page = pages[n];
+    if (!page) return;
+    for (const g of page.querySelectorAll('.ghost[data-k]')) {
+      const key = d.k + ':' + g.dataset.k;
+      if (!P.cands[key]) continue;
+      g.classList.add('cand');
+      g.addEventListener('click', ev => {
+        if (done) return;
+        ev.stopPropagation();
+        for (const x of document.querySelectorAll('.ghost.sel')) x.classList.remove('sel');
+        g.classList.add('sel');
+        sel = {key, doc: d.k, i: Number(g.dataset.k), rule: P.cands[key].auto};
+        show();
+      });
+    }
+  });
+  show();
+}
 </script>
 </body>
 </html>

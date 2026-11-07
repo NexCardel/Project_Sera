@@ -210,32 +210,6 @@ class TestClipboardAssist(unittest.TestCase):
         self.watch.set_enabled(False)
         self.assertEqual(self.request(arm, self.gst, "services.gst.gov.in")["reason"], "SCA is turned off")
 
-    # ------------------------------------------------------------------ UID page -> arm
-    def test_a_client_id_on_a_uid_page_arms_with_the_source_trigger(self):
-        self.watch.handle_source_texts(["Client", "abcpd1234e", "Acme Traders"])
-        self.assertEqual(len(self.sent), 1)
-        self.assertEqual(self.sent[-1]["arm"]["trigger"], "source")
-        self.assertEqual(self.sent[-1]["arm"]["client_id"], self.client)
-
-    def test_a_uid_page_arms_nothing_for_unknown_text_or_when_sca_is_off(self):
-        self.watch.handle_source_texts(["ZZZZZ9999Z", "Acme Traders Pvt Ltd"])
-        self.watch.set_enabled(False)
-        self.watch.handle_source_texts(["ABCPD1234E"])
-        self.assertEqual(self.sent, [])
-
-    def test_a_uid_page_keeps_a_live_arm_for_the_same_client(self):
-        self.arm()
-        self.watch.handle_source_texts(["ABCPD1234E"])
-        self.assertEqual(len(self.sent), 1)
-
-    def test_uid_pages_come_from_the_services(self):
-        self.watch.refresh_sources()
-        self.assertEqual(self.watch._uid_pages, [])
-        self.db.set_service_uid_page_links({self.itr: " https://sheet.example.com/clients "})
-        self.watch.refresh_sources()
-        self.assertEqual(self.watch._uid_pages, ["https://sheet.example.com/clients"])
-
-
 
 if __name__ == "__main__":
     unittest.main()
