@@ -159,7 +159,7 @@ class MclServicesMixin:
                 """SELECT id, name, login_page_link, userid_column_id, password_column_id,
                           username_selector, password_selector, automation_mode, extension_flow,
                           success_selector, arn_selector, sort_order, automation_mode_2, browser,
-                          dashboard_page_link
+                          dashboard_page_link, uid_page_link
                    FROM services ORDER BY sort_order"""
             )
             return [
@@ -173,6 +173,7 @@ class MclServicesMixin:
                     "automation_mode_2": r[12] if len(r) > 12 and r[12] else "",
                     "browser": r[13] if len(r) > 13 and r[13] else "",
                     "dashboard_page_link": r[14] if len(r) > 14 and r[14] else "",
+                    "uid_page_link": r[15] if len(r) > 15 and r[15] else "",
                 }
                 for r in cur.fetchall()
             ]
@@ -288,6 +289,13 @@ class MclServicesMixin:
                 "UPDATE services SET login_page_link = ?, dashboard_page_link = ? WHERE id = ?",
                 ((login_page_link or "").strip(), (dashboard_page_link or "").strip(), service_id)
             )
+
+    def set_service_uid_page_links(self, links: dict) -> None:
+        """SCA tab: {service_id: link} of the page where staff see a client's UID. '' clears it."""
+        with self._connect() as conn:
+            for service_id, link in links.items():
+                conn.execute("UPDATE services SET uid_page_link = ? WHERE id = ?",
+                             ((link or "").strip(), service_id))
 
     def auto_populate_service_selectors(self):
         """

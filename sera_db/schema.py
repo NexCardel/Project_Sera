@@ -587,6 +587,8 @@ class SchemaMixin:
             # SCK: the portal's logged-in / welcome page. The new-password card leaves when this
             # page is reached, so SCK knows where its widget belongs and where it ends.
             self._ensure_column(conn, "services", "dashboard_page_link", "TEXT")
+            # SCA: the page where staff see a client's UID. Sera reads it by UIA and matches it to a client.
+            self._ensure_column(conn, "services", "uid_page_link", "TEXT")
             conn.execute("UPDATE services SET automation_mode = 'extension' WHERE automation_mode IN ('automated', 'playwright')")
 
             # 6. Client Services (Attachment table)

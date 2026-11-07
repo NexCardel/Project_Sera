@@ -273,6 +273,7 @@ _P_PURGE     = 10
 _P_TRACKER   = 11
 _P_SCREENTIME = 12
 _P_SCK       = 13
+_P_SCA       = 14
 
 _PAGE_MAP = {
     "general":  _P_GENERAL,
@@ -289,9 +290,10 @@ _PAGE_MAP = {
     "tracker":  _P_TRACKER,
     "screentime": _P_SCREENTIME,
     "sck":      _P_SCK,
+    "sca":      _P_SCA,
 }
 
-_SETTINGS_PAGES = {_P_GENERAL, _P_ACTIONS, _P_SCC, _P_MAIN_VIS, _P_QC, _P_ADMIN_VIS, _P_TRACKER, _P_SCK}
+_SETTINGS_PAGES = {_P_GENERAL, _P_ACTIONS, _P_SCC, _P_MAIN_VIS, _P_QC, _P_ADMIN_VIS, _P_TRACKER, _P_SCK, _P_SCA}
 
 
 # ── Main Dialog ───────────────────────────────────────────────────────────────
@@ -347,6 +349,7 @@ class UnifiedSettingsDialog(QDialog):
             _P_TRACKER: self._build_page_tracker,
             _P_SCREENTIME: self._build_page_screentime,
             _P_SCK: self._build_page_sck,
+            _P_SCA: self._build_page_sca,
         }
         self._page_widgets = {}
 
@@ -551,6 +554,7 @@ class UnifiedSettingsDialog(QDialog):
         _item("mdi.gesture-tap-button",     "Action Buttons",     _P_ACTIONS)
         _item("mdi.shield-key-outline",     "SCC Vault Presets",  _P_SCC)
         _item("mdi.key-change",             "Credential Keeper",  _P_SCK)
+        _item("mdi.clipboard-arrow-down-outline", "SCA",          _P_SCA)
         _item("mdi.radar",                  "Tracker",            _P_TRACKER)
         _item("mdi.timer-outline",          "Screentime",         _P_SCREENTIME)
 
@@ -686,23 +690,6 @@ class UnifiedSettingsDialog(QDialog):
         lay.addWidget(_setting_row("Launch at Windows startup",
             "Automatically starts Project Sera in the background when Windows boots.", self.autostart_check))
 
-        self.sca_check = QCheckBox()
-        lay.addWidget(_setting_row("SCA \u2014 Sera Clipboard Assist",
-            "When a client User ID is copied from a spreadsheet, arms matching portal credentials automatically.",
-            self.sca_check))
-
-        self.sca_mode_combo = QComboBox()
-        self.sca_mode_combo.addItem("Ambient Autofill  (silently fills password on paste)", "autofill")
-        self.sca_mode_combo.addItem("SCA Widget  (floating 1-click password prompt on paste)", "widget")
-        lay.addWidget(_setting_row("SCA Action Mode",
-            "Whether SCA silently injects credentials or shows a 1-click floating prompt.", self.sca_mode_combo))
-
-        self.sca_max_uses_spin = QSpinBox()
-        self.sca_max_uses_spin.setRange(1, 20)
-        self.sca_max_uses_spin.setSuffix(" uses")
-        lay.addWidget(_setting_row("SCA Uses per Copied UID",
-            "Maximum successful SCA fills allowed after one UID is copied.", self.sca_max_uses_spin))
-
         lay.addWidget(_sub_header("Schema Info"))
 
         id_col = self.db.get_id_column()
@@ -723,12 +710,73 @@ class UnifiedSettingsDialog(QDialog):
         self.quick_copy_check.toggled.connect(self._on_control_changed)
         self.run_in_bg_check.toggled.connect(self._on_control_changed)
         self.autostart_check.toggled.connect(self._on_control_changed)
+        lay.addStretch()
+        return _wrap_scroll(w)
+
+    def _build_page_sca(self) -> QScrollArea:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 28)
+        lay.setSpacing(0)
+
+        lay.addWidget(_page_header("SCA",
+            "Sera Clipboard Assist: arms matching portal credentials when a client User ID is copied."))
+
+        self.sca_check = QCheckBox()
+        lay.addWidget(_setting_row("SCA — Sera Clipboard Assist",
+            "When a client User ID is copied from a spreadsheet, arms matching portal credentials automatically.",
+            self.sca_check))
+
+        self.sca_mode_combo = QComboBox()
+        self.sca_mode_combo.addItem("Ambient Autofill  (silently fills password on paste)", "autofill")
+        self.sca_mode_combo.addItem("SCA Widget  (floating 1-click password prompt on paste)", "widget")
+        lay.addWidget(_setting_row("SCA Action Mode",
+            "Whether SCA silently injects credentials or shows a 1-click floating prompt.", self.sca_mode_combo))
+
+        self.sca_max_uses_spin = QSpinBox()
+        self.sca_max_uses_spin.setRange(1, 20)
+        self.sca_max_uses_spin.setSuffix(" uses")
+        lay.addWidget(_setting_row("SCA Uses per Copied UID",
+            "Maximum successful SCA fills allowed after one UID is copied.", self.sca_max_uses_spin))
+
         self.sca_check.toggled.connect(self._on_control_changed)
         self.sca_mode_combo.currentIndexChanged.connect(self._on_control_changed)
         self.sca_max_uses_spin.valueChanged.connect(self._on_control_changed)
 
+        lay.addWidget(_sub_header("UID sources"))
+        lay.addWidget(self._build_uid_sources_box())
+
         lay.addStretch()
         return _wrap_scroll(w)
+
+    def _build_uid_sources_box(self) -> QWidget:
+        """One row per registered service: the link of the page where staff see a client's UID. While that
+        page is in front, Sera reads it (UIA) and arms SCA for the client whose UID it shows. Empty = none."""
+        box = QWidget()
+        v = QVBoxLayout(box)
+        v.setContentsMargins(24, 4, 24, 4)
+        v.setSpacing(6)
+        hint = QLabel("Paste the link of the page where the client's UID is shown. Sera reads that page "
+                      "(not the browser extension) and matches the UID against the client database. "
+                      "Leave empty for none. Saved with Save Changes.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color: {_TEXT_SEC}; font-size: 12px;")
+        v.addWidget(hint)
+        self._sca_uid_edits = {}
+        for svc in self.db.get_services():
+            row = QHBoxLayout()
+            name = QLabel(str(svc.get("name") or ""))
+            name.setMinimumWidth(170)
+            edit = QLineEdit(str(svc.get("uid_page_link") or ""))
+            edit.setPlaceholderText("https://...")
+            edit.textChanged.connect(self._on_control_changed)
+            self._sca_uid_edits[svc["id"]] = edit
+            row.addWidget(name)
+            row.addWidget(edit, stretch=1)
+            v.addLayout(row)
+        if not self._sca_uid_edits:
+            v.addWidget(QLabel("No services are registered yet."))
+        return box
 
     def _build_page_actions(self) -> QScrollArea:
         w = QWidget()
@@ -1605,9 +1653,11 @@ class UnifiedSettingsDialog(QDialog):
             state["quick_copy"] = self.quick_copy_check.isChecked()
             state["run_in_bg"] = self.run_in_bg_check.isChecked()
             state["autostart"] = self.autostart_check.isChecked()
+        if hasattr(self, "sca_check"):
             state["sca"] = self.sca_check.isChecked()
             state["sca_mode"] = self.sca_mode_combo.currentData()
             state["sca_max_uses"] = self.sca_max_uses_spin.value()
+            state["sca_uid_pages"] = sorted((i, e.text().strip()) for i, e in self._sca_uid_edits.items())
         if hasattr(self, "show_hide_check"):
             state["show_hide"] = self.show_hide_check.isChecked()
         if hasattr(self, "scc_check"):
@@ -1708,6 +1758,13 @@ class UnifiedSettingsDialog(QDialog):
             self.clipboard_spin.setValue(int(g("clipboard_clear_seconds", "30")))
             self.quick_copy_check.setChecked(g("quick_copy_enabled", "0") == "1")
             self.run_in_bg_check.setChecked(g("run_in_background", "1") == "1")
+            try:
+                from ui.utils import autostart
+                self.autostart_check.setChecked(autostart.is_autostart_enabled())
+            except Exception:
+                self.autostart_check.setChecked(False)
+
+        if self._pending("sca", "sca_check", force):
             self.sca_check.setChecked(g("sca_enabled", "1") == "1")
             try:
                 self.sca_max_uses_spin.setValue(max(1, min(int(g("sca_max_uses", "1")), 20)))
@@ -1718,12 +1775,11 @@ class UnifiedSettingsDialog(QDialog):
             if sca_mode == "assist":
                 sca_mode = "widget"
             _set(self.sca_mode_combo, sca_mode)
-
-            try:
-                from ui.utils import autostart
-                self.autostart_check.setChecked(autostart.is_autostart_enabled())
-            except Exception:
-                self.autostart_check.setChecked(False)
+            for sid, e in self._sca_uid_edits.items():
+                svc = next((x for x in self.db.get_services() if x["id"] == sid), None)
+                e.blockSignals(True)
+                e.setText(str((svc or {}).get("uid_page_link") or ""))
+                e.blockSignals(False)
 
         if self._pending("scc", "scc_check", force):
             self.scc_check.setChecked(g("scc_enabled", "1") == "1")
@@ -1791,21 +1847,6 @@ class UnifiedSettingsDialog(QDialog):
                 bulk_settings["clipboard_clear_seconds"]    = str(self.clipboard_spin.value())
                 bulk_settings["quick_copy_enabled"]         = b(self.quick_copy_check)
                 bulk_settings["run_in_background"]          = b(self.run_in_bg_check)
-                bulk_settings["sca_enabled"]                = b(self.sca_check)
-                bulk_settings["sca_action_mode"]            = self.sca_mode_combo.currentData() or "autofill"
-                bulk_settings["sca_max_uses"]               = str(self.sca_max_uses_spin.value())
-
-                try:
-                    from automation import update_extension_settings
-                    update_extension_settings(
-                        sca_enabled=self.sca_check.isChecked(),
-                        sca_mode=self.sca_mode_combo.currentData() or "autofill",
-                        sca_max_uses=self.sca_max_uses_spin.value(),
-                        allowed_services=self.db.get_services(),
-                        clipboard_clear_seconds=self.clipboard_spin.value(),
-                    )
-                except Exception:
-                    pass
 
                 try:
                     from ui.utils import autostart
@@ -1820,6 +1861,50 @@ class UnifiedSettingsDialog(QDialog):
                             self.autostart_check.blockSignals(False)
                 except Exception as exc:
                     autostart_message = f"Start at logon could not be changed: {exc}"
+
+            if hasattr(self, "sca_check"):
+                bulk_settings["sca_enabled"]                = b(self.sca_check)
+                bulk_settings["sca_action_mode"]            = self.sca_mode_combo.currentData() or "autofill"
+                bulk_settings["sca_max_uses"]               = str(self.sca_max_uses_spin.value())
+                try:
+                    self.db.set_service_uid_page_links({i: e.text() for i, e in self._sca_uid_edits.items()})
+                except Exception:
+                    pass
+
+            if hasattr(self, "theme_combo") or hasattr(self, "sca_check"):
+                # One push covers both pages; whichever page was never opened falls back to the saved value.
+                try:
+                    from automation import update_extension_settings
+                    saved = self.db.get_all_settings()
+                    if hasattr(self, "sca_check"):
+                        sca_on = self.sca_check.isChecked()
+                        sca_mode = self.sca_mode_combo.currentData() or "autofill"
+                        sca_uses = self.sca_max_uses_spin.value()
+                    else:
+                        sca_on = saved.get("sca_enabled", "1") == "1"
+                        sca_mode = saved.get("sca_action_mode", "autofill")
+                        if sca_mode == "assist":
+                            sca_mode = "widget"
+                        try:
+                            sca_uses = int(saved.get("sca_max_uses", "1"))
+                        except (TypeError, ValueError):
+                            sca_uses = 1
+                    if hasattr(self, "clipboard_spin"):
+                        clip = self.clipboard_spin.value()
+                    else:
+                        try:
+                            clip = int(saved.get("clipboard_clear_seconds", "30"))
+                        except (TypeError, ValueError):
+                            clip = 30
+                    update_extension_settings(
+                        sca_enabled=sca_on,
+                        sca_mode=sca_mode,
+                        sca_max_uses=sca_uses,
+                        allowed_services=self.db.get_services(),
+                        clipboard_clear_seconds=clip,
+                    )
+                except Exception:
+                    pass
 
             if hasattr(self, "scc_check"):
                 bulk_settings["scc_enabled"] = b(self.scc_check)

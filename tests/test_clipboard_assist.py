@@ -210,45 +210,31 @@ class TestClipboardAssist(unittest.TestCase):
         self.watch.set_enabled(False)
         self.assertEqual(self.request(arm, self.gst, "services.gst.gov.in")["reason"], "SCA is turned off")
 
-    # ------------------------------------------------------------------ login page -> arm
-    def probe(self, candidate="ABCPD1234E", host="services.gst.gov.in"):
-        self.watch.handle_uid_probe({"type": "SCA_UID_PROBE", "candidate": candidate, "page_host": host})
-
-    def test_an_id_on_the_clients_portal_page_arms_without_a_copy(self):
-        self.probe()
+    # ------------------------------------------------------------------ UID page -> arm
+    def test_a_client_id_on_a_uid_page_arms_with_the_source_trigger(self):
+        self.watch.handle_source_texts(["Client", "abcpd1234e", "Acme Traders"])
         self.assertEqual(len(self.sent), 1)
-        arm = self.sent[-1]["arm"]
-        self.assertEqual(arm["trigger"], "page")
-        self.assertEqual(arm["client_id"], self.client)
-        self.assertFalse(any("password" in s for s in arm["services"]))
+        self.assertEqual(self.sent[-1]["arm"]["trigger"], "source")
+        self.assertEqual(self.sent[-1]["arm"]["client_id"], self.client)
 
-    def test_a_page_probe_arms_nothing_on_other_sites_or_for_unknown_ids(self):
-        self.probe(host="evil.example.com")
-        self.probe(host="services.gst.gov.in.evil.com")
-        self.probe(candidate="ZZZZZ9999Z")
-        self.probe(candidate="not an id")
-        self.assertEqual(self.sent, [])
-
-    def test_a_page_probe_keeps_a_live_arm_for_the_same_client(self):
-        self.arm()
-        self.probe()
-        self.assertEqual(len(self.sent), 1)
-
-    def test_a_page_probe_respects_off_and_assist_suppression(self):
-        clipboard_watch.suppress_client(self.client)
-        self.addCleanup(clipboard_watch.release_client, self.client)
-        self.probe()
+    def test_a_uid_page_arms_nothing_for_unknown_text_or_when_sca_is_off(self):
+        self.watch.handle_source_texts(["ZZZZZ9999Z", "Acme Traders Pvt Ltd"])
         self.watch.set_enabled(False)
-        clipboard_watch.release_client(self.client)
-        self.probe()
+        self.watch.handle_source_texts(["ABCPD1234E"])
         self.assertEqual(self.sent, [])
 
-    def test_unused_page_arms_do_not_pause_the_client(self):
-        for _ in range(clipboard_watch.UNUSED_ARMS_BEFORE_PAUSE + 2):
-            self.watch._arm = None
-            self.probe()
-            self.watch._retire_current_arm()
-        self.assertNotIn(self.client, self.watch._paused_clients)
+    def test_a_uid_page_keeps_a_live_arm_for_the_same_client(self):
+        self.arm()
+        self.watch.handle_source_texts(["ABCPD1234E"])
+        self.assertEqual(len(self.sent), 1)
+
+    def test_uid_pages_come_from_the_services(self):
+        self.watch.refresh_sources()
+        self.assertEqual(self.watch._uid_pages, [])
+        self.db.set_service_uid_page_links({self.itr: " https://sheet.example.com/clients "})
+        self.watch.refresh_sources()
+        self.assertEqual(self.watch._uid_pages, ["https://sheet.example.com/clients"])
+
 
 
 if __name__ == "__main__":
