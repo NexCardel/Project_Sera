@@ -341,3 +341,20 @@ def test_sources_need_both_a_link_and_a_picked_node(svc_db):
         assert [s["id"] for s in w._uid_sources] == [a]
     finally:
         p.stop()
+
+
+def test_a_refused_uid_page_says_why(svc_db):
+    db, client, a, b, c_ = svc_db
+    w, sent, p = _service(svc_db)
+    notes = []
+    w.sca_notice.connect(lambda t, lvl: notes.append((t, lvl)))
+    try:
+        w.handle_source_uid(a, "ZZZZZ9999Z")
+        w.handle_source_uid(c_, "ABCPD1234E")
+        assert sent == [] and len(notes) == 2 and all(lvl == "warning" for _, lvl in notes)
+        assert "no client has it" in notes[0][0] and "ZZZZZ9999Z" in notes[0][0]
+        assert "does not have" in notes[1][0]
+        w.handle_source_uid(a, "ABCPD1234E")          # arms: no notice
+        assert len(sent) == 1 and len(notes) == 2
+    finally:
+        p.stop()

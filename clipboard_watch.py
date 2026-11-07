@@ -422,13 +422,21 @@ class ClipboardWatchService(QObject):
             self._ensure_index_fresh()
             cand = sca_protocol.normalize_uid(uid)
             client_id = self._uid_index.get(cand)
+            name = self._source_name(service_id)
             if not client_id:
-                print(f"[SCA] UID page of service {service_id}: the UID is not a known client id.")
+                self._source_refused(service_id, f"Sera read UID {cand} on {name}'s login page, but no client has "
+                                     f"it. Check the client's User ID, and that it is in {name}'s User ID column "
+                                     f"(Services) or a PAN / GSTIN / user id column.")
                 return
-            if is_suppressed(client_id) or client_id in self._paused_clients:
+            if is_suppressed(client_id):
+                return                      # staff just acted on this client: deliberately quiet
+            if client_id in self._paused_clients:
+                self._source_refused(service_id, f"SCA is paused for the client with UID {cand}: it was armed "
+                                     f"{UNUSED_ARMS_BEFORE_PAUSE} times without a fill.")
                 return
             if not any(x.get("id") == service_id for x in (self.db.get_client_services(client_id) or [])):
-                print(f"[SCA] Client {client_id} does not have service {service_id}; not arming.")
+                self._source_refused(service_id, f"The client with UID {cand} does not have {name} attached. "
+                                     f"Attach the service to the client to use SCA here.")
                 return
             arm = self._arm
             if (arm is not None and arm.client_id == client_id and time.time() < arm.expires_at
@@ -436,8 +444,19 @@ class ClipboardWatchService(QObject):
                 return                      # already armed for this client and service
             print(f"[SCA] UID page of service {service_id} shows client {client_id}. Arming...")
             self._arm_client_services(client_id, str(client_id), cand, trigger="source", only_service_id=service_id)
+            arm = self._arm
+            if arm is None or arm.client_id != client_id or service_id not in arm.services:
+                self._source_refused(service_id, f"SCA could not arm {name} for the client with UID {cand}: "
+                                     f"the service has no login page link (Services).")
         except Exception as e:
             print(f"[SCA] UID page error: {e}")
+            self._source_refused(service_id, f"SCA error on the UID page: {e}")
+
+    def _source_refused(self, service_id, text: str) -> None:
+        """Why a UID page did not arm, shown to staff. The watcher reports a UID once per page visit, so
+        this is once per visit too - never silent, never repeated every tick."""
+        print(f"[SCA] UID page of service {service_id}: {text}")
+        self.sca_notice.emit("SCA: " + text, "warning")
 
     def handle_source_warn(self, service_id, why: str) -> None:
         """The picked UID box is not on the page (once per visit): staff must pick it again."""
