@@ -129,7 +129,7 @@ def build_arm_request(
         "owner_name": owner_name,
         "sca_mode": sca_mode,
         "max_uses": max_uses,
-        "trigger": trigger,          # "clipboard" (a copy), "page" (the id typed on the login page) or "source" (read from a service's UID page)
+        "trigger": trigger,          # "clipboard" (a copy) or "source" (the picked UID node of a service's UID page)
         "created_at": now,
         "expires_at": now + ttl_ms,
         "state": STATE_ARMED,
