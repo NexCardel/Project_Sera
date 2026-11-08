@@ -1,16 +1,16 @@
-# OS Assist — report (2026-11-08 21:33)
+# OS Assist — report (2026-11-08 22:28)
 
 Deadline: 2026-11-15T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 2 |
+| Not started | 1 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 15 |
+| Done | 16 |
 | Blocked | 0 |
 
-Runs: 15   output tokens: 291027   API-equivalent cost: $21.12
+Runs: 16   output tokens: 293578   API-equivalent cost: $22.55
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -29,7 +29,7 @@ Runs: 15   output tokens: 291027   API-equivalent cost: $21.12
 | O3-3 | Done | opus | 9c9fc36 | SCA engine in OS mode (§4.6) | sca_engine.py on worker+Qt: probe/match/grant/90s wait/fill/chip, card+Inject, assist lock; arms routed in OS mode; extension SCA forced off in OS mode; 29 test |
 | O3-4 | Done | sonnet | 5f88cf0 | SCC card through the OS MECP card | SCC open/update/close route to the OS MECP card (docked to att.hwnd) in OS mode; extension unchanged; 9 new tests, all scc tests pass |
 | O3-R | Done | opus | 756e0e0 | Review phase 3 (wiring) | Phase 3 reviewed: extension SCA password requests denied in OS mode, settings.ini edited one line only, queued SCA fill cancelled on disarm; 8 new tests |
-| O4-1 | Not started | sonnet |  | Full suite, leak and idle checks |  |
+| O4-1 | Done | sonnet | fa13fa2 | Full suite, leak and idle checks | no-leak (10) and idle tests added and passing; full suite 149 F all pre-existing/non-project, 2 cards_review geometry flakes under load |
 | O4-R | Not started | opus |  | Final review + merge-readiness note |  |
 
 ## Decisions taken for you
