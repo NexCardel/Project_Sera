@@ -11,6 +11,7 @@ reading the password from the vault at that moment.
 """
 
 import re
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -151,6 +152,9 @@ class ClipboardWatchService(QObject):
         self.enabled = bool(enabled)
         if not self.enabled:
             self._arm = None
+            engine = sys.modules.get("core.os_assist.sca_engine")     # loaded only once OS mode armed
+            if engine is not None:
+                engine.disarm_all("DISABLED")
 
     # ------------------------------------------------------------------ SCK
     def client_for_arm(self, arm_id: str) -> Optional[int]:
@@ -404,7 +408,13 @@ class ClipboardWatchService(QObject):
             sca_log.note(f"armed client #{client_id}: arm {arm['arm_id']} cmd {request['command_id']} "
                          f"({trigger}, {sca_mode}, services {[x.get('service_id') for x in services]}, "
                          f"uid_page {'set' if uid_page else 'none'})")
-            automation.arm_sca(request)
+            if automation.assist_engine() == "os":
+                # OS Assist: the desktop's own SCA engine takes the arm; the browsers get nothing.
+                from core.os_assist import sca_engine
+                sca_engine.for_watcher(self).arm(
+                    arm, automation.allowed_portal_domains(self.db.get_services()))
+            else:
+                automation.arm_sca(request)
             self.sca_armed.emit(client_id, client_token, services)
         except Exception as e:
             print(f"[SCA] _arm_client_services error: {e}")

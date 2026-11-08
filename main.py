@@ -646,6 +646,8 @@ class SeraApp:
         _os_dock_card.set_sck_edit_handler(self._handle_sck_edit_requested)
         from core.os_assist import launcher as _os_launcher     # OS SMTI/MECP copies clear after this
         _os_launcher.set_clear_seconds_provider(lambda: self.db.get_setting("clipboard_clear_seconds", "30"))
+        import automation as _automation                        # SCA engine switch (blueprint §4.7)
+        _automation.add_engine_listener(self._on_assist_engine_changed)
         self.bridge.sck_candidate_received.connect(self._handle_sck_candidate)
         self.bridge.sck_outcome_received.connect(self._handle_sck_outcome)
         self.bridge.extension_settings_updated_received.connect(self._handle_extension_settings_updated)
@@ -798,8 +800,19 @@ class SeraApp:
             if to_set:
                 self.db.set_settings_bulk(to_set)
                 print(f"[main] Persisted updated extension settings from popup: {to_set}")
+                from automation import assist_engine
+                if assist_engine() == "os":
+                    self._sync_extension_settings()      # the popup must not turn the extension's SCA back on
         except Exception as e:
             print(f"[main] Error handling extension_settings_updated: {e}")
+
+    def _on_assist_engine_changed(self, engine: str):
+        """Settings -> Assist engine switched (no restart): the extension's SCA goes off in OS mode and
+        gets the user's setting back on Extension; an OS SCA arm is dropped when leaving OS."""
+        if engine != "os":
+            from core.os_assist import sca_engine
+            sca_engine.disarm_all("ENGINE")
+        self._sync_extension_settings()
 
     def _get_extension_settings_payload(self) -> dict:
         """Packages current services and settings for the extension."""
@@ -815,12 +828,12 @@ class SeraApp:
                 clip_secs = max(5, min(int(self.db.get_setting("clipboard_clear_seconds", "30")), 300))
             except (ValueError, TypeError):
                 clip_secs = 30
-            from automation import allowed_portal_domains
+            from automation import allowed_portal_domains, assist_engine
             return {
                 "status": "ok",
                 "allowed_domains": allowed_portal_domains(svcs),
                 "clipboard_clear_seconds": clip_secs,
-                "sca_enabled": sca_en,
+                "sca_enabled": sca_en and assist_engine() != "os",   # OS engine: the desktop does SCA
                 "sca_mode": sca_mode,
                 "sca_max_uses": sca_max,
                 "allowed_services": svcs,

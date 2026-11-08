@@ -11,7 +11,7 @@ O2-4,2,"SCA card + fill chip (§4.4, §4.6)",Done,claude-sonnet-5-5,1,eca8c9b,"S
 O2-R,2,Review phase 2 (cards) + look-alike shots,Done,claude-opus-5-5,1,9b283ec,"Cards match extension CSS per card (MECP/SCA/chip geometry, fonts, shrink-to-fit), 7 shots in docs/os_assist/shots, queued SMTI jobs cancelled on dismiss; 120 os_assist tests pass",2026-11-08 21:01
 O3-1,3,"Engine switch setting (§4.7, D1)",Done,claude-sonnet-5-5,1,9b7efaa,assist_engine()/set_assist_engine + listeners in automation.py; Assist engine combo on Action Buttons page; 5 new tests pass,2026-11-08 21:04
 O3-2,3,SMTI/MECP launch through the OS engine,Done,claude-opus-5-5,1,44deb02,"launcher.py: open new tab, 20 s window_for_host wait off-worker, card on Qt thread, one card per kind; triggers route on assist_engine; 18 tests",2026-11-08 21:09
-O3-3,3,SCA engine in OS mode (§4.6),Not started,claude-opus-5-5,0,,,
+O3-3,3,SCA engine in OS mode (§4.6),In progress,claude-opus-5-5,1,,,2026-11-08 21:17
 O3-4,3,SCC card through the OS MECP card,Not started,claude-sonnet-5-5,0,,,
 O3-R,3,Review phase 3 (wiring),Not started,claude-opus-5-5,0,,,
 O4-1,4,"Full suite, leak and idle checks",Not started,claude-sonnet-5-5,0,,,

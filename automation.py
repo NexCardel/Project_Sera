@@ -507,14 +507,16 @@ def arm_sca(arm_request: dict, attempts_s: int = 35):
 
 
 def update_extension_settings(sca_enabled: bool = True, sca_mode: str = "autofill", allowed_services: Optional[list[dict]] = None, sca_max_uses: int = 1, clipboard_clear_seconds: Optional[int] = None):
-    """Sends immediate setting updates to every connected browser's background.js."""
+    """Sends immediate setting updates to every connected browser's background.js. With the OS
+    engine, SCA is the desktop's (core/os_assist/sca_engine): the extension's SCA is always sent off,
+    whatever the caller passed, so it can't fill as well; back on Extension the user's setting goes."""
     from ui import ws_bridge
 
     allowed_domains = allowed_portal_domains(allowed_services)
 
     payload = {
         "type": "update_settings",
-        "sca_enabled": sca_enabled,
+        "sca_enabled": bool(sca_enabled) and assist_engine() != "os",
         "sca_mode": sca_mode,
         "sca_max_uses": max(1, min(int(sca_max_uses), 20)),
         "allowed_domains": allowed_domains,
