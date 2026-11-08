@@ -37,7 +37,6 @@ MSG_SCA_PASSWORD_DENIED = "SCA_PASSWORD_DENIED"
 MSG_SCA_ACK = "SCA_ACK"
 MSG_SCA_STATE = "SCA_STATE"
 MSG_SCA_PASSWORD_REQUEST = "SCA_PASSWORD_REQUEST"
-MSG_SCA_UID_PROBE = "SCA_UID_PROBE"   # a login page showed an id no arm covers: whose is it?
 MSG_SCA_FILL_RESULT = "SCA_FILL_RESULT"
 MSG_SCA_ERROR = "SCA_ERROR"
 
@@ -130,7 +129,7 @@ def build_arm_request(
         "owner_name": owner_name,
         "sca_mode": sca_mode,
         "max_uses": max_uses,
-        "trigger": trigger,          # "clipboard" (a copy) or "page" (the id typed on the login page)
+        "trigger": trigger,          # "clipboard" (a copy), "page" (the id typed on the login page) or "source" (read from a service's UID page)
         "created_at": now,
         "expires_at": now + ttl_ms,
         "state": STATE_ARMED,

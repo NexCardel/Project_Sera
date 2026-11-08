@@ -111,6 +111,7 @@ class ClipboardWatchService(QObject):
     """Watches the clipboard for client ids and runs the desktop half of SCA."""
     sca_armed = Signal(int, str, list)  # client_id, client_token, services (no passwords)
     sca_notice = Signal(str, str)       # message for staff, level ("info" | "warning")
+    source_texts = Signal(list)         # the text of a service's UID page (from the watcher thread)
 
     def __init__(self, db, parent=None, actor: str = "Staff"):
         super().__init__(parent)
@@ -125,8 +126,11 @@ class ClipboardWatchService(QObject):
         self._last_copy = ("", 0.0)
         self._unused_streak: Dict[int, int] = {}
         self._paused_clients: set = set()
+        self._uid_pages: list = []         # services' UID page links (Settings -> SCA)
+        self._source_watcher = None
 
         self.refresh_index()
+        self.refresh_sources()
         self._connect_clipboard()
         # Proactively check clipboard on startup in case a UID was already copied
         QTimer.singleShot(600, self._on_clipboard_changed)
@@ -290,7 +294,7 @@ class ClipboardWatchService(QObject):
         old = self._arm
         if old is None:
             return
-        if old.grants == 0 and old.trigger == "clipboard":   # a page arm is followed by a login by definition
+        if old.grants == 0 and old.trigger in ("clipboard", "source"):   # a page arm is followed by a login by definition
             streak = self._unused_streak.get(old.client_id, 0) + 1
             self._unused_streak[old.client_id] = streak
             if streak >= UNUSED_ARMS_BEFORE_PAUSE:
@@ -371,33 +375,52 @@ class ClipboardWatchService(QObject):
         except Exception as e:
             print(f"[SCA] _arm_client_services error: {e}")
 
-    # ------------------------------------------------------------------ login page -> arm
-    def handle_uid_probe(self, msg: dict) -> None:
-        """SCA_UID_PROBE {candidate, page_host}: a login page shows an id no live arm covers. Arms
-        the same way a copy does, but only for a client with a portal on THIS host. Never replies
-        (a page must not be able to ask whether a string is a client id): any refusal is silent,
-        and the only effect is an arm that goes to the extension background."""
+    # ------------------------------------------------------------------ UID page -> arm
+    def refresh_sources(self):
+        """The UID page links of the services (Settings -> SCA, services.uid_page_link)."""
+        try:
+            self._uid_pages = [str(s.get("uid_page_link") or "").strip()
+                               for s in self.db.get_services() if str(s.get("uid_page_link") or "").strip()]
+        except Exception:
+            self._uid_pages = []
+
+    def start_source_watch(self):
+        """Starts the watcher thread once. It does no UIA work until a UID page is in front."""
+        if self._source_watcher is not None:
+            return
+        from core.sca.uid_source_watch import UidSourceWatcher
+        self.source_texts.connect(self.handle_source_texts)
+        self._source_watcher = UidSourceWatcher(
+            lambda: self._uid_pages, lambda: self.enabled, self.source_texts.emit)
+        self._source_watcher.start()
+
+    def handle_source_texts(self, texts: list) -> None:
+        """A UID page shows these strings. Those that are a known client's id are matched against the
+        same index a copy uses; it arms only when they all belong to ONE client (a list of many clients
+        is ambiguous: no guess). No host check, because the page is a client page, not a portal."""
         try:
             if not self.enabled:
                 return
-            candidate = sca_protocol.normalize_uid(msg.get("candidate"))
-            if not (3 <= len(candidate) <= 80) or not sca_protocol.looks_like_uid(candidate):
-                return
             self._ensure_index_fresh()
-            client_id = self._uid_index.get(candidate)
-            if not client_id or is_suppressed(client_id) or client_id in self._paused_clients:
+            ids = set()
+            for t in texts or []:
+                cand = sca_protocol.normalize_uid(t)
+                if 3 <= len(cand) <= 80 and sca_protocol.looks_like_uid(cand):
+                    cid = self._uid_index.get(cand)
+                    if cid:
+                        ids.add((cid, cand))
+            if len({cid for cid, _ in ids}) != 1:
+                return
+            client_id, candidate = next(iter(ids))
+            if is_suppressed(client_id) or client_id in self._paused_clients:
                 return
             arm = self._arm
             if arm is not None and arm.client_id == client_id and time.time() < arm.expires_at:
-                return                      # already armed for this client: the arm stays valid
-            page_host = str(msg.get("page_host") or "")
-            portals = self.db.get_client_services(client_id) or self.db.get_services()
-            if not any(sca_protocol.host_matches(page_host, s.get("login_page_link") or "") for s in portals):
-                return                      # not one of this client's portals: no arm at all
-            print(f"[SCA] Login page showed an id of client {client_id}. Arming...")
-            self._arm_client_services(client_id, str(client_id), candidate, trigger="page")
+                return
+            print(f"[SCA] UID page shows an id of client {client_id}. Arming...")
+            self._arm_client_services(client_id, str(client_id), candidate, trigger="source")
         except Exception as e:
-            print(f"[SCA] uid probe error: {e}")
+            print(f"[SCA] UID page error: {e}")
 
     # ------------------------------------------------------------------ extension -> desktop
     def handle_password_request(self, msg: dict) -> dict:

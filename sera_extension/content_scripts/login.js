@@ -13,14 +13,6 @@ const SCA_UID_SHAPE = /^(?:[A-Z]{5}[0-9]{4}[A-Z]|[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0
 let _scaLastSent = "";
 let _scaLastSentAt = 0;
 
-// Typed input is reported once it settles (a half-typed id also has an id's shape); a paste,
-// autofill (no key event) or Enter/Tab is reported at once.
-let _scaSettleTimer = null;
-function checkAfterTyping(el) {
-  clearTimeout(_scaSettleTimer);
-  _scaSettleTimer = setTimeout(() => checkAndTriggerSCA(el.value), 700);
-}
-
 function checkAndTriggerSCA(candidateText) {
   if (!candidateText || !window.normalizeUid) return;
   const clean = window.normalizeUid(candidateText);
@@ -61,8 +53,7 @@ document.addEventListener('input', (e) => {
     if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
       const type = (target.type || '').toLowerCase();
       if (type !== 'password' && target.value) {
-        if (e.inputType === 'insertText' || e.inputType === 'deleteContentBackward') checkAfterTyping(target);
-        else checkAndTriggerSCA(target.value);
+        checkAndTriggerSCA(target.value);
       }
     }
   } catch (_) {}

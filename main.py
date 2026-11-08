@@ -392,6 +392,7 @@ class SeraApp:
                 lambda text, level: getattr(self, "shell", None) and self.shell.show_alert(text, level=level, duration=6000))
             sca_active = (self.db.get_setting("sca_enabled", "1") == "1")
             self.clipboard_watcher.set_enabled(sca_active)
+            self.clipboard_watcher.start_source_watch()
             memory_mark("start-up: vault unlocked")
         except Exception as e:
             loading_dlg.close()
@@ -644,7 +645,6 @@ class SeraApp:
         self.bridge.extension_settings_updated_received.connect(self._handle_extension_settings_updated)
         self.bridge.settings_provider = self._get_extension_settings_payload
         self.bridge.sca_password_requested.connect(self._handle_sca_password_request)
-        self.bridge.sca_uid_probed.connect(self.clipboard_watcher.handle_uid_probe)
         self.bridge.sca_fill_result_received.connect(self.clipboard_watcher.handle_fill_result)
         self.app.aboutToQuit.connect(self._on_app_about_to_quit)
         # Screentime: when Sera opened / closed on this PC (core/screentime.py), published to the office
@@ -2243,6 +2243,7 @@ class SeraApp:
                 sca_active = (self.db.get_setting("sca_enabled", "1") == "1")
                 self.clipboard_watcher.set_enabled(sca_active)
                 self.clipboard_watcher.refresh_index()
+                self.clipboard_watcher.refresh_sources()
         except Exception:
             pass
 

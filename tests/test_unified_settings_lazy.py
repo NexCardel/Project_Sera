@@ -66,6 +66,32 @@ class TestUnifiedSettingsLazyPages(unittest.TestCase):
         self.assertNotEqual(self.dlg.clipboard_spin.value(), 55)
         self.assertFalse(self.dlg._btn_save.isEnabled())
 
+    def test_sca_settings_live_on_their_own_tab(self):
+        self.assertFalse(hasattr(self.dlg, "sca_check"))           # no longer on General
+        self.dlg._switch_page(usd._P_SCA)
+        self.assertFalse(self.dlg._btn_save.isEnabled())           # visiting is not a change
+        self.assertTrue(self.dlg.sca_check.isChecked())            # default "1"
+        self.dlg.sca_mode_combo.setCurrentIndex(self.dlg.sca_mode_combo.findData("widget"))
+        self.dlg.sca_max_uses_spin.setValue(3)
+        self.assertTrue(self.dlg._btn_save.isEnabled())
+        self.dlg._on_save_settings()                               # General page still built, SCA saves alone
+        self.assertEqual(self.db.get_setting("sca_action_mode"), "widget")
+        self.assertEqual(self.db.get_setting("sca_max_uses"), "3")
+        self.assertEqual(self.db.get_setting("sca_enabled"), "1")
+
+    def test_uid_page_links_load_save_and_dirty_tracking(self):
+        svc = self.db.get_services()[0]
+        self.db.set_service_uid_page_links({svc["id"]: "https://sheet.example.com/clients"})
+        self.dlg.set_page("sca")
+        edit = self.dlg._sca_uid_edits[svc["id"]]
+        self.assertEqual(edit.text(), "https://sheet.example.com/clients")
+        self.assertFalse(self.dlg._btn_save.isEnabled())            # loading is not a change
+        edit.setText("")
+        self.assertTrue(self.dlg._btn_save.isEnabled())
+        self.dlg._on_save_settings()
+        saved = {s["id"]: s["uid_page_link"] for s in self.db.get_services()}
+        self.assertEqual(saved[svc["id"]], "")
+
     def test_page_requested_by_name_opens_on_that_page(self):
         self.dlg.set_page("mcl")
         self.assertIn(usd._P_MCL, self.dlg._page_widgets)

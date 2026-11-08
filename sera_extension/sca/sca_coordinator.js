@@ -21,7 +21,6 @@
   const STORE_KEY = "scaArmV2";
   const REQUEST_TIMEOUT_MS = 15000;
   const FIELD_WAIT_MS = 90000;   // Income Tax: PAN page, Continue, then the password page
-  const PROBE_REPEAT_MS = 10000;   // ask the desktop about one id on one frame at most this often
   const CANDIDATE_REPLAY_MS = 15000;   // how long a paste waits for a late arm (worker wake)
   const UID_SHAPE = /^(?:[A-Z]{5}[0-9]{4}[A-Z]|[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]|[A-Z0-9][A-Z0-9._@:/-]{2,79})$/;
 
@@ -321,7 +320,6 @@
     const busy = new Set();         // arm:tab:frame:service with a request/fill under way or done
     const candidates = new Map();   // tab:frame -> {candidate, sender, at}, see rememberCandidate
     const seenCommands = [];
-    const probed = new Map();       // tab:frame:id -> time of the last SCA_UID_PROBE
 
     function remember(cmdId) {
       if (seenCommands.includes(cmdId)) return false;
@@ -387,21 +385,6 @@
         if (entry.at < cutoff) continue;
         try { await onCandidate({ candidate: entry.candidate }, entry.sender, true); } catch (_) {}
       }
-    }
-
-    // The page shows an id no live arm covers (typed by hand, autofilled, copied where the
-    // clipboard watcher did not see it): ask the desktop whose it is. It arms only when the id
-    // is a client's and the client has a portal on this host, and never answers the page.
-    function probeDesktop(req, sender, settings) {
-      const frameHost = hostOf(sender.url || sender.tab.url);
-      if (!isApprovedDomain(frameHost, settings.allowedDomains)) return;
-      const id = normalizeUid(req.candidate);
-      const key = `${sender.tab.id}:${typeof sender.frameId === "number" ? sender.frameId : 0}:${id}`;
-      const t = now();
-      if (probed.has(key) && t - probed.get(key) < PROBE_REPEAT_MS) return;
-      probed.set(key, t);
-      while (probed.size > 64) probed.delete(probed.keys().next().value);
-      env.postNative({ type: "SCA_UID_PROBE", candidate: id, page_host: frameHost });
     }
 
     // Desktop -> extension. Returns true when the message was an SCA one.
@@ -526,11 +509,11 @@
       if (settings.assistTabs && settings.assistTabs[sender.tab.id]) return "assist-open-in-tab";
       const a = await loadArm();
       if (!a) {
-        if (!replayed) { rememberCandidate(req, sender); probeDesktop(req, sender, settings); }
+        if (!replayed) rememberCandidate(req, sender);
         return "not-armed";
       }
       if (!candidateMatches(a, req.candidate)) {
-        if (!replayed) { rememberCandidate(req, sender); probeDesktop(req, sender, settings); }
+        if (!replayed) rememberCandidate(req, sender);
         return "not-this-client";
       }
       const frameHost = hostOf(sender.url || sender.tab.url);
