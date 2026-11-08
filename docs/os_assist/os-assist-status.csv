@@ -15,4 +15,4 @@ O3-3,3,SCA engine in OS mode (§4.6),Done,claude-opus-5-5,1,9c9fc36,"sca_engine.
 O3-4,3,SCC card through the OS MECP card,Done,claude-sonnet-5-5,1,5f88cf0,"SCC open/update/close route to the OS MECP card (docked to att.hwnd) in OS mode; extension unchanged; 9 new tests, all scc tests pass",2026-11-08 21:27
 O3-R,3,Review phase 3 (wiring),Done,claude-opus-5-5,1,756e0e0,"Phase 3 reviewed: extension SCA password requests denied in OS mode, settings.ini edited one line only, queued SCA fill cancelled on disarm; 8 new tests",2026-11-08 21:33
 O4-1,4,"Full suite, leak and idle checks",Done,claude-sonnet-5-5,2,fa13fa2,"no-leak (10) and idle tests added and passing; full suite 149 F all pre-existing/non-project, 2 cards_review geometry flakes under load",2026-11-08 22:28
-O4-R,4,Final review + merge-readiness note,In progress,claude-opus-5-5,1,,,2026-11-08 22:28
+O4-R,4,Final review + merge-readiness note,Done,claude-opus-5-5,1,4479858,"Review done, all 0 rules hold; merge-readiness.md written; owner checks 10-15 added; drop .os-assist.lock + logs before merging; not merged",2026-11-08 22:32
