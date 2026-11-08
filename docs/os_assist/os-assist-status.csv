@@ -5,7 +5,7 @@ O1-2,1,"core/os_assist/fill.py + one-writer test (§4.1, §4.3)",Done,claude-son
 O1-3,1,core/os_assist/secure_clipboard.py (§4.5),Done,claude-sonnet-5-5,1,9d5b41e,"secure_clipboard.copy + clear_if_unchanged, 4 tests pass",2026-11-08 20:27
 O1-R,1,Review phase 1 (core),Done,claude-opus-5-5,1,cec854b,"4 fixes: host check before SetFocus+keys, IsPassword boxes judged by bullets only, #id selector lists, UIA only on worker + per-thread queue; no-click test; 24 pre-existing fails unchanged",2026-11-08 20:31
 O2-1,2,"ui/os_assist/dock_card.py: the docked, no-focus base window (§4.4)",Done,claude-opus-5-5,1,4267738,DockCard base + TimerBar + css_px/to_logical helpers; 14 offscreen tests pass; not real-browser tested,2026-11-08 20:38
-O2-2,2,SMTI card (normal + Flutter steps) (§4.4),In progress,claude-opus-5-5,1,,,2026-11-08 20:39
+O2-2,2,SMTI card (normal + Flutter steps) (§4.4),Done,claude-opus-5-5,1,2669d18,"SmtiCard on DockCard: Username/Password fill via worker, copy fallbacks, Flutter step cards with FocusWatcher; dock_card.wire_sck_edit/set_sck_edit_handler for D3; 27 tests pass",2026-11-08 20:45
 O2-3,2,MECP card (plain + SCC mode) (§4.5),Not started,claude-opus-5-5,0,,,
 O2-4,2,"SCA card + fill chip (§4.4, §4.6)",Not started,claude-sonnet-5-5,0,,,
 O2-R,2,Review phase 2 (cards) + look-alike shots,Not started,claude-opus-5-5,0,,,
