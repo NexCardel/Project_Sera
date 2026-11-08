@@ -14,5 +14,5 @@ O3-2,3,SMTI/MECP launch through the OS engine,Done,claude-opus-5-5,1,44deb02,"la
 O3-3,3,SCA engine in OS mode (§4.6),Done,claude-opus-5-5,1,9c9fc36,"sca_engine.py on worker+Qt: probe/match/grant/90s wait/fill/chip, card+Inject, assist lock; arms routed in OS mode; extension SCA forced off in OS mode; 29 tests",2026-11-08 21:25
 O3-4,3,SCC card through the OS MECP card,Done,claude-sonnet-5-5,1,5f88cf0,"SCC open/update/close route to the OS MECP card (docked to att.hwnd) in OS mode; extension unchanged; 9 new tests, all scc tests pass",2026-11-08 21:27
 O3-R,3,Review phase 3 (wiring),Done,claude-opus-5-5,1,756e0e0,"Phase 3 reviewed: extension SCA password requests denied in OS mode, settings.ini edited one line only, queued SCA fill cancelled on disarm; 8 new tests",2026-11-08 21:33
-O4-1,4,"Full suite, leak and idle checks",Not started,claude-sonnet-5-5,0,,,
+O4-1,4,"Full suite, leak and idle checks",In progress,claude-sonnet-5-5,2,,dispatcher restarted,2026-11-08 21:48
 O4-R,4,Final review + merge-readiness note,Not started,claude-opus-5-5,0,,,
