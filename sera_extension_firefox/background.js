@@ -77,6 +77,23 @@ const scaCoordinator = self.SeraSCA.createCoordinator({
   }),
   executeScript: (details) => chrome.scripting.executeScript(details),
   sessionStore: (chrome.storage && chrome.storage.session) || null,
+  activeTab: () => new Promise((resolve) => {
+    try {
+      chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+        void chrome.runtime.lastError;
+        let t = tabs && tabs[0];
+        if (t && typeof t.id === "number") { resolve({ id: t.id, url: t.url || "" }); return; }
+        // lastFocusedWindow can be empty (a devtools/popup window was focused last): fall back to
+        // the most recently used active tab of any window instead of giving up on the UID page.
+        chrome.tabs.query({ active: true }, (all) => {
+          void chrome.runtime.lastError;
+          const best = (all || []).filter(x => typeof x.id === "number")
+            .sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
+          resolve(best ? { id: best.id, url: best.url || "" } : null);
+        });
+      });
+    } catch (_) { resolve(null); }
+  }),
 });
 
 // Per-tab assist lock (B4): tabId -> {kind: 'smti'|'mecp', expiresAt} for each open SMTI/MECP

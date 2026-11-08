@@ -29,6 +29,13 @@ def _diag_log_in_tmp(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _sca_log_in_tmp(monkeypatch, tmp_path):
+    """SCA's step log (core/sca/sca_log) goes to the test's own folder, never to the real
+    ~/AmanAssociates_Sera/logs/sca.log (test runs once filled it with fake portal lines)."""
+    monkeypatch.setenv("SERA_SCA_LOG", str(tmp_path / "sca.log"))
+
+
+@pytest.fixture(autouse=True)
 def _reconciliation_log_in_tmp(monkeypatch, tmp_path):
     """The accountant reconciliation log (core/vsdc/vsdc247_reconciler) goes to the test's own
     folder, never to the real ~/AmanAssociates_Sera/logs/gst_reconciliation.txt."""

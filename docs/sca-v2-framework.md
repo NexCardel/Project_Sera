@@ -1,5 +1,8 @@
 # SCAv2 framework: the login page is a trigger too
 
+> **Retired 2026-11-07:** the `SCA_UID_PROBE` login-page trigger described here is removed. A UID page's
+> picked node now arms SCA (docs/sca-uid-node-plan.md).
+
 Status: proposal, 2026-11-06. No code written. Supersedes nothing: it adds one trigger to the
 shipped protocol-v2 design in `docs/sera-clipboard-assist.md` (pull-based, no passwords in arms).
 

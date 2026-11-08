@@ -12,7 +12,7 @@ Audit Log and CSV Import are intentionally kept as separate dialogs.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal, QSize
+from PySide6.QtCore import Qt, Signal, QSize, QObject
 from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -750,19 +750,25 @@ class UnifiedSettingsDialog(QDialog):
         return _wrap_scroll(w)
 
     def _build_uid_sources_box(self) -> QWidget:
-        """One row per registered service: the link of the page where staff see a client's UID. While that
-        page is in front, Sera reads it (UIA) and arms SCA for the client whose UID it shows. Empty = none."""
+        """One row per registered service: the link of its UID page (the login page that shows the password
+        box with the UID already set) and "Pick UID", which registers the node that shows the UID
+        (docs/sca-uid-node-plan.md). While that page is in front, Sera reads only that node (UIA) and arms
+        SCA for the client whose UID it shows, for that service only. Empty = none."""
         box = QWidget()
         v = QVBoxLayout(box)
         v.setContentsMargins(24, 4, 24, 4)
         v.setSpacing(6)
-        hint = QLabel("Paste the link of the page where the client's UID is shown. Sera reads that page "
-                      "(not the browser extension) and matches the UID against the client database. "
-                      "Leave empty for none. Saved with Save Changes.")
+        hint = QLabel("Paste the link of the login page that shows the password box with the UID already set "
+                      "(one-page login: the login page; two-page login: page 2). Then press Pick UID, open "
+                      "that page in your browser with a client's UID set, and click the box that shows the UID "
+                      "in the page Sera opens. Sera then reads only that box. Leave empty for none.")
         hint.setWordWrap(True)
         hint.setStyleSheet(f"color: {_TEXT_SEC}; font-size: 12px;")
         v.addWidget(hint)
         self._sca_uid_edits = {}
+        self._sca_uid_state = {}
+        self._sca_pick_buttons = {}
+        self._uid_pick = None
         for svc in self.db.get_services():
             row = QHBoxLayout()
             name = QLabel(str(svc.get("name") or ""))
@@ -771,12 +777,72 @@ class UnifiedSettingsDialog(QDialog):
             edit.setPlaceholderText("https://...")
             edit.textChanged.connect(self._on_control_changed)
             self._sca_uid_edits[svc["id"]] = edit
+            state = QLabel()
+            state.setMinimumWidth(120)
+            self._sca_uid_state[svc["id"]] = state
+            self._show_uid_node_state(svc["id"], svc.get("uid_node"))
+            pick = QPushButton("Pick UID")
+            pick.clicked.connect(lambda _=False, sid=svc["id"], nm=str(svc.get("name") or ""): self._on_pick_uid(sid, nm))
+            self._sca_pick_buttons[svc["id"]] = pick
             row.addWidget(name)
             row.addWidget(edit, stretch=1)
+            row.addWidget(pick)
+            row.addWidget(state)
             v.addLayout(row)
+        self._uid_pick_status = QLabel()
+        self._uid_pick_status.setWordWrap(True)
+        self._uid_pick_status.setStyleSheet(f"color: {_ACCENT_LIGHT}; font-size: 12px;")
+        self._uid_pick_status.hide()
+        v.addWidget(self._uid_pick_status)
         if not self._sca_uid_edits:
             v.addWidget(QLabel("No services are registered yet."))
         return box
+
+    def _show_uid_node_state(self, service_id, raw) -> None:
+        from core.sca import uid_node
+        fp = uid_node.loads(raw)
+        lab = self._sca_uid_state.get(service_id)
+        if lab is None:
+            return
+        if fp:
+            lab.setText("UID box set (%s)" % (fp.get("rule") or "?"))
+            lab.setStyleSheet(f"color: {_ACCENT_LIGHT}; font-size: 12px;")
+        else:
+            lab.setText("UID box not picked")
+            lab.setStyleSheet(f"color: {_TEXT_SEC}; font-size: 12px;")
+
+    def _on_pick_uid(self, service_id, service_name: str) -> None:
+        """Pick UID (docs/sca-uid-node-plan.md WP2-3): wait for the page, read it once, open the picker page."""
+        link = self._sca_uid_edits[service_id].text().strip()
+        if not link:
+            QMessageBox.information(self, "Pick UID", "Paste the UID page link first.")
+            return
+        if self._uid_pick is not None:
+            self._uid_pick.cancel()
+        self._uid_pick = _UidPickRun(service_id, service_name, link, self)
+        self._uid_pick.status.connect(self._on_uid_pick_status)
+        self._uid_pick.picked.connect(self._on_uid_picked)
+        for b in self._sca_pick_buttons.values():
+            b.setEnabled(False)
+        self._uid_pick.start()
+
+    def _on_uid_pick_status(self, text: str, finished: bool) -> None:
+        self._uid_pick_status.setText(text)
+        self._uid_pick_status.show()
+        if finished:
+            for b in self._sca_pick_buttons.values():
+                b.setEnabled(True)
+
+    def _on_uid_picked(self, service_id, link: str, fp_json: str) -> None:
+        """Saved at once (the pick is its own action): the link it was picked on, and the node."""
+        try:
+            self.db.set_service_uid_page_links({service_id: link})
+            self.db.set_service_uid_node(service_id, fp_json)
+        except Exception as exc:
+            self._on_uid_pick_status(f"Could not save the pick: {exc}", True)
+            return
+        self._show_uid_node_state(service_id, fp_json)
+        self._on_uid_pick_status("Saved. Sera now reads only that box on this page.", True)
 
     def _build_page_actions(self) -> QScrollArea:
         w = QWidget()
@@ -1867,7 +1933,12 @@ class UnifiedSettingsDialog(QDialog):
                 bulk_settings["sca_action_mode"]            = self.sca_mode_combo.currentData() or "autofill"
                 bulk_settings["sca_max_uses"]               = str(self.sca_max_uses_spin.value())
                 try:
+                    old_links = {x["id"]: str(x.get("uid_page_link") or "").strip() for x in self.db.get_services()}
                     self.db.set_service_uid_page_links({i: e.text() for i, e in self._sca_uid_edits.items()})
+                    for i, e in self._sca_uid_edits.items():
+                        if e.text().strip() != old_links.get(i, ""):
+                            self.db.set_service_uid_node(i, "")     # a picked box belongs to the old page
+                            self._show_uid_node_state(i, "")
                 except Exception:
                     pass
 
@@ -2281,3 +2352,55 @@ class UnifiedSettingsDialog(QDialog):
         from ui.dialogs.change_master_password_dialog import ChangeMasterPasswordDialog
         dlg = ChangeMasterPasswordDialog(app_dir, parent=self)
         dlg.exec()
+
+
+class _UidPickRun(QObject):
+    """One "Pick UID" run off the UI thread (core/sca/uid_picker): wait for the page in front, read it once,
+    serve the picker page on 127.0.0.1 and open it in the default browser. Signals come back queued."""
+    status = Signal(str, bool)            # text, finished
+    picked = Signal(object, str, str)     # service_id, link, fingerprint JSON
+
+    def __init__(self, service_id, service_name: str, link: str, parent=None) -> None:
+        super().__init__(parent)
+        import threading
+        self.service_id, self.service_name, self.link = service_id, service_name, link
+        self._stop = threading.Event()
+        self._session = None
+
+    def start(self) -> None:
+        import threading
+        threading.Thread(target=self._run, name="sca-uid-pick", daemon=True).start()
+
+    def cancel(self) -> None:
+        self._stop.set()
+        if self._session is not None:
+            self._session.stop()
+
+    def _run(self) -> None:
+        name = self.service_name
+        try:
+            import webbrowser
+            from core.sca import uid_node
+            from core.sca.page_nodes import UiaReader
+            from core.sca.uid_picker import PickSession, wait_for_page, WAIT_S
+            from core.sca.uid_source_watch import _foreground_browser
+            self.status.emit(f"{name}: open the page in your browser with a client's UID set "
+                             f"(waiting up to {int(WAIT_S)} s)...", False)
+            got = wait_for_page(self.link, UiaReader(), _foreground_browser, self._stop,
+                                lambda t: self.status.emit(f"{name}: {t}", False))
+            if got is None:
+                if not self._stop.is_set():
+                    self.status.emit(f"{name}: the page was not found in time. Press Pick UID again.", True)
+                return
+            docs, url = got
+
+            def done(fp):
+                self.picked.emit(self.service_id, self.link, uid_node.dumps(fp))
+
+            self._session = PickSession(docs, url, name, done)
+            self._session.start()
+            webbrowser.open(self._session.url)
+            self.status.emit(f"{name}: page read. Click the UID box in the page Sera opened in your "
+                             f"browser, then Use this.", True)
+        except Exception as exc:
+            self.status.emit(f"{name}: Pick UID failed: {exc}", True)

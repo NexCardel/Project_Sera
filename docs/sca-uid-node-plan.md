@@ -61,7 +61,7 @@ This link is entered separately from `login_page_link`. It is stored in `service
 - Sera waits up to about 60 s for a browser window in front whose `page_link` equals the saved
   link **and** whose page has a password box (`IsPassword`). Then it takes one `read_docs`.
   - The password-box check proves it is the right page and is also used again at run time.
-- Nothing is written to disk except the picker HTML in a temp file, deleted after the pick.
+- Nothing is written to disk: the loopback server (D1) serves the picker HTML itself.
   Password values are never read (page_nodes rule).
 
 ### WP3: picker page
@@ -145,3 +145,17 @@ preview and the watcher share the cleanup code.
   and keeps that part ("abc@gmail.com" -> "abc").
 - **D4. DECIDED:** build in a separate worktree (`../APP-sca`, branch `sca-uid-node`) on top of
   the uncommitted SCA work, which is copied in as its first commit.
+
+## 5. Status (2026-11-07, branch `sca-uid-node`, worktree `../APP-sca`)
+
+- **Built:** WP1 through WP7.
+  - Code: `core/uia_render/`, `core/sca/uid_clean.py`, `uid_node.py`, `uid_picker.py`, the rewritten
+    `uid_source_watch.py`, `clipboard_watch.handle_source_uid` / `handle_source_warn`,
+    `services.uid_node`, and the Settings -> SCA "Pick UID" button.
+  - Tests: `tests/test_sca_uid_node.py`.
+  - Removed: the whole-page `page_texts` / `handle_source_texts`. `SCA_UID_PROBE` is gone from both
+    extensions and from the desktop.
+- **Not done:**
+  - the WP8 live check on a real one-page and a real two-page portal (pick, then time from the page
+    being in front to the arm);
+  - removing the clipboard trigger (D2: only after the live check).

@@ -416,14 +416,21 @@ def arm_sca(arm_request: dict, attempts_s: int = 35):
         _pending_acks.add(cmd_id)
 
     def _do_send():
-        for _ in range(max(1, int(attempts_s))):
+        from core.sca import sca_log
+        for attempt in range(max(1, int(attempts_s))):
             with _pending_acks_lock:
                 if cmd_id not in _pending_acks:
+                    sca_log.note(f"send {cmd_id}: acknowledged after {attempt} send(s)")
                     return  # acknowledged
             bridge = ws_bridge.get_active_bridge()
             if bridge:
-                bridge.broadcast(arm_request)
+                reached = bridge.broadcast(arm_request)
+                if attempt == 0 or not reached:
+                    sca_log.note(f"send {cmd_id}: attempt {attempt + 1} reached {reached} browser(s)")
+            elif attempt == 0:
+                sca_log.note(f"send {cmd_id}: no WebSocket bridge")
             time.sleep(1.0)
+        sca_log.note(f"send {cmd_id}: NO browser acknowledged in {attempts_s} s")
         print(f"automation.py: no browser acknowledged SCA arm {cmd_id}")
         with _pending_acks_lock:
             _pending_acks.discard(cmd_id)

@@ -110,6 +110,7 @@ def build_arm_request(
     sca_mode: str = "autofill",
     max_uses: int = 1,
     trigger: str = "clipboard",
+    uid_page: str = "",
 ) -> Dict[str, Any]:
     """An SCA_ARM_REQUEST. `services` must not contain passwords - build_arm_service() makes
     the entries; this refuses anything with a password field as a last line of defence."""
@@ -129,7 +130,9 @@ def build_arm_request(
         "owner_name": owner_name,
         "sca_mode": sca_mode,
         "max_uses": max_uses,
-        "trigger": trigger,          # "clipboard" (a copy), "page" (the id typed on the login page) or "source" (read from a service's UID page)
+        "trigger": trigger,          # "clipboard" (a copy) or "source" (the picked UID node of a service's UID page)
+        "uid_page": uid_page,        # source arms: that UID page's link (core/sdis/keys.page_link); the extension acts
+                                     # on the active tab at that address with no typed / pasted id (account choosers)
         "created_at": now,
         "expires_at": now + ttl_ms,
         "state": STATE_ARMED,

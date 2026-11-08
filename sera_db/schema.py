@@ -589,6 +589,8 @@ class SchemaMixin:
             self._ensure_column(conn, "services", "dashboard_page_link", "TEXT")
             # SCA: the page where staff see a client's UID. Sera reads it by UIA and matches it to a client.
             self._ensure_column(conn, "services", "uid_page_link", "TEXT")
+            # SCA: the node on that page that shows the UID (core/sca/uid_node fingerprint, JSON), set by the picker.
+            self._ensure_column(conn, "services", "uid_node", "TEXT")
             conn.execute("UPDATE services SET automation_mode = 'extension' WHERE automation_mode IN ('automated', 'playwright')")
 
             # 6. Client Services (Attachment table)

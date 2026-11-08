@@ -12,6 +12,8 @@
  *   here     --SCA_PASSWORD_REQUEST-->  desktop (through the native host only)
  *   desktop  --SCA_PASSWORD_GRANT / SCA_PASSWORD_DENIED-->  here
  *   here     fills the password field of THAT frame only, reports SCA_FILL_RESULT.
+ *   An arm from a service's UID page (trigger "source", arm.uid_page) needs no candidate: the active
+ *   tab, when its address is that page, is handled as if the UID had been entered (actOnUidPage).
  *
  * Passwords exist here only between a grant and the fill; they are never stored.
  */
@@ -41,6 +43,18 @@
 
   function hostOf(url) {
     try { return new URL(url).hostname.toLowerCase().replace(/\.$/, ""); } catch (_) { return ""; }
+  }
+
+  // A page's identity, as core/sdis/keys.page_link builds it on the desktop: host + path + the
+  // single-page-app route after "#/" (or "#!/"); no query, no other fragment. Lower-cased.
+  function pageLink(url) {
+    let u;
+    try { u = new URL(url); } catch (_) { return ""; }
+    let out = (u.host + u.pathname).replace(/\/+$/, "");
+    let frag = (u.hash || "").replace(/^#/, "").split("?")[0];
+    if (frag.startsWith("!")) frag = frag.slice(1);
+    if (frag.startsWith("/") && frag.replace(/\//g, "")) out += "#" + frag.replace(/\/+$/, "");
+    return out.toLowerCase();
   }
 
   // Same rule as sca_protocol.host_matches: equal, or one a sub-domain of the other, compared
@@ -163,8 +177,23 @@
   function showWidgetInPage(armId, serviceId, fieldFrameId, bizName, ownName, portalName, note, clientId) {
     if (window.self !== window.top) return;
     const hostId = "sera-sca-widget-host";
-    if (document.getElementById(hostId) || window.__seraScaCardFor === armId) return;
+    if (window.__seraScaCardFor === armId) return;
+    // A card from an EARLIER arm (the clipboard arm, then the UID-page arm 0.5 s later) holds that
+    // arm's id: clicking it asked for a password under a dead arm and silently did nothing. The
+    // newest arm's card replaces it.
+    const stale = document.getElementById(hostId);
+    if (stale) {
+      // The same client's card for the same portal is already up (the clipboard arm, then the UID-page
+      // arm a moment later): keep it - no flicker, no second card - and point its button at the new arm.
+      if (clientId != null && window.__seraScaCardClient === clientId && window.__seraScaCardService === serviceId) {
+        window.__seraScaCardFor = armId;
+        return;
+      }
+      stale.remove();
+    }
     window.__seraScaCardFor = armId;
+    window.__seraScaCardClient = clientId;
+    window.__seraScaCardService = serviceId;
     const hasField = () => Array.from(document.querySelectorAll("input[type='password']")).some(el => {
       try {
         const r = el.getBoundingClientRect();
@@ -172,6 +201,7 @@
       } catch (_) { return false; }
     });
     const render = () => {
+      if (window.__seraScaCardFor !== armId) return;   // a newer arm took over while this one waited
       const host = document.createElement("div");
       host.id = hostId;
       const shadow = host.attachShadow({ mode: "closed" });
@@ -263,7 +293,8 @@
       btn.onclick = () => {
         clearTimeout(autoTimer);
         try {
-          chrome.runtime.sendMessage({ type: "SCA_WIDGET_FILL", arm_id: armId, service_id: serviceId, frame_id: fieldFrameId });
+          chrome.runtime.sendMessage({ type: "SCA_WIDGET_FILL", arm_id: window.__seraScaCardFor || armId, service_id: serviceId, frame_id: fieldFrameId,
+            client_id: clientId == null ? null : clientId });
         } catch (_) {}
         window.__seraScaCardFor = null;      // a failed fill can be retried by entering the id again
         dismiss();
@@ -272,7 +303,8 @@
     if (fieldFrameId !== 0 || hasField()) { render(); return; }
     const waitUntil = Date.now() + 180000;
     const poll = setInterval(() => {
-      if (hasField()) { clearInterval(poll); render(); }
+      if (window.__seraScaCardFor !== armId) clearInterval(poll);
+      else if (hasField()) { clearInterval(poll); render(); }
       else if (Date.now() > waitUntil) { clearInterval(poll); window.__seraScaCardFor = null; }
     }, 250);
   }
@@ -312,7 +344,8 @@
     // env: { postNative(msg) -> bool, postDesktop(msg), getSettings() -> Promise<{scaEnabled,
     //        scaMode, allowedDomains, assistTabs: {tabId: "smti"|"mecp"}}>,
     //        waitForConnection(ms) -> Promise<bool> (optional), executeScript(details) -> Promise,
-    //        sessionStore (chrome.storage.session or null), now() }
+    //        sessionStore (chrome.storage.session or null), now(),
+    //        activeTab() -> Promise<{id, url} | null> (optional: the active tab of the focused window) }
     const now = env.now || (() => Date.now());
     let arm = null;
     let loaded = false;
@@ -387,6 +420,21 @@
       }
     }
 
+    // An arm from a service's UID page (trigger "source"): Sera read the UID on that page by UIA,
+    // so nothing may ever be typed or pasted there (Google's account chooser: one click, then the
+    // password page). Act on the active tab as if the UID had been entered - only when its address
+    // IS that UID page (arm.uid_page); every other rule of onCandidate (approved domain, the
+    // client's portal, busy, assist lock) still applies. Returns a status (tests).
+    async function actOnUidPage(a) {
+      if (!a || a.trigger !== "source" || !a.uid_page || typeof env.activeTab !== "function") return "not-a-uid-page-arm";
+      let tab = null;
+      try { tab = await env.activeTab(); } catch (_) { tab = null; }
+      if (!tab || typeof tab.id !== "number" || !tab.url) return "no-active-tab";
+      const bare = (l) => String(l || "").toLowerCase().replace(/^www\./, "");   // a typed link may omit "www."
+      if (!bare(a.uid_page) || bare(pageLink(tab.url)) !== bare(a.uid_page)) return "not-the-uid-page:" + pageLink(tab.url);
+      return onCandidate({ candidate: a.matched_uid }, { tab: { id: tab.id, url: tab.url }, frameId: 0, url: tab.url }, true);
+    }
+
     // Desktop -> extension. Returns true when the message was an SCA one.
     async function handleDesktopMessage(msg) {
       if (!msg || typeof msg.type !== "string" || !msg.type.startsWith("SCA_")) return false;
@@ -407,6 +455,10 @@
           await saveArm();
           report({ type: "SCA_STATE", arm_id: arm.arm_id, state: "ARMED" });
           await replayCandidates();
+          const act = await actOnUidPage(next);
+          // Sera's logs/sca.log: what this browser did with a UID page arm (a status word, no page data
+          // except the active tab's page link when it is NOT the UID page)
+          if (next.trigger === "source") report({ type: "SCA_STATE", arm_id: next.arm_id, state: "UID_PAGE", action: String(act) });
           return true;
         }
         case "SCA_DISARM_REQUEST":
@@ -558,9 +610,15 @@
     async function onWidgetFill(req, sender) {
       if (!sender || !sender.tab) return "no-tab";
       const a = await loadArm();
-      if (!a || a.arm_id !== req.arm_id) return "not-armed";
+      // A card made under an earlier arm of the same client (the clipboard arm is re-armed from the
+      // UID page a moment later) still carries the old id: use the live arm when it covers the
+      // same service, and say in sca.log when a click really is ignored.
+      const ignored = (why) => { report({ type: "SCA_STATE", arm_id: a ? a.arm_id : null, state: "WIDGET_FILL", action: why }); return why; };
+      if (!a) return ignored("not-armed");
       const service = (a.services || []).find(s => s.service_id === req.service_id);
-      if (!service) return "no-service";
+      if (!service) return ignored(a.arm_id === req.arm_id ? "no-service" : "not-armed");
+      // Never release another client's password to a card that names this one.
+      if (a.arm_id !== req.arm_id && !(req.client_id != null && a.client_id === req.client_id)) return ignored("not-armed");
       const frameId = typeof req.frame_id === "number" ? req.frame_id : 0;
       const key = `${a.arm_id}:${sender.tab.id}:${frameId}:${service.service_id}`;
       const settings = await env.getSettings();
@@ -570,24 +628,38 @@
         ? "password-requested" : "desktop-unreachable";
     }
 
+    // Sera's logs/sca.log: why a typed/pasted id did or did not lead to a card (a status word only,
+    // no page data). Repeats of the same status within 5 s are dropped - every keystroke fires one.
+    let lastCandidateNote = { status: "", at: 0 };
+    function noteCandidateStatus(status) {
+      if (!arm || !status || status === "not-armed" || status === "disabled") return;
+      const t = now();
+      if (status === lastCandidateNote.status && t - lastCandidateNote.at < 5000) return;
+      lastCandidateNote = { status, at: t };
+      report({ type: "SCA_STATE", arm_id: arm.arm_id, state: "CANDIDATE", action: String(status) });
+    }
+
     // chrome.runtime.onMessage -> true when handled.
     function handleRuntimeMessage(req, sender) {
       if (!req || typeof req.type !== "string") return false;
-      if (req.type === "SCA_MATCH_CANDIDATE") { onCandidate(req, sender); return true; }
+      if (req.type === "SCA_MATCH_CANDIDATE") {
+        onCandidate(req, sender).then(noteCandidateStatus, () => {});
+        return true;
+      }
       if (req.type === "SCA_WIDGET_FILL") { onWidgetFill(req, sender); return true; }
       if (req.type === "sca_fill_completed") { clearArm("CONSUMED"); return true; }  // an SCC/MECP fill
       return false;
     }
 
     return {
-      handleDesktopMessage, handleRuntimeMessage, onCandidate, onWidgetFill,
+      handleDesktopMessage, handleRuntimeMessage, onCandidate, onWidgetFill, actOnUidPage,
       disarm: (why) => clearArm(why || "IDLE"),
       _state: () => ({ arm, pending, busy }),
     };
   }
 
   const api = {
-    normalizeUid, looksLikeUid, hostOf, hostMatches, isApprovedDomain, pickService, isArmLive,
+    normalizeUid, looksLikeUid, hostOf, pageLink, hostMatches, isApprovedDomain, pickService, isArmLive,
     candidateMatches, fillPasswordInPage, showWidgetInPage, showFillChipInPage, createCoordinator,
   };
   root.SeraSCA = api;
