@@ -244,4 +244,4 @@ In `os-assist-plan.json` (deps, model, full instructions). Summary:
 
 ## 9. Hand-off notes
 
-*(none yet)*
+- **O0-1** (2026-11-08, claude-haiku-4-5-20251001): Baseline tests run. All required UID-node files (core/sca/page_nodes.py, core/sca/uid_source_watch.py, docs/sca-uid-node-plan.md) exist and are committed. Reference code fill_spike.py present. Test results: 393 passed, 24 pre-existing failures. Failures: test_clipboard_assist.py (19 tests, PAN column validation), test_sca_audit_log.py (5 tests, NAME OF COMPANY column validation). Note: test_sca_uid_source_watch.py does not exist (file not found); test_sca_uid_node.py runs successfully instead. JavaScript tests (test_sca_coordinator.js): 39/39 passed.
