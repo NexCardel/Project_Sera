@@ -24,3 +24,17 @@ def test_only_fill_py_writes():
             if word in text:
                 hits.append(f"{rel.as_posix()}: {word}")
     assert not hits, "writer calls outside core/os_assist/fill.py:\n" + "\n".join(hits)
+
+
+# Rule 1: OS Assist never clicks, presses Enter/Tab, submits or dismisses anything - fill.py included.
+NEVER = (".Invoke(", ".Toggle(", ".Select(", ".DoDefaultAction(", "mouse_event", "keybd_event",
+         "PostMessage", "SendMessage", "VK_RETURN", "VK_TAB", "VK_ESCAPE")
+
+
+def test_os_assist_never_clicks_or_presses_keys():
+    hits = []
+    for folder in ("core/os_assist", "ui/os_assist"):
+        for path in (ROOT / folder).rglob("*.py"):
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            hits += [f"{path.relative_to(ROOT).as_posix()}: {w}" for w in NEVER if w in text]
+    assert not hits, "click / key-press calls in OS Assist:\n" + "\n".join(hits)

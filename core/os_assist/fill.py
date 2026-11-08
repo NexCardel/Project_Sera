@@ -129,7 +129,10 @@ def _same(a, b) -> bool:
 
 def _check(el, length: int, text: Optional[str], is_password: bool) -> str:
     """'ok', 'ok-unreadable' (password box exposing no value, D2) or a short failure reason.
-    A user box is compared with `text`; a password box only by its bullet count."""
+    A user box is compared with `text`; a password box only by its bullet count. A box UIA marks
+    as a password box is judged as one whatever the caller said (rule 4)."""
+    if _safe(lambda: el.CurrentIsPassword, False):
+        is_password, text = True, None
     vp = _safe(lambda: _value_pattern(el), None)
     if vp is None:
         return "no ValuePattern"
@@ -170,7 +173,9 @@ def _refused(service) -> FillResult:
     return FillResult("refused", "", "address bar is no longer the service's login page")
 
 
-def _type_and_verify(hwnd: int, el, text: str, is_password: bool, kb) -> FillResult:
+def _type_and_verify(hwnd: int, el, text: str, is_password: bool, service, kb) -> FillResult:
+    if not locate.host_matches_service(hwnd, service):
+        return _refused(service)
     if not kb.type_text(text, hwnd):
         return FillResult("failed", "keys", "window changed while typing")
     verdict = _verify(el, text, is_password, kb)
@@ -206,18 +211,18 @@ def fill(hwnd: int, element, text: str, is_password: bool, service, method: str 
         if method == "setvalue":
             return _done(is_password, FillResult("failed", "setvalue", "; ".join(notes)))
 
-    if not locate.host_matches_service(hwnd, service):
-        return _done(is_password, _refused(service))
     if kb.foreground() != hwnd:
         kb.bring_to_front(hwnd)
         kb.sleep(0.2)
         if kb.foreground() != hwnd:
             return _done(is_password, FillResult("failed", "keys", "browser not in front"))
+    if not locate.host_matches_service(hwnd, service):          # SetFocus is a write too
+        return _done(is_password, _refused(service))
     _safe(lambda: element.SetFocus(), None)
     kb.sleep(0.15)
     if not _same(_focused(), element):
         return _done(is_password, FillResult("failed", "keys", "box did not take focus"))
-    res = _type_and_verify(hwnd, element, text, is_password, kb)
+    res = _type_and_verify(hwnd, element, text, is_password, service, kb)
     if res.outcome == "failed" and notes:
         res.reason = f"{'; '.join(notes)}; keys: {res.reason}"
     return _done(is_password, res)
@@ -233,7 +238,7 @@ def type_into_focused(hwnd: int, text: str, is_password: bool, service, keyboard
     el = _focused()
     if el is None or _safe(lambda: el.CurrentControlType, 0) != CT_EDIT:
         return _done(is_password, FillResult("failed", "keys", "focus is not on a text box"))
-    return _done(is_password, _type_and_verify(hwnd, el, text, is_password, kb))
+    return _done(is_password, _type_and_verify(hwnd, el, text, is_password, service, kb))
 
 
 class FocusWatcher:

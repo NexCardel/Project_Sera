@@ -15,7 +15,8 @@ from core.vsdc.vsdc_router import BROWSER_EXE_NAMES
 from sca_protocol import host_matches, service_host
 
 BROWSER_OWN_CLASS = "NativeViewHost"          # the browser's own panes, not the page
-_ID_SELECTOR = re.compile(r"^#([A-Za-z_][\w\-]*)$")
+# One part of a selector list that names an id: `#x`, `input#x`, `[id='x']`, `input[id="x"]`.
+_ID_SELECTOR = re.compile(r"""^(?:input)?(?:#([A-Za-z_][\w\-]*)|\[id=(['"]?)([A-Za-z_][\w\-]*)\2\])$""")
 
 user32 = ctypes.windll.user32 if hasattr(ctypes, "windll") else None
 kernel32 = ctypes.windll.kernel32 if hasattr(ctypes, "windll") else None
@@ -138,15 +139,22 @@ def visible(d: dict) -> bool:
     return "hidden=true" not in d["aria"].replace(" ", "").lower()
 
 
-def _selector_id(selector: Optional[str]) -> str:
-    m = _ID_SELECTOR.match((selector or "").strip())
-    return m.group(1) if m else ""
+def _selector_ids(selector: Optional[str]) -> List[str]:
+    """The ids named by a selector list, in order (sera_dom cleanSelector, then split on ',').
+    Parts of any other shape are skipped."""
+    cleaned = re.sub(r"input\s+", "input", re.sub(r"\s+\[", "[", (selector or "").strip()))
+    out = []
+    for part in cleaned.split(","):
+        m = _ID_SELECTOR.match(part.strip())
+        if m:
+            out.append(m.group(1) or m.group(3))
+    return out
 
 
 def find_fields(hwnd: int, username_selector: Optional[str] = None,
                 password_selector: Optional[str] = None) -> Tuple[Any, Any]:
-    """(user_el, pass_el); either may be None. A `#id` selector wins (AutomationId); any other
-    selector shape is ignored. Otherwise: password = first visible password box; username = the
+    """(user_el, pass_el); either may be None. A `#id` selector wins (AutomationId; in a list the
+    first id with a visible box wins); any other selector shape is ignored. Otherwise: password = first visible password box; username = the
     visible non-password box closest before it, or the first one when there is no password box."""
     uia = worker.current_uia()
     seen = []
@@ -157,12 +165,10 @@ def find_fields(hwnd: int, username_selector: Optional[str] = None,
                 seen.append((el, d))
 
     def by_id(selector, want_password):
-        wanted = _selector_id(selector)
-        if not wanted:
-            return None
-        for i, (_el, d) in enumerate(seen):
-            if d["id"] == wanted and d["password"] == want_password:
-                return i
+        for wanted in _selector_ids(selector):
+            for i, (_el, d) in enumerate(seen):
+                if d["id"] == wanted and d["password"] == want_password:
+                    return i
         return None
 
     pass_i = by_id(password_selector, True)

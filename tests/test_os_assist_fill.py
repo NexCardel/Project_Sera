@@ -110,7 +110,7 @@ def test_setvalue_ignored_falls_back_to_keys(env):
     res = fill.fill(HWND, box, "AB12", False, SERVICE, keyboard=kb)
     assert (res.outcome, res.method) == ("filled", "keys")
     assert box.setvalue_calls == 1 and box.focused and kb.typed == 1
-    assert env.host["reads"] == 2          # checked before each write
+    assert env.host["reads"] == 3          # checked before SetValue, SetFocus and the keys
 
 
 def test_readonly_goes_to_keys(env):
@@ -150,6 +150,28 @@ def test_host_changed_between_setvalue_and_keys_is_refused(env):
     kb = keys_for(box)
     res = fill.fill(HWND, box, "AB12", False, SERVICE, keyboard=kb)
     assert res.outcome == "refused" and kb.typed == 0
+
+
+def test_host_changed_between_focus_and_keys_is_refused(env):
+    box = Box("ignored")
+    env.uia.focus = box
+    calls = {"n": 0}
+
+    def matches(hwnd, service):
+        calls["n"] += 1
+        return calls["n"] <= 2
+    locate.host_matches_service = matches            # monkeypatch fixture restores the original
+    kb = keys_for(box)
+    res = fill.fill(HWND, box, "AB12", False, SERVICE, keyboard=kb)
+    assert res.outcome == "refused" and kb.typed == 0
+
+
+def test_password_box_never_compared_as_text(env):
+    class Masked(Box):
+        CurrentIsPassword = True
+    box = Masked("ok", password=True)
+    res = fill.fill(HWND, box, "s3cret-fake", False, SERVICE, method="setvalue", keyboard=keys_for(box))
+    assert (res.outcome, res.method) == ("filled", "setvalue")     # judged by bullet count
 
 
 def test_window_changes_mid_type_fails(env):

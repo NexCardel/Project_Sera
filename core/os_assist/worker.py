@@ -1,7 +1,8 @@
 """
 OS Assist UIA worker: one daemon thread that owns its own UI Automation object. Every UIA call of
 OS Assist runs on it (submit a function, get a Future), so a slow browser tree can never stall the
-Qt thread or SGT's shared reader (core/vsdc/vsdc_uia_text).
+Qt thread or SGT's shared reader (core/vsdc/vsdc_uia_text). A UIA element a job returns is an
+opaque handle to the caller: hand it back into another job, never call it on another thread.
 """
 
 import queue
@@ -61,23 +62,28 @@ class Worker:
         fut: Future = Future()
         with self._lock:
             if self._thread is None or not self._thread.is_alive():
-                self._thread = threading.Thread(target=self._run, name="os-assist-uia", daemon=True)
+                # Each thread gets its own queue, so a stop() racing a submit() can never leave
+                # two worker threads draining one queue.
+                self._q = queue.Queue()
+                self._thread = threading.Thread(target=self._run, args=(self._q,), name="os-assist-uia",
+                                                daemon=True)
                 self._thread.start()
-        self._q.put((fut, fn, args))
+            self._q.put((fut, fn, args))
         return fut
 
     def stop(self) -> None:
         with self._lock:
-            thread = self._thread
+            thread, q = self._thread, self._q
             self._thread = None
         if thread is not None and thread.is_alive():
-            self._q.put(None)
+            q.put(None)
             thread.join(timeout=2.0)
 
-    def _run(self) -> None:
+    def _run(self, q: "queue.Queue[Optional[tuple]]") -> None:
         _local.uia = None
+        _local.is_worker = True
         while True:
-            job = self._q.get()
+            job = q.get()
             if job is None:
                 return
             fut, fn, args = job
@@ -90,9 +96,12 @@ class Worker:
 
 
 def current_uia():
-    """The Uia of the calling thread, created on first use. Only meaningful on the worker."""
+    """The Uia of the calling thread, created on first use. Only the worker thread may create one,
+    so a UIA call (and its COM objects) can't land on the Qt thread by mistake."""
     uia = getattr(_local, "uia", None)
     if uia is None:
+        if not getattr(_local, "is_worker", False):
+            raise RuntimeError("OS Assist UIA used off the worker thread; use worker.submit()")
         uia = _local.uia = Uia()
     return uia
 

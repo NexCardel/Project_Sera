@@ -95,6 +95,19 @@ def test_non_id_selector_ignored(page):
     assert ids(locate.find_fields(1, "#b input", "div > #pw")) == ("b", "pw")
 
 
+def test_selector_list_uses_its_id_parts(page):
+    page(El("a"), El("b"), El("pw", password=True), El("passwordInput", password=True))
+    sel = "#passwordInput, input[id='passwordInput'], input[type='password']"
+    assert ids(locate.find_fields(1, "input [id=\"b\"]", sel)) == ("b", "passwordInput")
+    assert ids(locate.find_fields(1, "#nope, input#a", "#nada, [id=pw]")) == ("a", "pw")
+
+
+def test_uia_off_the_worker_thread_is_refused():
+    worker.bind(None)
+    with pytest.raises(RuntimeError):
+        locate.find_fields(1)
+
+
 def test_id_selector_for_missing_box_falls_back(page):
     page(El("u"), El("pw", password=True))
     assert ids(locate.find_fields(1, "#nope", "#nada")) == ("u", "pw")

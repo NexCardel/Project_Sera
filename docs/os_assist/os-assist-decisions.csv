@@ -1,2 +1,3 @@
 WP,Question,Choice,By,Why,Date
 O2-2,D3: what the pencil (edit password) button does in OS mode,Keep it; it opens the SCK widget as today (automation.show_sck_widget),agent,Owner decision 2026-11-08,2026-11-08 14:41
+O1-R,Port sera_dom's revealed-password fallback (type=text box hinted password) and its focused-element fallback to locate.find_fields?,No: only IsPassword boxes count as password boxes; with none found SMTI copies (blueprint 4.2 step 4),agent,"Verifying a revealed box means reading its plain value, which rule 4 forbids; the blueprint's 4.2 rules do not list either fallback",2026-11-08 20:31
