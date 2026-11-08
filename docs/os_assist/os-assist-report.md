@@ -1,22 +1,22 @@
-# OS Assist — report (2026-11-08 20:23)
+# OS Assist — report (2026-11-08 20:26)
 
 Deadline: 2026-11-15T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 15 |
+| Not started | 14 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 2 |
+| Done | 3 |
 | Blocked | 0 |
 
-Runs: 3   output tokens: 20801   API-equivalent cost: $1.53
+Runs: 4   output tokens: 34169   API-equivalent cost: $2.38
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | O0-1 | Done | haiku | a858454 | Baseline: tests before any change | baseline tests complete: 393 pass, 24 pre-existing failures |
 | O1-1 | Done | sonnet | dda85fd | core/os_assist: UIA worker thread + locate (§3, §4.2) | worker + locate built, 12 fake-element tests pass |
-| O1-2 | Not started | sonnet |  | core/os_assist/fill.py + one-writer test (§4.1, §4.3) |  |
+| O1-2 | Done | sonnet | 2a165fc | core/os_assist/fill.py + one-writer test (§4.1, §4.3) | fill.py one writer + FocusWatcher + type_into_focused; 15 fill tests + one-writer test pass |
 | O1-3 | Not started | sonnet |  | core/os_assist/secure_clipboard.py (§4.5) |  |
 | O1-R | Not started | opus |  | Review phase 1 (core) |  |
 | O2-1 | Not started | opus |  | ui/os_assist/dock_card.py: the docked, no-focus base window (§4.4) |  |

@@ -1,1 +1,2 @@
 Check,WP,Text,Result,Date,Notes
+1,O1-3,On Windows 10/11 with clipboard history on: copy a fictional password via secure_clipboard.copy(secret=True) and confirm it does not appear in Win+V.,Not run,2026-11-08 20:27,
