@@ -1,6 +1,6 @@
 WP,Phase,What,Status,Model,Attempts,Commit,Notes,Updated
 O0-1,0,Baseline: tests before any change,Done,claude-haiku-4-5-20251001,2,a858454,"baseline tests complete: 393 pass, 24 pre-existing failures",2026-11-08 20:21
-O1-1,1,"core/os_assist: UIA worker thread + locate (§3, §4.2)",Not started,claude-sonnet-5-5,0,,,
+O1-1,1,"core/os_assist: UIA worker thread + locate (§3, §4.2)",In progress,claude-sonnet-5-5,1,,,2026-11-08 20:22
 O1-2,1,"core/os_assist/fill.py + one-writer test (§4.1, §4.3)",Not started,claude-sonnet-5-5,0,,,
 O1-3,1,core/os_assist/secure_clipboard.py (§4.5),Not started,claude-sonnet-5-5,0,,,
 O1-R,1,Review phase 1 (core),Not started,claude-opus-5-5,0,,,
