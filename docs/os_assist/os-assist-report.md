@@ -1,16 +1,16 @@
-# OS Assist — report (2026-11-08 21:25)
+# OS Assist — report (2026-11-08 21:28)
 
 Deadline: 2026-11-15T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 4 |
+| Not started | 3 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 13 |
+| Done | 14 |
 | Blocked | 0 |
 
-Runs: 13   output tokens: 254236   API-equivalent cost: $18.09
+Runs: 14   output tokens: 267465   API-equivalent cost: $19.20
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -27,7 +27,7 @@ Runs: 13   output tokens: 254236   API-equivalent cost: $18.09
 | O3-1 | Done | sonnet | 9b7efaa | Engine switch setting (§4.7, D1) | assist_engine()/set_assist_engine + listeners in automation.py; Assist engine combo on Action Buttons page; 5 new tests pass |
 | O3-2 | Done | opus | 44deb02 | SMTI/MECP launch through the OS engine | launcher.py: open new tab, 20 s window_for_host wait off-worker, card on Qt thread, one card per kind; triggers route on assist_engine; 18 tests |
 | O3-3 | Done | opus | 9c9fc36 | SCA engine in OS mode (§4.6) | sca_engine.py on worker+Qt: probe/match/grant/90s wait/fill/chip, card+Inject, assist lock; arms routed in OS mode; extension SCA forced off in OS mode; 29 test |
-| O3-4 | Not started | sonnet |  | SCC card through the OS MECP card |  |
+| O3-4 | Done | sonnet | 5f88cf0 | SCC card through the OS MECP card | SCC open/update/close route to the OS MECP card (docked to att.hwnd) in OS mode; extension unchanged; 9 new tests, all scc tests pass |
 | O3-R | Not started | opus |  | Review phase 3 (wiring) |  |
 | O4-1 | Not started | sonnet |  | Full suite, leak and idle checks |  |
 | O4-R | Not started | opus |  | Final review + merge-readiness note |  |
@@ -56,3 +56,4 @@ Runs: 13   output tokens: 254236   API-equivalent cost: $18.09
 - #5 (O2-R) Compare docs/os_assist/shots/*.png with the extension cards on a real page — Not run
 - #6 (O3-2) OS engine: Client Detail SMTI and MECP buttons open a new portal tab and the card docks over that browser within a few seconds; a second press replaces the card; with no browser window found in 20 s an error dialog names the portal — Not run
 - #7 (O3-3) OS mode SCA: copy a PAN in Excel, type it on GST and on Income Tax (PAN page, Continue, password page): password filled + chip; unverified IT client: amber card, Inject fills; with an SMTI card open on the window SCA stays quiet; extension draws no SCA card in OS mode and works again after switching back to Extension. — Not run
+- #8 (O3-4) Real browser: with assist_engine=os, trigger an SCC attempt (SGT sees an Income Tax password page) and from Client Detail MECP on an unverified PAN; confirm the SCC card docks to that browser window, Copy / This one worked / None / x work, marks update, and the card closes on save. — Not run

@@ -164,12 +164,27 @@ def _settings_ini_path() -> Path:
 _engine_listeners: list = []
 
 
+def _read_ini_text(path: Path):
+    """(text, encoding) of settings.ini; ('', 'utf-8') when missing. A file that is not UTF-8 is
+    read as latin-1, which writes every byte back unchanged."""
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return "", "utf-8"
+    for enc in ("utf-8-sig" if raw.startswith(b"\xef\xbb\xbf") else "utf-8", "latin-1"):
+        try:
+            return raw.decode(enc), enc
+        except UnicodeDecodeError:
+            continue
+    return "", "utf-8"
+
+
 def assist_engine() -> str:
     """'extension' (default) or 'os': who fills SMTI, MECP and SCA. Read fresh, so a switch needs no restart."""
     try:
         import configparser
-        cfg = configparser.ConfigParser()
-        cfg.read(str(_settings_ini_path()))
+        cfg = configparser.ConfigParser(interpolation=None, strict=False)
+        cfg.read_string(_read_ini_text(_settings_ini_path())[0])
         if cfg.get("Automation", "assist_engine", fallback="extension").strip().lower() == "os":
             return "os"
     except Exception:
@@ -178,19 +193,42 @@ def assist_engine() -> str:
 
 
 def set_assist_engine(engine: str) -> str:
-    """Saves the engine to settings.ini and tells the listeners when it changed. Returns the saved value."""
-    import configparser
+    """Saves the engine to settings.ini and tells the listeners when it changed. Returns the saved value.
+    Only the assist_engine line changes: the same file holds the MCL_Columns seed (case-sensitive
+    labels) and comments, which a configparser rewrite would lower-case or drop."""
+    import re
     engine = "os" if str(engine).strip().lower() == "os" else "extension"
     previous = assist_engine()
     path = _settings_ini_path()
-    cfg = configparser.ConfigParser()
-    cfg.read(str(path))
-    if not cfg.has_section("Automation"):
-        cfg.add_section("Automation")
-    cfg.set("Automation", "assist_engine", engine)
+    text, enc = _read_ini_text(path)
+    line_new = f"assist_engine = {engine}"
+    out, in_auto, done = [], False, False
+
+    def end_of_section():                    # before the section's trailing blank lines
+        i = len(out)
+        while i and not out[i - 1].strip():
+            i -= 1
+        out.insert(i, line_new)
+
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("[") and s.endswith("]"):
+            if in_auto and not done:
+                end_of_section()
+                done = True
+            in_auto = s[1:-1] == "Automation"
+        elif in_auto and re.match(r"assist_engine\s*[=:]", s, re.IGNORECASE):
+            if not done:
+                out.append(line_new)
+                done = True
+            continue
+        out.append(line)
+    if in_auto and not done:
+        end_of_section()
+    elif not done:
+        out += ([""] if out and out[-1].strip() else []) + ["[Automation]", line_new]
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as fh:
-        cfg.write(fh)
+    path.write_text("\n".join(out) + "\n", encoding=enc)
     if engine != previous:
         for listener in list(_engine_listeners):
             try:

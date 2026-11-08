@@ -286,6 +286,9 @@ class ScaEngine(QObject):
         self._probe_job = None
         for p in self._pending.values():
             p.pop("password", None)
+            job = p.get("job")
+            if job is not None:
+                job.cancel()                           # still queued: nothing is typed after a disarm
         self._pending.clear()
 
     def _live(self) -> Optional[dict]:

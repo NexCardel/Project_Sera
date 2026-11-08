@@ -539,6 +539,16 @@ class ClipboardWatchService(QObject):
                             f"Pick it again in Settings \u2192 SCA.")
 
     # ------------------------------------------------------------------ extension -> desktop
+    def handle_extension_password_request(self, msg: dict) -> dict:
+        """SCA_PASSWORD_REQUEST from a browser. With the OS engine SCA is the desktop's own
+        (core/os_assist/sca_engine): the extension gets no password, even for an arm it still holds
+        from before the switch."""
+        if automation.assist_engine() == "os":
+            print("[SCA] Password request refused: the OS engine does SCA")
+            return {"type": sca_protocol.MSG_SCA_PASSWORD_DENIED, "request_id": msg.get("request_id"),
+                    "arm_id": msg.get("arm_id"), "reason": "SCA runs in Sera (OS engine)"}
+        return self.handle_password_request(msg)
+
     def handle_password_request(self, msg: dict) -> dict:
         """Answer to SCA_PASSWORD_REQUEST {request_id, arm_id, service_id, page_host,
         matched_uid}: a GRANT with the one password, or a DENIED with the reason."""

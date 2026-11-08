@@ -862,7 +862,7 @@ class SeraApp:
         """SCA v2: the extension asks for one portal password after the client's id was entered
         on that portal. clipboard_watch decides; the answer goes back only on the socket that
         asked (WSBridge.reply), never to every connected browser."""
-        reply = self.clipboard_watcher.handle_password_request(msg)
+        reply = self.clipboard_watcher.handle_extension_password_request(msg)
         self.bridge.reply(msg, reply)
 
     def _show_sca_popup(self, text: str, level: str = "warning") -> None:
