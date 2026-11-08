@@ -46,7 +46,7 @@ only *where they live* and *how a box gets its text* change.
 | 5 | Fast Autofill | Stays on the extension. Not part of this project. |
 | 6 | Legal / ToS | The owner handles it. Not tracked here; workers don't raise it. |
 
-Out of scope: Fast Autofill; porting the SCK card itself (D3); anything in rule 1's "never" list.
+Out of scope: Fast Autofill; porting the SCK card itself (the ✎ button keeps calling it, D3); anything in rule 1's "never" list.
 
 ## 2. What exists today (read before building)
 
@@ -148,7 +148,7 @@ fill(hwnd, element, text, kind, service):
   existing scale helpers; see `tests/test_ui_scale.py`).
 - Cards: `smti_card.py` (normal + Flutter steps), `mecp_card.py` (plain + SCC mode),
   `sca_card.py` (Inject + needs_confirm note), `sca_chip.py`.
-- **✎ button** — D3.
+- **✎ button** — kept; opens the SCK widget as today (D3).
 
 ### 4.5 MECP specifics
 
@@ -215,7 +215,7 @@ In `os-assist-plan.json` (deps, model, full instructions). Summary:
 |---|---|---|
 | D1 | Engine switch `assist_engine`, default **extension** until the owner checks pass. | Settled (default) |
 | D2 | Password box verified by bullet count only, never by text. If a browser exposes no value, trust SetValue's return and say so in the result. | Settled (spike proved it on Chrome) |
-| D3 | The ✎ button in OS mode. Default **(a)**: still opens the SCK card through the extension (`automation.show_sck_widget`), and the button is hidden when no browser is connected to the bridge. Alternative (b): open the client's record in Sera. O2-2 asks the owner. | Asked by O2-2 |
+| D3 | The ✎ button stays on every OS card and does what it does today: opens the SCK widget for that client and service (`main.py` `_handle_sck_edit_requested` → `automation.show_sck_widget`). | Settled by the owner 2026-11-08 |
 | D4 | Two browser windows on the same portal: the one in front wins; a card never moves to another window on its own. | Settled (default) |
 
 ## 7. Owner checks (O4-R lists them in the checks CSV)

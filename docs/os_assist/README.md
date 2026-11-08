@@ -30,12 +30,12 @@ and workers can never push.
 |---|---|---|
 | 0 | O0-1 baseline | haiku |
 | 1 core | O1-1 worker + locate, O1-2 fill + one-writer test, O1-3 secure clipboard, O1-R review | sonnet, opus review |
-| 2 cards | O2-1 dock base, O2-2 SMTI (asks D3), O2-3 MECP, O2-4 SCA card + chip, O2-R review + shots | opus, sonnet |
+| 2 cards | O2-1 dock base, O2-2 SMTI, O2-3 MECP, O2-4 SCA card + chip, O2-R review + shots | opus, sonnet |
 | 3 wiring | O3-1 engine setting, O3-2 SMTI/MECP launch, O3-3 SCA engine, O3-4 SCC card, O3-R review | sonnet, opus |
 | 4 finish | O4-1 full suite + leak/idle tests, O4-R final review + merge note | sonnet, opus |
 
-The only question that will pop up by design is **D3** (what the ✎ button does in OS mode), asked
-by O2-2. Deadline in the plan: **2026-11-15 23:00 IST** — change `deadline` in the plan if needed.
+All decisions are settled (D3, 2026-11-08: the ✎ button keeps opening the SCK widget), so no
+question pops up by design; workers may still ask about something the blueprint doesn't settle. Deadline in the plan: **2026-11-15 23:00 IST** — change `deadline` in the plan if needed.
 
 ## Setup (once)
 
