@@ -1,16 +1,16 @@
-# OS Assist — report (2026-11-08 21:04)
+# OS Assist — report (2026-11-08 21:25)
 
 Deadline: 2026-11-15T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 6 |
+| Not started | 4 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 11 |
+| Done | 13 |
 | Blocked | 0 |
 
-Runs: 12   output tokens: 212090   API-equivalent cost: $15.10
+Runs: 13   output tokens: 254236   API-equivalent cost: $18.09
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -25,8 +25,8 @@ Runs: 12   output tokens: 212090   API-equivalent cost: $15.10
 | O2-4 | Done | sonnet | eca8c9b | SCA card + fill chip (§4.4, §4.6) | ScaCard (Inject signal, amber needs_confirm, SCK edit) and ScaChip (2.4 s fade) built; 10 new tests pass |
 | O2-R | Done | opus | 9b283ec | Review phase 2 (cards) + look-alike shots | Cards match extension CSS per card (MECP/SCA/chip geometry, fonts, shrink-to-fit), 7 shots in docs/os_assist/shots, queued SMTI jobs cancelled on dismiss; 120 o |
 | O3-1 | Done | sonnet | 9b7efaa | Engine switch setting (§4.7, D1) | assist_engine()/set_assist_engine + listeners in automation.py; Assist engine combo on Action Buttons page; 5 new tests pass |
-| O3-2 | Not started | opus |  | SMTI/MECP launch through the OS engine |  |
-| O3-3 | Not started | opus |  | SCA engine in OS mode (§4.6) |  |
+| O3-2 | Done | opus | 44deb02 | SMTI/MECP launch through the OS engine | launcher.py: open new tab, 20 s window_for_host wait off-worker, card on Qt thread, one card per kind; triggers route on assist_engine; 18 tests |
+| O3-3 | Done | opus | 9c9fc36 | SCA engine in OS mode (§4.6) | sca_engine.py on worker+Qt: probe/match/grant/90s wait/fill/chip, card+Inject, assist lock; arms routed in OS mode; extension SCA forced off in OS mode; 29 test |
 | O3-4 | Not started | sonnet |  | SCC card through the OS MECP card |  |
 | O3-R | Not started | opus |  | Review phase 3 (wiring) |  |
 | O4-1 | Not started | sonnet |  | Full suite, leak and idle checks |  |
@@ -42,6 +42,10 @@ Runs: 12   output tokens: 212090   API-equivalent cost: $15.10
 - **O2-2** Flutter step mode: Tab after step 1, and what if typing fails? → No Tab (rule 1); a step that is not typed copies the value (password secure) with the button copy texts and moves on, as the extension's flutter_no_focus copy (Rule 1 forbids Tab; copy fallback matches today's behaviour and the WP's copy texts)
 - **O2-3** How does the OS MECP card reach main.py's SCC handlers and the ledger? → mecp_card.set_scc_hooks(send=dispatch on msg type to _handle_scc_row_worked/_handle_scc_row_none/_handle_scc_card_closed, ledger=SccCard.note_clipboard); per-card scc_send/ledger override; module update_card/close_card with automation's signatures, thread-safe via a queued signal (Same message dicts as the bridge emits, no socket; O3-4 only has to plug them in)
 - **O2-R** Card geometry where the three extension cards differ → Each OS card copies its own extension card: MECP right 18, content-box 355/395 px, x, no slide, no click reset; SCA top 20, 320 px border-box, radius 12, no hover pause/click reset; chip top 20, one line up to 340 px (Blueprint 4.4 says visuals 1:1 from the extension CSS; the cards had inherited the SMTI card's values)
+- **O3-2** Where does the 20 s window wait run? → A plain launch thread polls every 0.5 s (first look after 1 s), each look is one worker.submit(window_for_host) job (Holding the UIA worker for 20 s would stall card probes and fills; the UIA calls still only run on the worker)
+- **O3-2** Who calls clipboard_watch.suppress_client for OS launches? → Client Detail, unchanged (it already suppresses before every MECP/SMTI trigger in both engines); the launcher does not repeat it (Keeps today's behaviour with no duplicate path)
+- **O3-3** When does the OS SCA engine act on a box holding the armed id? → When the match appears in that window (or on a new arm), not every tick; probe checks the focused non-password box first, then up to 8 visible non-password boxes (The extension acts on input events; a polled state would re-request and re-notify every 0.6 s after a denial or failed fill. Checking every visible id box costs little and is more accurate than first-box-only (search boxes on GST).)
+- **O3-3** Where is the extension's SCA forced off in OS mode? → Inside automation.update_extension_settings and main._get_extension_settings_payload (sca_enabled AND engine != os); engine listener resyncs on switch (Covers every caller (Settings save, Services dialog, startup sync, extension connect, popup toggle) in one place, and switching back sends the user's own setting.)
 
 ## Checks waiting for you
 
@@ -50,3 +54,5 @@ Runs: 12   output tokens: 212090   API-equivalent cost: $15.10
 - #3 (O2-3) MECP OS card next to the extension's in-page MECP card (plain and SCC mode): same look, copies paste correctly, combo copies show in the SCC ledger, This one worked / None / x reach the desktop — Not run
 - #4 (O2-4) Look at the OS SCA card and fill chip next to the extension's in-page ones (colours, amber needs_confirm border, spacing, fade) in a real browser; chip must not steal focus. — Not run
 - #5 (O2-R) Compare docs/os_assist/shots/*.png with the extension cards on a real page — Not run
+- #6 (O3-2) OS engine: Client Detail SMTI and MECP buttons open a new portal tab and the card docks over that browser within a few seconds; a second press replaces the card; with no browser window found in 20 s an error dialog names the portal — Not run
+- #7 (O3-3) OS mode SCA: copy a PAN in Excel, type it on GST and on Income Tax (PAN page, Continue, password page): password filled + chip; unverified IT client: amber card, Inject fills; with an SMTI card open on the window SCA stays quiet; extension draws no SCA card in OS mode and works again after switching back to Extension. — Not run

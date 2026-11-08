@@ -294,7 +294,7 @@ def _extension_payload(service: dict, user_id: str, password: str, client_id, mo
 
 
 def send_scc_card(service: dict, pan: str, rows: list, client_name: str, client_id, attempt_id: str,
-                  open_tab: bool = False, on_error=None) -> bool:
+                  open_tab: bool = False, on_error=None, hwnd: int = 0) -> bool:
     """SCC-U: shows the MECP card's SCC mode in the portal tab that is already open (the extension
     never navigates or opens a tab for it). Sent to every connected browser - only one that has
     the portal open shows it. No retry and no browser launch: SGT just saw the page, so a browser
@@ -304,6 +304,10 @@ def send_scc_card(service: dict, pan: str, rows: list, client_name: str, client_
     from ui import ws_bridge
     if not rows:
         return False
+    if assist_engine() == "os":
+        from core.os_assist import launcher
+        return launcher.launch_scc(service, pan, rows, client_name, client_id, attempt_id,
+                                   hwnd=hwnd, open_tab=open_tab, on_error=on_error)
     svc = {**service, "_client_name": client_name}
     payload = _extension_payload(svc, pan, "", client_id, "mecp", scc_mode=True, scc_combos=rows, attempt_id=attempt_id)
     if open_tab:
@@ -318,6 +322,9 @@ def send_scc_card(service: dict, pan: str, rows: list, client_name: str, client_
 
 def close_scc_card(attempt_id: str) -> bool:
     """SCC-U: asks the browser to take the SCC card of this attempt down (a save, or the attempt ended)."""
+    if assist_engine() == "os":
+        from ui.os_assist import mecp_card
+        return mecp_card.close_card(attempt_id)
     from ui import ws_bridge
     bridge = ws_bridge.get_active_bridge()
     if not bridge or not attempt_id:
@@ -330,6 +337,9 @@ def update_scc_card(attempt_id: str, failed: list, next_label, message: str, sto
     (locked out) greys every row and highlights none. Step 5: `ask` (a list, maybe empty) = the card
     asks which row worked, highlighting those and offering "None - I typed my own". Row labels only -
     never a password."""
+    if assist_engine() == "os":
+        from ui.os_assist import mecp_card
+        return mecp_card.update_card(attempt_id, failed, next_label, message, stop, ask)
     from ui import ws_bridge
     bridge = ws_bridge.get_active_bridge()
     if not bridge or not attempt_id:

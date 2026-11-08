@@ -171,6 +171,60 @@ class Launcher:
 
         self._spawn(_wait)
 
+    def launch_scc(self, service, pan: str, rows: list, client_name: str, client_id, attempt_id: str,
+                   hwnd: int = 0, open_tab: bool = False,
+                   on_error: Optional[Callable[[str], None]] = None) -> bool:
+        """SCC-U's card (MECP SCC mode) docked to the attempt's browser window `hwnd`. Without a
+        window it is only possible for Client Detail's button (open_tab): open the login page and
+        wait for its window like launch(). Returns whether a card is being shown or awaited."""
+        if not rows or not attempt_id:
+            return False
+        if hwnd:
+            self._on_qt(lambda: self._show_scc(hwnd, service, pan, rows, client_name, client_id,
+                                               attempt_id, on_error))
+            return True
+        url = str(_get(service, "login_page_link", "") or "").strip()
+        if not open_tab or not url:
+            return False
+        browser = str(_get(service, "browser", "") or "").strip().lower() or None
+
+        def _wait() -> None:
+            try:
+                self._opener(url, browser)
+            except Exception:
+                pass
+            deadline = self._clock() + WAIT_S
+            self._sleep(FIRST_LOOK_S)
+            while True:
+                found = self._finder(url)
+                if found:
+                    self._on_qt(lambda: self._show_scc(found, service, pan, rows, client_name, client_id,
+                                                       attempt_id, on_error))
+                    return
+                if self._clock() >= deadline:
+                    break
+                self._sleep(POLL_S)
+            if on_error:
+                on_error(timeout_message(service))
+
+        self._spawn(_wait)
+        return True
+
+    def _show_scc(self, hwnd, service, pan, rows, client_name, client_id, attempt_id, on_error) -> None:
+        card = None
+        try:
+            from ui.os_assist.mecp_card import MecpCard
+            card = MecpCard(service, pan, client_id=client_id, client_name=client_name,
+                            scc_rows=rows, attempt_id=attempt_id, clear_seconds=clear_seconds())
+            card.attach(hwnd, service)
+        except Exception:
+            if card is not None:
+                card.dismiss("error")
+            if on_error:
+                on_error("Sera could not show the card over the browser window.")
+            return
+        card.present()
+
     def dismiss(self, kind: str, reason: str = "close") -> None:
         """Qt thread: dismiss the live card of that kind (its secrets are cleared by the card)."""
         card = self._cards.pop(kind, None)
@@ -213,6 +267,10 @@ def default() -> Launcher:
     if _default is None:
         _default = Launcher()
     return _default
+
+
+def launch_scc(*args, **kw) -> bool:
+    return default().launch_scc(*args, **kw)
 
 
 def launch(kind: str, service, user_id: str, password: str, client_id=None, client_name: str = "",

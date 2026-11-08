@@ -1385,7 +1385,8 @@ class SeraApp:
         self._scc_card = SccCard(
             self.db,
             open_card=lambda service, pan, rows, title, client_id, attempt_id, **opts:
-                automation.send_scc_card(service, pan, rows, title, client_id, attempt_id, **opts),
+                automation.send_scc_card(service, pan, rows, title, client_id, attempt_id,
+                                         hwnd=self._scc_card.attempt_hwnd(attempt_id), **opts),
             close_card=automation.close_scc_card,
             suppress=clipboard_watch.suppress_client, release=clipboard_watch.release_client,
             on_closed=lambda att: opener.close(att.hwnd),
@@ -1404,6 +1405,11 @@ class SeraApp:
         watcher = getattr(self, "clipboard_watcher", None)
         if watcher is not None:
             watcher.scc_ledger = self._scc_card.note_clipboard
+        from ui.os_assist import mecp_card as _os_mecp_card
+        handlers = {"scc_row_worked": self._handle_scc_row_worked, "scc_row_none": self._handle_scc_row_none,
+                    "scc_card_closed": self._handle_scc_card_closed}
+        _os_mecp_card.set_scc_hooks(send=lambda msg: handlers[msg.get("type")](msg),
+                                    ledger=self._scc_card.note_clipboard)
         self._scc_parts = [opener, self._scc_outcome]
         return self._scc_parts
 
