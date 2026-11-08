@@ -4,7 +4,7 @@ O1-1,1,"core/os_assist: UIA worker thread + locate (§3, §4.2)",Done,claude-son
 O1-2,1,"core/os_assist/fill.py + one-writer test (§4.1, §4.3)",Done,claude-sonnet-5-5,1,2a165fc,fill.py one writer + FocusWatcher + type_into_focused; 15 fill tests + one-writer test pass,2026-11-08 20:25
 O1-3,1,core/os_assist/secure_clipboard.py (§4.5),Done,claude-sonnet-5-5,1,9d5b41e,"secure_clipboard.copy + clear_if_unchanged, 4 tests pass",2026-11-08 20:27
 O1-R,1,Review phase 1 (core),Done,claude-opus-5-5,1,cec854b,"4 fixes: host check before SetFocus+keys, IsPassword boxes judged by bullets only, #id selector lists, UIA only on worker + per-thread queue; no-click test; 24 pre-existing fails unchanged",2026-11-08 20:31
-O2-1,2,"ui/os_assist/dock_card.py: the docked, no-focus base window (§4.4)",Not started,claude-opus-5-5,0,,,
+O2-1,2,"ui/os_assist/dock_card.py: the docked, no-focus base window (§4.4)",In progress,claude-opus-5-5,1,,,2026-11-08 20:33
 O2-2,2,SMTI card (normal + Flutter steps) (§4.4),Not started,claude-opus-5-5,0,,,
 O2-3,2,MECP card (plain + SCC mode) (§4.5),Not started,claude-opus-5-5,0,,,
 O2-4,2,"SCA card + fill chip (§4.4, §4.6)",Not started,claude-sonnet-5-5,0,,,
