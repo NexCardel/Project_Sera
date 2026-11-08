@@ -9,7 +9,7 @@ O2-2,2,SMTI card (normal + Flutter steps) (§4.4),Done,claude-opus-5-5,1,2669d18
 O2-3,2,MECP card (plain + SCC mode) (§4.5),Done,claude-opus-5-5,1,ae71e8c,mecp_card.py plain + SCC mode; set_scc_hooks + thread-safe update_card/close_card for O3-4; 19 tests pass,2026-11-08 20:49
 O2-4,2,"SCA card + fill chip (§4.4, §4.6)",Done,claude-sonnet-5-5,1,eca8c9b,"ScaCard (Inject signal, amber needs_confirm, SCK edit) and ScaChip (2.4 s fade) built; 10 new tests pass",2026-11-08 20:51
 O2-R,2,Review phase 2 (cards) + look-alike shots,Done,claude-opus-5-5,1,9b283ec,"Cards match extension CSS per card (MECP/SCA/chip geometry, fonts, shrink-to-fit), 7 shots in docs/os_assist/shots, queued SMTI jobs cancelled on dismiss; 120 os_assist tests pass",2026-11-08 21:01
-O3-1,3,"Engine switch setting (§4.7, D1)",Not started,claude-sonnet-5-5,0,,,
+O3-1,3,"Engine switch setting (§4.7, D1)",In progress,claude-sonnet-5-5,1,,,2026-11-08 21:02
 O3-2,3,SMTI/MECP launch through the OS engine,Not started,claude-opus-5-5,0,,,
 O3-3,3,SCA engine in OS mode (§4.6),Not started,claude-opus-5-5,0,,,
 O3-4,3,SCC card through the OS MECP card,Not started,claude-sonnet-5-5,0,,,

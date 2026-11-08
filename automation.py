@@ -143,6 +143,60 @@ def trigger_mecp(service: dict, user_id: str, password: str, client_id: int, on_
     _send_to_extension(service, user_id, password, client_id, on_error, mode="mecp")
 
 
+def _settings_ini_path() -> Path:
+    return Path.home() / "AmanAssociates_Sera" / "settings.ini"
+
+
+_engine_listeners: list = []
+
+
+def assist_engine() -> str:
+    """'extension' (default) or 'os': who fills SMTI, MECP and SCA. Read fresh, so a switch needs no restart."""
+    try:
+        import configparser
+        cfg = configparser.ConfigParser()
+        cfg.read(str(_settings_ini_path()))
+        if cfg.get("Automation", "assist_engine", fallback="extension").strip().lower() == "os":
+            return "os"
+    except Exception:
+        pass
+    return "extension"
+
+
+def set_assist_engine(engine: str) -> str:
+    """Saves the engine to settings.ini and tells the listeners when it changed. Returns the saved value."""
+    import configparser
+    engine = "os" if str(engine).strip().lower() == "os" else "extension"
+    previous = assist_engine()
+    path = _settings_ini_path()
+    cfg = configparser.ConfigParser()
+    cfg.read(str(path))
+    if not cfg.has_section("Automation"):
+        cfg.add_section("Automation")
+    cfg.set("Automation", "assist_engine", engine)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as fh:
+        cfg.write(fh)
+    if engine != previous:
+        for listener in list(_engine_listeners):
+            try:
+                listener(engine)
+            except Exception:
+                pass
+    return engine
+
+
+def add_engine_listener(callback) -> None:
+    """callback(engine) runs after the engine changes; no restart needed."""
+    if callback not in _engine_listeners:
+        _engine_listeners.append(callback)
+
+
+def remove_engine_listener(callback) -> None:
+    if callback in _engine_listeners:
+        _engine_listeners.remove(callback)
+
+
 def open_in_default_browser(url: str, preferred_browser: Optional[str] = None):
     """
     Opens the URL in the single designated default browser to avoid opening duplicate tabs

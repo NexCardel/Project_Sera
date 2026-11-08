@@ -1,16 +1,16 @@
-# OS Assist — report (2026-11-08 20:52)
+# OS Assist — report (2026-11-08 21:02)
 
 Deadline: 2026-11-15T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 8 |
+| Not started | 7 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 9 |
+| Done | 10 |
 | Blocked | 0 |
 
-Runs: 10   output tokens: 153509   API-equivalent cost: $10.38
+Runs: 11   output tokens: 203377   API-equivalent cost: $14.38
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -23,7 +23,7 @@ Runs: 10   output tokens: 153509   API-equivalent cost: $10.38
 | O2-2 | Done | opus | 2669d18 | SMTI card (normal + Flutter steps) (§4.4) | SmtiCard on DockCard: Username/Password fill via worker, copy fallbacks, Flutter step cards with FocusWatcher; dock_card.wire_sck_edit/set_sck_edit_handler for  |
 | O2-3 | Done | opus | ae71e8c | MECP card (plain + SCC mode) (§4.5) | mecp_card.py plain + SCC mode; set_scc_hooks + thread-safe update_card/close_card for O3-4; 19 tests pass |
 | O2-4 | Done | sonnet | eca8c9b | SCA card + fill chip (§4.4, §4.6) | ScaCard (Inject signal, amber needs_confirm, SCK edit) and ScaChip (2.4 s fade) built; 10 new tests pass |
-| O2-R | Not started | opus |  | Review phase 2 (cards) + look-alike shots |  |
+| O2-R | Done | opus | 9b283ec | Review phase 2 (cards) + look-alike shots | Cards match extension CSS per card (MECP/SCA/chip geometry, fonts, shrink-to-fit), 7 shots in docs/os_assist/shots, queued SMTI jobs cancelled on dismiss; 120 o |
 | O3-1 | Not started | sonnet |  | Engine switch setting (§4.7, D1) |  |
 | O3-2 | Not started | opus |  | SMTI/MECP launch through the OS engine |  |
 | O3-3 | Not started | opus |  | SCA engine in OS mode (§4.6) |  |
@@ -41,6 +41,7 @@ Runs: 10   output tokens: 153509   API-equivalent cost: $10.38
 - **O2-2** When does a non-TRACES page switch SMTI to Flutter step mode? → One worker probe 1.5 s after the card shows (retried up to 3 times while the page has no Document): 0 visible Edits -> step mode; never after a button was pressed (UIA cannot see flt-* DOM markers; a box count is the cheapest accurate signal and step mode still works if wrong)
 - **O2-2** Flutter step mode: Tab after step 1, and what if typing fails? → No Tab (rule 1); a step that is not typed copies the value (password secure) with the button copy texts and moves on, as the extension's flutter_no_focus copy (Rule 1 forbids Tab; copy fallback matches today's behaviour and the WP's copy texts)
 - **O2-3** How does the OS MECP card reach main.py's SCC handlers and the ledger? → mecp_card.set_scc_hooks(send=dispatch on msg type to _handle_scc_row_worked/_handle_scc_row_none/_handle_scc_card_closed, ledger=SccCard.note_clipboard); per-card scc_send/ledger override; module update_card/close_card with automation's signatures, thread-safe via a queued signal (Same message dicts as the bridge emits, no socket; O3-4 only has to plug them in)
+- **O2-R** Card geometry where the three extension cards differ → Each OS card copies its own extension card: MECP right 18, content-box 355/395 px, x, no slide, no click reset; SCA top 20, 320 px border-box, radius 12, no hover pause/click reset; chip top 20, one line up to 340 px (Blueprint 4.4 says visuals 1:1 from the extension CSS; the cards had inherited the SMTI card's values)
 
 ## Checks waiting for you
 
@@ -48,3 +49,4 @@ Runs: 10   output tokens: 153509   API-equivalent cost: $10.38
 - #2 (O2-2) SMTI OS card on TRACES and on a normal portal: look matches the in-page card (buttons, step cards, timer), Username/Password fill, copy fallback pastes, ✎ opens SCK for that client — Not run
 - #3 (O2-3) MECP OS card next to the extension's in-page MECP card (plain and SCC mode): same look, copies paste correctly, combo copies show in the SCC ledger, This one worked / None / x reach the desktop — Not run
 - #4 (O2-4) Look at the OS SCA card and fill chip next to the extension's in-page ones (colours, amber needs_confirm border, spacing, fade) in a real browser; chip must not steal focus. — Not run
+- #5 (O2-R) Compare docs/os_assist/shots/*.png with the extension cards on a real page — Not run
