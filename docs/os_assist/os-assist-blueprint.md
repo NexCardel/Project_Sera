@@ -184,8 +184,8 @@ Runs on the worker only while an arm is live (no arm → no UIA at all). Each ti
 7. **Assist lock:** while an OS SMTI/MECP card is open on a window, SCA stays quiet on that window.
 
 The UID-node / UID-source work (`core/sca/page_nodes.py`, `core/sca/uid_source_watch.py`,
-`docs/sca-uid-node-plan.md`) is reused, not duplicated. It was **uncommitted in the main checkout on
-2026-11-08**: O0-1 checks it is on this branch; O3-3 is blocked until it is.
+`docs/sca-uid-node-plan.md`) is reused, not duplicated. It is on `main` since 62908de (merge of
+`sca-uid-node`, 2026-11-08); O0-1 still checks it is on this branch.
 
 ### 4.7 Engine switch and the extension
 
