@@ -1,1 +1,2 @@
 Run,WP,Model,Attempt,Started,Minutes,Outcome,Input tokens,Output tokens,Cache read,Cache write,Cost USD,Turns,Summary
+20261108-144322,O0-1,claude-haiku-4-5-20251001,1,2026-11-08 14:43,0.1,runner needs sign-in,0,0,0,0,0,1,Failed to authenticate: OAuth session expired and could not be refreshed
