@@ -1,16 +1,16 @@
-# OS Assist — report (2026-11-08 22:28)
+# OS Assist — report (2026-11-08 22:32)
 
 Deadline: 2026-11-15T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 1 |
+| Not started | 0 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 16 |
+| Done | 17 |
 | Blocked | 0 |
 
-Runs: 16   output tokens: 293578   API-equivalent cost: $22.55
+Runs: 17   output tokens: 305137   API-equivalent cost: $23.71
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -30,7 +30,7 @@ Runs: 16   output tokens: 293578   API-equivalent cost: $22.55
 | O3-4 | Done | sonnet | 5f88cf0 | SCC card through the OS MECP card | SCC open/update/close route to the OS MECP card (docked to att.hwnd) in OS mode; extension unchanged; 9 new tests, all scc tests pass |
 | O3-R | Done | opus | 756e0e0 | Review phase 3 (wiring) | Phase 3 reviewed: extension SCA password requests denied in OS mode, settings.ini edited one line only, queued SCA fill cancelled on disarm; 8 new tests |
 | O4-1 | Done | sonnet | fa13fa2 | Full suite, leak and idle checks | no-leak (10) and idle tests added and passing; full suite 149 F all pre-existing/non-project, 2 cards_review geometry flakes under load |
-| O4-R | Not started | opus |  | Final review + merge-readiness note |  |
+| O4-R | Done | opus | 4479858 | Final review + merge-readiness note | Review done, all 0 rules hold; merge-readiness.md written; owner checks 10-15 added; drop .os-assist.lock + logs before merging; not merged |
 
 ## Decisions taken for you
 
@@ -60,3 +60,9 @@ Runs: 16   output tokens: 293578   API-equivalent cost: $22.55
 - #7 (O3-3) OS mode SCA: copy a PAN in Excel, type it on GST and on Income Tax (PAN page, Continue, password page): password filled + chip; unverified IT client: amber card, Inject fills; with an SMTI card open on the window SCA stays quiet; extension draws no SCA card in OS mode and works again after switching back to Extension. — Not run
 - #8 (O3-4) Real browser: with assist_engine=os, trigger an SCC attempt (SGT sees an Income Tax password page) and from Client Detail MECP on an unverified PAN; confirm the SCC card docks to that browser window, Copy / This one worked / None / x work, marks update, and the card closes on save. — Not run
 - #9 (O3-R) Engine OS with the extension connected: copy a PAN, type it on GST - exactly one fill (Sera's chip), no extension SCA card or chip; then switch to Extension in Settings without a restart and repeat - the extension fills as before. — Not run
+- #10 (O4-R) Owner check 1: SMTI on GST, Income Tax (PAN page -> Continue -> password page), MCA, EPFO in Chrome, Edge, Firefox with assist_engine=os: both buttons fill, login works. — Not run
+- #11 (O4-R) Owner check 2: SMTI on TRACES with assist_engine=os: step cards show; click the user box -> typed; click the password box -> typed. — Not run
+- #12 (O4-R) Owner check 3: MECP plain + SCC mode with assist_engine=os: copies work; nothing appears in Win+V history. — Not run
+- #13 (O4-R) Owner check 4: SCA with assist_engine=os: copy a PAN in Excel, type it on Income Tax -> password filled + chip; unverified client -> amber card, Inject fills. — Not run
+- #14 (O4-R) Owner check 5: OS cards sit top-right of the browser, follow a window drag, hide on another tab, don't cover other apps, and never take focus from the browser. — Not run
+- #15 (O4-R) Owner check 6: switch back to Extension (Settings, no restart): SMTI, MECP, SCC card and SCA all work as before. — Not run
