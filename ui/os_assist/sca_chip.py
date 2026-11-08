@@ -22,6 +22,8 @@ def chip_text(portal_name: str, business_name: str, token: str = "") -> str:
 class ScaChip(DockCard):
     """`attach(browser_hwnd, service)` then `present()`."""
 
+    DOCK_TOP = 20                             # .chip `top: 20px; right: 24px`
+
     def __init__(self, business_name: str, portal_name: str, token: str = "",
                  life_ms: int = LIFE_MS, **kw):
         super().__init__(badge="SCA", timeout_ms=None, **kw)
@@ -38,6 +40,7 @@ class ScaChip(DockCard):
         self.card.setObjectName("card")
         px = css_px
         self.card.setStyleSheet(f"""
+            QWidget {{ font-family: 'Segoe UI'; }}
             QFrame#card {{ background: #111814; border: {max(1, px(1.5))}px solid {self.ACCENT};
                 border-radius: {px(10)}px; font-family: 'Segoe UI'; }}
             QLabel {{ background: transparent; color: #FFFFFF; font-size: {px(12.5)}px; }}
@@ -57,9 +60,15 @@ class ScaChip(DockCard):
         self.timer = None
 
     def refit(self) -> None:
-        self.card.adjustSize()
-        self.card.resize(min(self.card.sizeHint().width(), css_px(MAX_WIDTH_PX)),
-                         self.card.sizeHint().height())
+        """One line as wide as the text needs; it wraps only past max-width 340 px (as the CSS)."""
+        self.label.setWordWrap(False)
+        one_line = self.card.sizeHint().width()
+        self.label.setWordWrap(True)
+        w = min(one_line, css_px(MAX_WIDTH_PX))
+        self.card.setFixedWidth(w)
+        lay = self.card.layout()
+        h = lay.heightForWidth(w) if lay.hasHeightForWidth() else self.card.sizeHint().height()
+        self.card.setFixedHeight(max(h, self.card.minimumSizeHint().height()))
         self.resize(self.card.size())
         self.card.move(0, 0)
 
@@ -81,6 +90,7 @@ class ScaChip(DockCard):
         if self._dismissed:
             return
         self._dismissed = True
+        self.clear_secrets()                  # holds none; kept so every dismiss path is the same
         self._life.stop()
         self._tick.stop()
         self._probe_job = None

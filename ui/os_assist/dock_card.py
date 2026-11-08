@@ -157,7 +157,8 @@ class TimerBar(QWidget):
     TRACK = QColor(255, 255, 255, 20)            # rgba(255, 255, 255, 0.08)
     BAR = QColor("#2E9B5F")
 
-    def __init__(self, duration_ms: int, parent=None, clock: Callable[[], float] = time.monotonic):
+    def __init__(self, duration_ms: int, parent=None, clock: Callable[[], float] = time.monotonic,
+                 height_px: float = 3.5):
         super().__init__(parent)
         self.duration_ms = int(duration_ms)
         self._clock = clock
@@ -165,7 +166,7 @@ class TimerBar(QWidget):
         self._started_at: Optional[float] = None     # set while running
         self._paused = False
         self._done = False
-        self.setFixedHeight(max(2, round(css_px(3.5))))
+        self.setFixedHeight(max(2, css_px(height_px)))
         self.setFocusPolicy(Qt.NoFocus)
         self.setCursor(Qt.PointingHandCursor)
         self._expiry = QTimer(self)
@@ -272,6 +273,15 @@ class DockCard(QWidget):
 
     BADGE = "⚡ Sera Assist"
     ACCENT = "#2E9B5F"
+    # Geometry of the extension's card, in CSS px; the MECP and SCA cards override what differs.
+    DOCK_TOP, DOCK_RIGHT = TOP_PX, RIGHT_PX      # `top` / `right` of the in-page card
+    PADDING = (16, 18)                           # vertical, horizontal
+    HEADER_GAP = 8                               # .header margin-bottom
+    TIMER_GAP, TIMER_HEIGHT = 12, 3.5            # .timer-container margin-top, height
+    BADGE_SPACING = 0.7                          # .badge letter-spacing
+    CLOSE_TEXT = "✕"
+    SLIDE_IN_MS, FADE_IN_MS = SLIDE_MS, FADE_MS  # 0 = shown at once (MECP has no slide-in)
+    TIMER_INTERACTIVE = True                     # pause on hover, reset on click (the SCA card's doesn't)
 
     def __init__(self, badge: Optional[str] = None, timeout_ms: Optional[int] = None,
                  locator=None, win: Optional[Win32] = None,
@@ -305,10 +315,10 @@ class DockCard(QWidget):
         self._tick.timeout.connect(self._follow)
 
         self._slide = QPropertyAnimation(self.card, b"pos", self)
-        self._slide.setDuration(SLIDE_MS)
+        self._slide.setDuration(self.SLIDE_IN_MS or SLIDE_MS)
         self._slide.setEasingCurve(slide_curve())
         self._fade = QPropertyAnimation(self, b"windowOpacity", self)
-        self._fade.setDuration(FADE_MS)
+        self._fade.setDuration(self.FADE_IN_MS or FADE_MS)
         self._fade.setEasingCurve(QEasingCurve.InOutQuad)
         self._slide_out_done = False
 
@@ -318,7 +328,8 @@ class DockCard(QWidget):
         self.card.setObjectName("card")
         self.card.setStyleSheet(self.card_qss())
         lay = QVBoxLayout(self.card)
-        lay.setContentsMargins(css_px(18), css_px(16), css_px(18), css_px(16))
+        pv, ph = css_px(self.PADDING[0]), css_px(self.PADDING[1])
+        lay.setContentsMargins(ph, pv, ph, pv)
         lay.setSpacing(0)
 
         header = QHBoxLayout()
@@ -327,10 +338,10 @@ class DockCard(QWidget):
         self.badge = QLabel(badge.upper(), self.card)          # QSS has no text-transform / letter-spacing
         self.badge.setObjectName("badge")
         f = self.badge.font()
-        f.setLetterSpacing(QFont.AbsoluteSpacing, 0.7)
+        f.setLetterSpacing(QFont.AbsoluteSpacing, self.BADGE_SPACING)
         self.badge.setFont(f)
         self.edit_btn = self._head_button("✎", "Enter a new password")
-        self.close_btn = self._head_button("✕", "Dismiss")
+        self.close_btn = self._head_button(self.CLOSE_TEXT, "Dismiss")
         self.edit_btn.clicked.connect(self.edit_requested.emit)
         self.close_btn.clicked.connect(lambda: self.dismiss("close"))
         header.addWidget(self.badge)
@@ -338,7 +349,7 @@ class DockCard(QWidget):
         header.addWidget(self.edit_btn)
         header.addWidget(self.close_btn)
         lay.addLayout(header)
-        lay.addSpacing(css_px(8))
+        lay.addSpacing(css_px(self.HEADER_GAP))
 
         self.body = QVBoxLayout()
         self.body.setContentsMargins(0, 0, 0, 0)
@@ -347,9 +358,10 @@ class DockCard(QWidget):
 
         self.timer: Optional[TimerBar] = None
         if timeout_ms:
-            lay.addSpacing(css_px(12))
-            self.timer = TimerBar(timeout_ms, self.card, clock=self._clock)
+            lay.addSpacing(css_px(self.TIMER_GAP))
+            self.timer = TimerBar(timeout_ms, self.card, clock=self._clock, height_px=self.TIMER_HEIGHT)
             self.timer.BAR = QColor(self.ACCENT)
+            self.timer.setAttribute(Qt.WA_TransparentForMouseEvents, not self.TIMER_INTERACTIVE)
             self.timer.expired.connect(lambda: self.dismiss("timeout"))
             lay.addWidget(self.timer)
 
@@ -365,6 +377,7 @@ class DockCard(QWidget):
         """The extension's `.card`, `.badge`, `.close-btn`/`.edit-btn` CSS. Cards may override."""
         px = css_px
         return f"""
+            QWidget {{ font-family: 'Segoe UI'; }}
             QFrame#card {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #121815, stop:1 #0B120E);
                 border: {max(1, px(1.5))}px solid {self.ACCENT};
@@ -379,6 +392,7 @@ class DockCard(QWidget):
                 padding: {px(3.5)}px {px(9)}px; border-radius: {px(6)}px;
             }}
             QPushButton#head {{
+                font-family: 'Segoe UI Symbol';          /* ✎ ✕: the browser's fallback font for them */
                 background: transparent; border: none; color: #7E9388;
                 font-size: {px(16)}px; padding: {px(2)}px {px(6)}px; border-radius: {px(4)}px;
             }}
@@ -389,12 +403,41 @@ class DockCard(QWidget):
         """Size the window to the card (320-420 CSS px wide). Call after adding content."""
         self.card.adjustSize()
         hint = self.card.sizeHint()
-        w = min(max(hint.width(), css_px(CARD_MIN_PX)), css_px(CARD_MAX_PX))
-        h = self.card.heightForWidth(w) if self.card.hasHeightForWidth() else hint.height()
-        self.card.resize(w, max(h, hint.height()))
+        if self.card.minimumWidth() == self.card.maximumWidth():          # a card with a fixed width
+            w = self.card.minimumWidth()
+        else:
+            w = min(max(self._max_content_width(), css_px(CARD_MIN_PX)), css_px(CARD_MAX_PX))
+        lay = self.card.layout()
+        h = lay.totalHeightForWidth(w) if lay.hasHeightForWidth() else -1
+        self.card.resize(w, h if h > 0 else hint.height())    # the hint's height is for its own (narrower) width
         self.resize(self.card.size())
         if self._slide.state() != QAbstractAnimation.Running:
             self.card.move(0 if self._slid_in else self._off_x(), 0)
+
+    def _max_content_width(self) -> int:
+        """The CSS shrink-to-fit width: the card's width with no text wrapped (a wrapping QLabel's
+        own hint is a guess, much narrower)."""
+        wrapped = [l for l in self.card.findChildren(QLabel) if l.wordWrap() and l.isVisibleTo(self.card)]
+
+        def _invalidate(layout) -> None:             # every nested layout caches its hint
+            layout.invalidate()
+            for i in range(layout.count()):
+                sub = layout.itemAt(i).layout()
+                if sub is not None:
+                    _invalidate(sub)
+
+        def _set(on: bool) -> None:
+            for label in wrapped:
+                label.setWordWrap(on)
+            for w in [self.card, *self.card.findChildren(QWidget)]:
+                w.updateGeometry()                   # drops the size its parent's layout item cached
+                if w.layout() is not None:
+                    _invalidate(w.layout())
+
+        _set(False)
+        width = self.card.sizeHint().width()
+        _set(True)
+        return width
 
     def _off_x(self) -> int:
         return round(self.card.width() * 1.2)       # translateX(120%)
@@ -504,7 +547,7 @@ class DockCard(QWidget):
         else:
             top, right = wr[1], wr[2]
         tr = to_logical(right, top)
-        pos = QPoint(tr.x() - css_px(RIGHT_PX) - self.width(), tr.y() + css_px(TOP_PX))
+        pos = QPoint(tr.x() - css_px(self.DOCK_RIGHT) - self.width(), tr.y() + css_px(self.DOCK_TOP))
         if pos != self.pos():
             self.move(pos)
 
@@ -523,6 +566,10 @@ class DockCard(QWidget):
     # -- in and out ----------------------------------------------------------------------------
     def _slide_in(self) -> None:
         self._slid_in = True
+        if not self.SLIDE_IN_MS:
+            self.card.move(0, 0)
+            self.setWindowOpacity(1.0)
+            return
         self._slide.stop()
         self._slide.setStartValue(QPoint(self._off_x(), 0))
         self._slide.setEndValue(QPoint(0, 0))
@@ -544,6 +591,9 @@ class DockCard(QWidget):
         self._probe_job = None
         self.dismissed.emit(reason)
         if not self.isVisible():
+            return
+        if not self.SLIDE_IN_MS:
+            self._after_slide_out()
             return
         self._slide.stop()
         self._slide.setStartValue(self.card.pos())
@@ -571,16 +621,16 @@ class DockCard(QWidget):
         self._apply_native()
 
     def enterEvent(self, event):
-        if self.timer is not None:
+        if self.timer is not None and self.TIMER_INTERACTIVE:
             self.timer.pause()
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        if self.timer is not None:
+        if self.timer is not None and self.TIMER_INTERACTIVE:
             self.timer.resume()
         super().leaveEvent(event)
 
     def mousePressEvent(self, event):
-        if self.timer is not None:
+        if self.timer is not None and self.TIMER_INTERACTIVE:
             self.timer.reset()
         event.accept()

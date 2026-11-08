@@ -1,16 +1,16 @@
-# OS Assist — report (2026-11-08 20:50)
+# OS Assist — report (2026-11-08 20:52)
 
 Deadline: 2026-11-15T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 9 |
+| Not started | 8 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 8 |
+| Done | 9 |
 | Blocked | 0 |
 
-Runs: 9   output tokens: 142490   API-equivalent cost: $9.43
+Runs: 10   output tokens: 153509   API-equivalent cost: $10.38
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -22,7 +22,7 @@ Runs: 9   output tokens: 142490   API-equivalent cost: $9.43
 | O2-1 | Done | opus | 4267738 | ui/os_assist/dock_card.py: the docked, no-focus base window (§4.4) | DockCard base + TimerBar + css_px/to_logical helpers; 14 offscreen tests pass; not real-browser tested |
 | O2-2 | Done | opus | 2669d18 | SMTI card (normal + Flutter steps) (§4.4) | SmtiCard on DockCard: Username/Password fill via worker, copy fallbacks, Flutter step cards with FocusWatcher; dock_card.wire_sck_edit/set_sck_edit_handler for  |
 | O2-3 | Done | opus | ae71e8c | MECP card (plain + SCC mode) (§4.5) | mecp_card.py plain + SCC mode; set_scc_hooks + thread-safe update_card/close_card for O3-4; 19 tests pass |
-| O2-4 | Not started | sonnet |  | SCA card + fill chip (§4.4, §4.6) |  |
+| O2-4 | Done | sonnet | eca8c9b | SCA card + fill chip (§4.4, §4.6) | ScaCard (Inject signal, amber needs_confirm, SCK edit) and ScaChip (2.4 s fade) built; 10 new tests pass |
 | O2-R | Not started | opus |  | Review phase 2 (cards) + look-alike shots |  |
 | O3-1 | Not started | sonnet |  | Engine switch setting (§4.7, D1) |  |
 | O3-2 | Not started | opus |  | SMTI/MECP launch through the OS engine |  |
@@ -47,3 +47,4 @@ Runs: 9   output tokens: 142490   API-equivalent cost: $9.43
 - #1 (O1-3) On Windows 10/11 with clipboard history on: copy a fictional password via secure_clipboard.copy(secret=True) and confirm it does not appear in Win+V. — Not run
 - #2 (O2-2) SMTI OS card on TRACES and on a normal portal: look matches the in-page card (buttons, step cards, timer), Username/Password fill, copy fallback pastes, ✎ opens SCK for that client — Not run
 - #3 (O2-3) MECP OS card next to the extension's in-page MECP card (plain and SCC mode): same look, copies paste correctly, combo copies show in the SCC ledger, This one worked / None / x reach the desktop — Not run
+- #4 (O2-4) Look at the OS SCA card and fill chip next to the extension's in-page ones (colours, amber needs_confirm border, spacing, fade) in a real browser; chip must not steal focus. — Not run

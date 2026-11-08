@@ -175,6 +175,7 @@ class SmtiCard(DockCard):
         self._used = False                       # a button was pressed: no Flutter switch after that
         self._step = 0                           # Flutter: 0 user ID, 1 password, 2 done
         self._focus_job = None
+        self._jobs: set = set()                  # worker jobs not done yet; the queued ones die with the card
         self._probe_tries = 0
         self.flutter = False
 
@@ -252,7 +253,8 @@ class SmtiCard(DockCard):
             QPushButton#btn[state="done"] {{ background: #102B1E; border-color: #2E9B5F; color: #4CF9B7; }}
             QPushButton#btn[state="warn"] {{ border-color: #E8A040; color: #F5C97A; }}
             QFrame#step {{
-                background: rgba(255, 255, 255, 0.03); border: {max(1, px(1.5))}px solid rgba(255, 255, 255, 0.08);
+                background: rgba(255, 255, 255, 0.03);
+                border: {max(1, px(1.5))}px solid #222826;   /* rgba(255,255,255,.08) on the card: Qt overdraws a translucent border's corners */
                 border-radius: {px(10)}px;
             }}
             QFrame#step[state="active"] {{ background: rgba(46, 155, 95, 0.16); border-color: #2E9B5F; }}
@@ -284,8 +286,10 @@ class SmtiCard(DockCard):
         if not hasattr(job, "add_done_callback"):
             fn(job)
             return
+        self._jobs.add(job)
 
         def _cb(fut):
+            self._jobs.discard(fut)
             try:
                 value = fut.result()
             except Exception:
@@ -420,6 +424,10 @@ class SmtiCard(DockCard):
 
     # -- out -------------------------------------------------------------------------------------
     def dismiss(self, reason: str = "close") -> None:
+        """A job still queued on the worker (a press or a focus poll just before ✕) is cancelled, so
+        nothing is typed after the card is gone; one already running finishes."""
         self._focus_poll.stop()
         self._user_revert.stop()
         super().dismiss(reason)
+        for job in list(self._jobs):            # after: a cancelled job's result finds the card dismissed
+            job.cancel()

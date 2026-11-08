@@ -25,6 +25,7 @@ import threading
 from typing import Callable, Dict, List, Optional
 
 from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (QWidget, QFrame, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
                                QGraphicsOpacityEffect)
 
@@ -71,6 +72,18 @@ def _repolish(w: QWidget) -> None:
         x.style().polish(x)
 
 
+def outer_width(scc: bool) -> int:
+    return css_px((SCC_WIDTH_PX if scc else WIDTH_PX) + 2 * 16 + 3)
+
+
+def _caps(w: QWidget, spacing: float) -> None:
+    """CSS `text-transform: uppercase; letter-spacing` (QSS has neither); the text stays as given."""
+    f = w.font()
+    f.setCapitalization(QFont.AllUppercase)
+    f.setLetterSpacing(QFont.AbsoluteSpacing, spacing)
+    w.setFont(f)
+
+
 class _Row(QFrame):
     """One `.field-row`: label + value on the left, the buttons on the right.
     state "" | failed | next | ask."""
@@ -87,6 +100,7 @@ class _Row(QFrame):
         left.setSpacing(css_px(2))
         self.label = QLabel(label, self)
         self.label.setObjectName("flabel")
+        _caps(self.label, 0.5)
         self.value = QLabel(_breakable(value), self)
         self.value.setObjectName("fvalue")
         self.value.setWordWrap(True)
@@ -129,6 +143,13 @@ class MecpCard(DockCard):
     in SCC mode the attempt's `att.hwnd`)."""
 
     _deliver = Signal(object)         # a callable run on the Qt thread (update/close from any thread)
+
+    # mecpWidget's `.box` geometry (not the SMTI card's): no slide-in, `right: 18px`, "×"
+    DOCK_RIGHT = 18
+    PADDING = (14, 16)
+    BADGE_SPACING = 0.6
+    CLOSE_TEXT = "×"
+    SLIDE_IN_MS = 0
 
     def __init__(self, service, user_id: str, password: str = "", client_id=None, client_name: str = "",
                  clear_seconds: Optional[int] = 30, timeout_ms: int = TIMEOUT_MS,
@@ -175,7 +196,6 @@ class MecpCard(DockCard):
     def _build_header(self, title: str) -> None:
         """`.badge-wrap` (the SCC tag over the client title), ✎, ✕, then the header's bottom line."""
         lay = self.card.layout()
-        lay.setContentsMargins(css_px(16), css_px(14), css_px(16), css_px(14))
         header = lay.itemAt(0).layout()
         header.removeWidget(self.badge)
         header.takeAt(0)                                   # the base's stretch
@@ -204,12 +224,14 @@ class MecpCard(DockCard):
         if not self.scc:
             self.pass_row = _Row(PASS_LABEL, self.secret("pass"), self.card)
             self.pass_row.copy.clicked.connect(self._copy_pass)
-            self._add(self.pass_row, css_px(8))
+            self._add(self.pass_row, 0)                   # its 8 px margin collapses into the timer's 12
             self.note = self.none_btn = None
             return
-        self.body.addSpacing(css_px(10) if not self._has_user else css_px(2))
-        section = QLabel(SECTION_TITLE.upper(), self.card)
+        # .section-title's margin-top 10 collapses with the row's 8 above, or the header's 12
+        self.body.addSpacing(css_px(2) if self._has_user else 0)
+        section = QLabel(SECTION_TITLE, self.card)
         section.setObjectName("section")
+        _caps(section, 0.6)
         self._add(section, css_px(6))
         self.note = QLabel("", self.card)
         self.note.setObjectName("note")
@@ -249,7 +271,8 @@ class MecpCard(DockCard):
         self._toast_off.timeout.connect(self.toast.hide)
 
     def refit(self) -> None:
-        self.card.setFixedWidth(css_px(SCC_WIDTH_PX if self.scc else WIDTH_PX))
+        """`.box` width is content-box: 320 / 360 plus 2 x 16 padding and 2 x 1.5 border."""
+        self.card.setFixedWidth(outer_width(self.scc))
         super().refit()
 
     def card_qss(self) -> str:
@@ -258,6 +281,7 @@ class MecpCard(DockCard):
         px = css_px
         scc = getattr(self, "scc", False)
         return f"""
+            QWidget {{ font-family: 'Segoe UI'; }}
             QFrame#card {{
                 background: #161B22; border: {max(1, px(1.5))}px solid {"#2E9B5F" if scc else "#30363D"};
                 border-radius: {px(10)}px; color: #F0F6FC; font-family: 'Segoe UI'; font-size: {px(13)}px;
@@ -268,6 +292,7 @@ class MecpCard(DockCard):
             }}
             QLabel#title {{ font-size: {px(13)}px; font-weight: 700; color: #F0F6FC; }}
             QPushButton#head {{
+                font-family: 'Segoe UI Symbol';
                 background: transparent; border: none; color: #8B949E;
                 font-size: {px(18)}px; padding: 0 {px(4)}px; border-radius: {px(4)}px;
             }}

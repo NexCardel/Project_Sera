@@ -183,6 +183,7 @@ def test_result_after_dismiss_is_ignored(app):
     fut = Future()
     filler.fill_answers.append(fut)
     card.pass_btn.click()
+    fut.set_running_or_notify_cancel()       # the worker has started it: dismiss can't cancel it
     card.dismiss("close")
     fut.set_result("nobox")
     app.processEvents()

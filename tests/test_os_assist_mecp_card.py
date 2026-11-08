@@ -92,7 +92,7 @@ def test_plain_look(app):
     assert card.pass_row.label.text() == "Password" and raw(card.pass_row.value) == FAKE_PASSWORD
     assert card.user_row.copy.text() == "📋 Copy" and card.pass_row.copy.text() == "📋 Copy"
     assert card.timer is not None and card.timer.duration_ms == 90000
-    assert card.card.width() == mc.css_px(320)
+    assert card.card.width() == mc.css_px(355)          # content-box: 320 + padding + border
     card.dismiss()
 
 
@@ -184,7 +184,7 @@ def test_scc_look(app):
     assert raw(card.rows["Combo 2"].value) == "Fict-combo-b"
     assert all(r.worked.text() == "This one worked" for r in card.rows.values())
     assert card.note.isHidden() and card.none_btn.isHidden()
-    assert card.card.width() == mc.css_px(360)
+    assert card.card.width() == mc.css_px(395)
     card.dismiss("closed")
 
 

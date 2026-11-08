@@ -37,6 +37,16 @@ class ScaCard(DockCard):
 
     inject_requested = Signal(object, object)         # arm_id, service_id
 
+    # showWidgetInPage's own geometry (it is not the SMTI card's)
+    DOCK_TOP = 20
+    WIDTH_PX = 320                                    # box-sizing: border-box
+    PADDING = (14, 16)
+    HEADER_GAP = 6
+    TIMER_GAP, TIMER_HEIGHT = 10, 3
+    BADGE_SPACING = 0.6
+    SLIDE_IN_MS, FADE_IN_MS = 400, 350
+    TIMER_INTERACTIVE = False                         # no hover pause or click reset in the extension
+
     def __init__(self, arm_id, service_id, business_name: str, owner_name: str, portal_name: str,
                  note: str = "", client_id=None, timeout_ms: int = TIMEOUT_MS,
                  sck_handler: Optional[Callable[[dict], None]] = None, **kw):
@@ -57,9 +67,10 @@ class ScaCard(DockCard):
 
     def _build_body(self, business_name: str, owner_name: str, portal_name: str) -> None:
         self.body.setSpacing(0)
-        self.title = QLabel(business_name or "Client", self.card)
+        self._full = {"title": business_name or "Client", "subtitle": subtitle_text(owner_name, portal_name)}
+        self.title = QLabel(self._full["title"], self.card)
         self.title.setObjectName("title")
-        self.subtitle = QLabel(subtitle_text(owner_name, portal_name), self.card)
+        self.subtitle = QLabel(self._full["subtitle"], self.card)
         self.subtitle.setObjectName("subtitle")
         self.body.addWidget(self.title)
         self.body.addSpacing(css_px(2))
@@ -79,10 +90,28 @@ class ScaCard(DockCard):
         self.inject_btn.clicked.connect(self._inject)
         self.body.addWidget(self.inject_btn)
 
+    def refit(self) -> None:
+        """Fixed 320 px; the title and subtitle are one line with an ellipsis (`nowrap`)."""
+        self.card.setFixedWidth(css_px(self.WIDTH_PX))
+        room = css_px(self.WIDTH_PX - 2 * self.PADDING[1] - 3)
+        for name in ("title", "subtitle"):
+            label = getattr(self, name)
+            label.ensurePolished()
+            label.setText(label.fontMetrics().elidedText(self._full[name], Qt.ElideRight, room))
+        super().refit()
+
     def card_qss(self) -> str:
-        """The extension's `.card.warn`, `.title`, `.subtitle`, `.note` and `.btn-inject` CSS."""
+        """The extension's `.card` (warn), `.badge`, `.close-btn`, `.title`, `.subtitle`, `.note` and
+        `.btn-inject` CSS."""
         px = css_px
         return super().card_qss() + f"""
+            QFrame#card {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #111814, stop:1 #0B130E);
+                border-radius: {px(12)}px;
+            }}
+            QLabel#badge {{ font-size: {px(10.5)}px; padding: {px(3)}px {px(7)}px; }}
+            QPushButton#head {{ font-size: {px(14)}px; color: #889988; padding: {px(2)}px {px(4)}px; }}
+            QPushButton#head:hover {{ color: #FFFFFF; background: transparent; }}
             QFrame#card[warn="true"] {{ border-color: {AMBER}; }}
             QLabel#title {{
                 font-size: {px(14)}px; font-weight: 700; color: #FFFFFF; background: transparent;
