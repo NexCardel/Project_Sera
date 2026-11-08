@@ -29,6 +29,7 @@ FP_VERSION = 1
 OFFSET_TOL = 40
 ANCHOR_MAX = 60
 CT_EDIT = 50004
+BOX_TYPES = frozenset({50003, 50004})      # combo, edit: a box whose UID is what staff TYPED (its value)
 
 
 def _norm_label(text: str) -> str:
@@ -74,10 +75,14 @@ def node_text(node: Dict[str, Any], field: str) -> str:
     return str(node.get("value") if field == "value" else node.get("name") or "")
 
 
+def is_box(node: Dict[str, Any]) -> bool:
+    return node.get("ctype") in BOX_TYPES
+
+
 def pick_field(node: Dict[str, Any]) -> str:
-    """Where the UID is: a box's value when it has one that a rule can clean, else the name."""
-    v = str(node.get("value") or "")
-    return "value" if v and uid_clean.auto_rule(v) else "name"
+    """Where the UID is: a box's VALUE, always (its name is only its label, "Username": a box picked while
+    still empty must not be saved as that label); any other node's name."""
+    return "value" if is_box(node) else "name"
 
 
 def fingerprint(docs, doc_k: int, node_i: int, rule: str = "") -> Dict[str, Any]:
@@ -148,16 +153,26 @@ def find(docs, fp: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:
     return None, ("ambiguous" if seen_many else "missing")
 
 
+def read_text(node: Dict[str, Any], fp: Dict[str, Any]) -> str:
+    """The text the watcher reads from the found node: a box's value, whatever the fingerprint says (a pick
+    saved before 2026-11-07 could point a box at its label), else the fingerprint's field."""
+    return node_text(node, "value" if is_box(node) else fp.get("field", "name"))
+
+
 def uid_of(node: Dict[str, Any], fp: Dict[str, Any]) -> str:
-    return uid_clean.clean(node_text(node, fp.get("field", "name")), fp.get("rule", ""))
+    return uid_clean.clean(read_text(node, fp), fp.get("rule", ""))
 
 
-def fast_uid(found: Optional[Dict[str, Any]], fp: Dict[str, Any]) -> Tuple[Optional[str], int]:
-    """Reads UiaReader.find_fast's result: (uid or '' when exactly one node with the id and the type is on
+def fast_node(found: Optional[Dict[str, Any]], fp: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], int]:
+    """Reads UiaReader.find_fast's result: (the node when exactly one node with the id and the type is on
     screen, else None = do a full read; number of password boxes)."""
     if not found:
         return None, 0
     hits = [h for h in found.get("hits") or [] if h.get("ctype") == fp.get("ctype")]
-    if len(hits) != 1:
-        return None, int(found.get("pw") or 0)
-    return uid_of(hits[0], fp), int(found.get("pw") or 0)
+    return (hits[0] if len(hits) == 1 else None), int(found.get("pw") or 0)
+
+
+def fast_uid(found: Optional[Dict[str, Any]], fp: Dict[str, Any]) -> Tuple[Optional[str], int]:
+    """fast_node, read: (uid or '' for the one node, None = do a full read; number of password boxes)."""
+    n, pw = fast_node(found, fp)
+    return (None if n is None else uid_of(n, fp)), pw

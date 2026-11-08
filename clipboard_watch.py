@@ -113,6 +113,7 @@ class ClipboardWatchService(QObject):
     sca_notice = Signal(str, str)       # message for staff, level ("info" | "warning")
     source_uid = Signal(object, str)    # service_id, UID read from its UID page's picked node (watcher thread)
     source_warn = Signal(object, str)   # service_id, "missing" | "ambiguous" (watcher thread)
+    source_notice = Signal(str, str)    # a UID-page notice, level: shown ON TOP of the browser (main.py)
 
     def __init__(self, db, parent=None, actor: str = "Staff"):
         super().__init__(parent)
@@ -123,6 +124,10 @@ class ClipboardWatchService(QObject):
         self._identity_column_ids: set = set()
         self._index_generation = None
         self._arm: Optional[Arm] = None
+        # arm_id of a copy replaced by a newer arm of the SAME client -> (client_id, live arm_id, until).
+        # The clipboard arm and the UID-page arm follow each other within a second; a click on the
+        # first card in that gap must not be refused. See _live_arm_for.
+        self._superseded: dict = {}
         self.scc_ledger = None     # SccCard.note_clipboard, set by main: SCC attempt copy ledger
         self._last_copy = ("", 0.0)
         self._unused_streak: Dict[int, int] = {}
@@ -151,10 +156,22 @@ class ClipboardWatchService(QObject):
     def client_for_arm(self, arm_id: str) -> Optional[int]:
         """The client the live SCA arm belongs to, when `arm_id` is that arm. Read-only; used by
         SCK to name a failed login the portal page itself did not."""
+        arm = self._live_arm_for(arm_id)
+        return arm.client_id if arm is not None else None
+
+    SUPERSEDED_ARM_GRACE_S = 30.0
+
+    def _live_arm_for(self, arm_id) -> Optional["Arm"]:
+        """The live arm when `arm_id` is it, or is a copy it replaced for the same client moments ago."""
         arm = self._arm
         if arm is None or not arm_id:
             return None
-        return arm.client_id if str(arm.arm_id) == str(arm_id) else None
+        if str(arm.arm_id) == str(arm_id):
+            return arm
+        alias = self._superseded.get(str(arm_id))
+        if alias and alias[0] == arm.client_id and alias[1] == arm.arm_id and time.time() < alias[2]:
+            return arm
+        return None
 
     def client_for_portal(self, service: dict, portal: str = "") -> Optional[int]:
         """The client SCA is working for on this portal, when that is unambiguous: the live arm
@@ -303,7 +320,7 @@ class ClipboardWatchService(QObject):
         self._arm = None
 
     def _arm_client_services(self, client_id: int, client_token: str, matched_uid: str, trigger: str = "clipboard",
-                             only_service_id=None):
+                             only_service_id=None, uid_page: str = ""):
         """only_service_id: arm for that one service of the client (a UID page arm), never the others."""
         try:
             ctx = self._client_context(client_id)
@@ -367,14 +384,26 @@ class ClipboardWatchService(QObject):
             request = sca_protocol.build_arm_request(
                 client_id=client_id, client_token=client_token, matched_uid=matched_uid,
                 candidate_uids=candidates, services=services, business_name=business_name,
-                owner_name=owner_name, sca_mode=sca_mode, max_uses=max_uses, trigger=trigger)
+                owner_name=owner_name, sca_mode=sca_mode, max_uses=max_uses, trigger=trigger, uid_page=uid_page)
+            previous = self._arm
             self._retire_current_arm()
             arm = request["arm"]
             self._arm = Arm(arm_id=arm["arm_id"], client_id=client_id, client_token=client_token,
                             matched_uid=matched_uid, services=arm_services,
                             expires_at=arm["expires_at"] / 1000.0, uses_remaining=max_uses,
                             max_uses=max_uses, sca_mode=sca_mode, trigger=trigger)
+            now = time.time()
+            self._superseded = {k: v for k, v in self._superseded.items() if v[2] > now}
+            if previous is not None and previous.client_id == client_id:
+                for k, v in list(self._superseded.items()):
+                    if v[0] == client_id:
+                        self._superseded[k] = (client_id, arm["arm_id"], v[2])
+                self._superseded[str(previous.arm_id)] = (client_id, arm["arm_id"], now + self.SUPERSEDED_ARM_GRACE_S)
             print(f"[SCA] Armed client {client_token}: {len(services)} portal(s) [mode: {sca_mode}, {trigger}]")
+            from core.sca import sca_log
+            sca_log.note(f"armed client #{client_id}: arm {arm['arm_id']} cmd {request['command_id']} "
+                         f"({trigger}, {sca_mode}, services {[x.get('service_id') for x in services]}, "
+                         f"uid_page {'set' if uid_page else 'none'})")
             automation.arm_sca(request)
             self.sca_armed.emit(client_id, client_token, services)
         except Exception as e:
@@ -416,54 +445,88 @@ class ClipboardWatchService(QObject):
     def handle_source_uid(self, service_id, uid: str) -> None:
         """A service's UID page shows this (cleaned) UID in its picked node. Arms that client for THAT
         service only, and only when the client has it."""
+        from core.sca import sca_log
+        step = lambda t: sca_log.note(f"arm service {service_id}: {t}")     # never the UID (sca_log)
         try:
             if not self.enabled:
+                step("SCA is off: not armed")
                 return
             self._ensure_index_fresh()
+            from core.sca import uid_clean
             cand = sca_protocol.normalize_uid(uid)
-            client_id = self._uid_index.get(cand)
+            client_id = None
+            for key in uid_clean.lookup_keys(cand):     # an email: whole, then the part before "@"
+                client_id = self._uid_index.get(key)
+                if client_id:
+                    if key != cand:
+                        step(f"matched by the part before '@' ({len(key)} characters)")
+                    cand = key                          # the arm carries the key the client has
+                    break
             name = self._source_name(service_id)
             if not client_id:
+                step(f"no client has this UID ({len(cand)} characters): not armed, notice shown")
                 self._source_refused(service_id, f"Sera read UID {cand} on {name}'s login page, but no client has "
-                                     f"it. Check the client's User ID, and that it is in {name}'s User ID column "
+                                     f"it{' (also tried the part before @)' if '@' in cand else ''}. Check the client's User ID, and that it is in {name}'s User ID column "
                                      f"(Services) or a PAN / GSTIN / user id column.")
                 return
             if is_suppressed(client_id):
+                step(f"client #{client_id} is suppressed (Client Detail / SCC just used it): not armed, quiet")
                 return                      # staff just acted on this client: deliberately quiet
             if client_id in self._paused_clients:
+                step(f"client #{client_id} is paused (unused arms): not armed, notice shown")
                 self._source_refused(service_id, f"SCA is paused for the client with UID {cand}: it was armed "
                                      f"{UNUSED_ARMS_BEFORE_PAUSE} times without a fill.")
                 return
             if not any(x.get("id") == service_id for x in (self.db.get_client_services(client_id) or [])):
+                step(f"client #{client_id} does not have this service attached: not armed, notice shown")
                 self._source_refused(service_id, f"The client with UID {cand} does not have {name} attached. "
                                      f"Attach the service to the client to use SCA here.")
                 return
-            arm = self._arm
-            if (arm is not None and arm.client_id == client_id and time.time() < arm.expires_at
-                    and service_id in arm.services):
-                return                      # already armed for this client and service
+            # No "already armed" skip: the watcher reports once per VISIT of the page, and each visit needs a
+            # fresh arm - the extension drops an arm once it is used and never shows the same arm twice in a
+            # tab, so keeping the old one meant no widget at all until it expired (5 min). The unused-arm
+            # streak (_retire_current_arm) still pauses a client armed this way 5 times without a fill.
             print(f"[SCA] UID page of service {service_id} shows client {client_id}. Arming...")
-            self._arm_client_services(client_id, str(client_id), cand, trigger="source", only_service_id=service_id)
+            from core.sdis import keys
+            link = next((x["uid_page_link"] for x in self._uid_sources if x["id"] == service_id), "")
+            self._arm_client_services(client_id, str(client_id), cand, trigger="source", only_service_id=service_id,
+                                      uid_page=keys.page_link(link))
             arm = self._arm
             if arm is None or arm.client_id != client_id or service_id not in arm.services:
+                step(f"client #{client_id}: arm could not be built (no login page link?), notice shown")
                 self._source_refused(service_id, f"SCA could not arm {name} for the client with UID {cand}: "
                                      f"the service has no login page link (Services).")
         except Exception as e:
             print(f"[SCA] UID page error: {e}")
+            step(f"error {type(e).__name__}, notice shown")
             self._source_refused(service_id, f"SCA error on the UID page: {e}")
 
     def _source_refused(self, service_id, text: str) -> None:
         """Why a UID page did not arm, shown to staff. The watcher reports a UID once per page visit, so
         this is once per visit too - never silent, never repeated every tick."""
         print(f"[SCA] UID page of service {service_id}: {text}")
-        self.sca_notice.emit("SCA: " + text, "warning")
+        self._source_notice("SCA: " + text)
+
+    def _source_notice(self, msg: str, level: str = "warning") -> None:
+        """A UID-page notice: Sera's own alert, and ON TOP of the browser (source_notice -> main.py popup),
+        because the browser is in front when it happens."""
+        self.sca_notice.emit(msg, level)
+        self.source_notice.emit(msg, level)
 
     def handle_source_warn(self, service_id, why: str) -> None:
-        """The picked UID box is not on the page (once per visit): staff must pick it again."""
+        """The picked UID box is not on the page, or shows no UID (once per visit): staff must pick it again."""
         name = self._source_name(service_id)
+        if why == "no_uid":
+            from core.sca import uid_node
+            src = next((x for x in self._uid_sources if x["id"] == service_id), {})
+            rule = (uid_node.loads(src.get("uid_node")) or {}).get("rule") or "?"
+            self._source_notice(f"SCA: Sera reads the UID box on {name}'s login page, but finds no UID in "
+                                f"what it shows (rule {rule}). Pick it again in Settings \u2192 SCA, with a "
+                                f"client's UID typed in.")
+            return
         detail = "found more than one box like it" if why == "ambiguous" else "can't find it"
-        self.sca_notice.emit(f"SCA: the UID box on {name}'s login page changed ({detail}). "
-                             f"Pick it again in Settings \u2192 SCA.", "warning")
+        self._source_notice(f"SCA: the UID box on {name}'s login page changed ({detail}). "
+                            f"Pick it again in Settings \u2192 SCA.")
 
     # ------------------------------------------------------------------ extension -> desktop
     def handle_password_request(self, msg: dict) -> dict:
@@ -476,10 +539,10 @@ class ClipboardWatchService(QObject):
             return {"type": sca_protocol.MSG_SCA_PASSWORD_DENIED, "request_id": request_id,
                     "arm_id": msg.get("arm_id"), "reason": reason}
 
-        arm = self._arm
+        arm = self._live_arm_for(msg.get("arm_id"))
         if not self.enabled:
             return denied("SCA is turned off")
-        if arm is None or msg.get("arm_id") != arm.arm_id:
+        if arm is None:
             return denied("no such arm (a newer copy replaced it, or the app restarted)")
         if time.time() > arm.expires_at:
             self._retire_current_arm()
@@ -515,8 +578,8 @@ class ClipboardWatchService(QObject):
         """SCA_FILL_RESULT {arm_id, service_id, result: filled|failed, reason}: a use is spent only
         when the password was really filled; failures (and desktop denials, which the extension
         reports as failures) reach staff through sca_notice."""
-        arm = self._arm
-        client_id = arm.client_id if arm and arm.arm_id == msg.get("arm_id") else None
+        arm = self._live_arm_for(msg.get("arm_id"))
+        client_id = arm.client_id if arm else None
         portal = (arm.services.get(msg.get("service_id"), {}).get("name") if client_id else None) or "portal"
         if msg.get("result") == "filled":
             print(f"[SCA] Password filled on {portal}")

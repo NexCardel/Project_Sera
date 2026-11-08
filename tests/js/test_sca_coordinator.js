@@ -394,6 +394,135 @@ test("a fill shows the client chip in the top frame; a failed fill does not", as
   assert.ok(!env2.scripts.some(d => d.func === SCA.showFillChipInPage));
 });
 
+// ------------------------------------------------------------ UID page arms (account choosers)
+const ACCOUNTS = "https://accounts.google.example.in/v3/signin/challenge/pwd?TL=fictional#top";
+function uidPageArm(over = {}) {
+  return makeArm(Object.assign({
+    arm_id: "arm_src", trigger: "source", uid_page: "accounts.google.example.in/v3/signin/challenge/pwd",
+    matched_uid: "FICTIONALCO", candidate_uids: ["FICTIONALCO"],
+    services: [{ service_id: 9, name: "Mail", url: "https://accounts.google.example.in/signin",
+                 host: "accounts.google.example.in", password_selector: "", has_password: true }],
+  }, over));
+}
+const uidEnv = (url, settings) => {
+  const env = makeEnv(Object.assign({ allowedDomains: ["google.example.in"] }, settings || {}));
+  env.activeTab = async () => (url ? { id: 11, url } : null);
+  return env;
+};
+
+test("pageLink matches the desktop's page_link (host + path + route, no query)", () => {
+  assert.strictEqual(SCA.pageLink(ACCOUNTS), "accounts.google.example.in/v3/signin/challenge/pwd");
+  assert.strictEqual(SCA.pageLink("https://eportal.incometax.gov.in/iec/foservices/#/login/"),
+                     "eportal.incometax.gov.in/iec/foservices#/login");
+  assert.strictEqual(SCA.pageLink("https://Services.GST.gov.in/services/login/"), "services.gst.gov.in/services/login");
+});
+
+test("a UID page arm fills the active tab at that page with nothing typed or pasted", async () => {
+  const env = uidEnv(ACCOUNTS);
+  await armed(env, uidPageArm());
+  const req = env.native.find(m => m.type === "SCA_PASSWORD_REQUEST");
+  assert.ok(req, "the arm itself should ask for the password");
+  assert.strictEqual(req.service_id, 9);
+  assert.strictEqual(req.page_host, "accounts.google.example.in");
+  assert.strictEqual(req.matched_uid, "FICTIONALCO");
+});
+
+test("a UID page arm shows the widget in widget mode", async () => {
+  const env = uidEnv(ACCOUNTS, { scaMode: "widget" });
+  await armed(env, uidPageArm({ sca_mode: "widget" }));
+  assert.ok(env.scripts.some(s => s.func === SCA.showWidgetInPage));
+});
+
+test("a UID page arm does nothing on another page, host or without the page link", async () => {
+  for (const [url, arm] of [
+    ["https://accounts.google.example.in/v3/signin/identifier", uidPageArm()],      // another page
+    ["https://evil.example.com/v3/signin/challenge/pwd", uidPageArm()],            // another host
+    [ACCOUNTS, uidPageArm({ uid_page: "" })],                                      // no link
+    [ACCOUNTS, uidPageArm({ trigger: "clipboard" })],                              // a copy arm
+    [null, uidPageArm()],                                                          // no active tab
+  ]) {
+    const env = uidEnv(url);
+    await armed(env, arm);
+    assert.ok(!env.native.some(m => m.type === "SCA_PASSWORD_REQUEST"), String(url));
+  }
+});
+
+test("a UID page arm still obeys the approved domains and the assist lock", async () => {
+  const env1 = uidEnv(ACCOUNTS, { allowedDomains: ["gst.gov.in"] });
+  await armed(env1, uidPageArm());
+  assert.ok(!env1.native.some(m => m.type === "SCA_PASSWORD_REQUEST"));
+  const env2 = uidEnv(ACCOUNTS, { assistTabs: { 11: "mecp" } });
+  await armed(env2, uidPageArm());
+  assert.ok(!env2.native.some(m => m.type === "SCA_PASSWORD_REQUEST"));
+});
+
+test("a UID page arm and a typed id on the same page ask only once", async () => {
+  const env = uidEnv(ACCOUNTS);
+  const c = await armed(env, uidPageArm());
+  await c.onCandidate({ candidate: "fictionalco" }, { tab: { id: 11, url: ACCOUNTS }, frameId: 0, url: ACCOUNTS });
+  assert.strictEqual(env.native.filter(m => m.type === "SCA_PASSWORD_REQUEST").length, 1);
+});
+
+test("a UID page link without www still matches a www address", async () => {
+  const env = uidEnv("https://www.portal.example.in/login/step2", { allowedDomains: ["portal.example.in"] });
+  await armed(env, uidPageArm({ uid_page: "portal.example.in/login/step2",
+    services: [{ service_id: 9, name: "P", url: "https://www.portal.example.in/login", host: "www.portal.example.in",
+                 password_selector: "", has_password: true }] }));
+  assert.ok(env.native.some(m => m.type === "SCA_PASSWORD_REQUEST"));
+});
+
+test("a UID page arm reports what it did (for Sera's sca.log), with no UID in it", async () => {
+  const env = uidEnv(ACCOUNTS);
+  await armed(env, uidPageArm());
+  const st = env.desktop.find(m => m.type === "SCA_STATE" && m.state === "UID_PAGE");
+  assert.ok(st && st.action === "password-requested", JSON.stringify(st));
+  assert.ok(!JSON.stringify(st).includes("FICTIONALCO"));
+  const env2 = uidEnv("https://accounts.google.example.in/v3/signin/identifier");
+  await armed(env2, uidPageArm());
+  const st2 = env2.desktop.find(m => m.state === "UID_PAGE");
+  assert.strictEqual(st2.action, "not-the-uid-page:accounts.google.example.in/v3/signin/identifier");
+});
+
+test("a card from an earlier arm of the same client still fills; another client's never does", async () => {
+  const env = makeEnv({ scaMode: "widget" });
+  const c = await armed(env, makeArm({ arm_id: "arm_new", sca_mode: "widget" }));
+  // card drawn under the old clipboard arm "arm_old", client 7, clicked after the re-arm
+  assert.strictEqual(await c.onWidgetFill({ arm_id: "arm_old", client_id: 7, service_id: 1, frame_id: 0 }, portalTab()), "password-requested");
+  const env2 = makeEnv({ scaMode: "widget" });
+  const c2 = await armed(env2, makeArm({ arm_id: "arm_new", sca_mode: "widget" }));
+  assert.strictEqual(await c2.onWidgetFill({ arm_id: "arm_old", client_id: 8, service_id: 1, frame_id: 0 }, portalTab()), "not-armed");
+  assert.strictEqual(await c2.onWidgetFill({ arm_id: "arm_old", service_id: 1, frame_id: 0 }, portalTab()), "not-armed");
+  assert.ok(!env2.native.some(m => m.type === "SCA_PASSWORD_REQUEST"));
+  assert.ok(env2.desktop.some(m => m.state === "WIDGET_FILL" && m.action === "not-armed"));
+});
+
+test("a newer arm of the same client re-points the card; another client's arm replaces it", () => {
+  const hosts = [];
+  let removed = 0;
+  const document = {
+    body: { appendChild: (h) => hosts.push(h) },
+    getElementById: () => hosts[hosts.length - 1] || null,
+    querySelectorAll: () => [{ getBoundingClientRect: () => ({ width: 10, height: 10 }) }],
+    createElement: () => { const e = { style: {}, append() {}, appendChild() {}, attachShadow: () => ({ append() {} }), remove() { removed++; hosts.splice(hosts.indexOf(e), 1); }, get isConnected() { return true; } }; return e; },
+  };
+  const window = { getComputedStyle: () => ({ visibility: "visible" }) };
+  window.self = window.top = window;
+  const ctx = vm.createContext({ window, document, setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {}, Date, chrome: {} });
+  const show = vm.runInContext("(" + SCA.showWidgetInPage.toString() + ")", ctx);
+  show("arm_old", 1, 0, "Test Co", "", "GST", "", 7);
+  assert.strictEqual(hosts.length, 1);
+  show("arm_old", 1, 0, "Test Co", "", "GST", "", 7);      // same arm: no second card
+  assert.strictEqual(hosts.length, 1);
+  show("arm_new", 1, 0, "Test Co", "", "GST", "", 7);      // newer arm, same client: card kept, re-pointed
+  assert.strictEqual(removed, 0);
+  assert.strictEqual(hosts.length, 1);
+  assert.strictEqual(window.__seraScaCardFor, "arm_new");
+  show("arm_other", 1, 0, "Other Co", "", "GST", "", 8);   // another client's arm: that card replaces it
+  assert.strictEqual(removed, 1);
+  assert.strictEqual(hosts.length, 1);
+  assert.strictEqual(window.__seraScaCardFor, "arm_other");
+});
+
 (async () => {
   let failed = 0;
   for (const [name, fn] of tests) {

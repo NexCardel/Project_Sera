@@ -458,6 +458,14 @@ class WSBridge(QObject):
 
     def dispatch(self, msg: dict):
         mtype = msg.get("type")
+        if isinstance(mtype, str) and mtype.startswith("SCA_"):
+            try:                    # logs/sca.log: ids and states only, never a UID or password
+                from core.sca import sca_log
+                fields = ("command_id", "arm_id", "state", "action", "service_id", "result", "reason", "page_host")
+                sca_log.note("browser -> " + mtype + " " + " ".join(
+                    f"{k}={str(msg.get(k))[:60]}" for k in fields if msg.get(k) not in (None, "")))
+            except Exception:
+                pass
         if mtype == "SCA_ACK":
             cmd_id = msg.get("command_id")
             if cmd_id:

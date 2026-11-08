@@ -7,7 +7,8 @@ the UID in the text; the result is sca_protocol.normalize_uid'd, so it is the sa
 Rules (the picker suggests one with auto_rule; staff may change it; the service keeps it):
   GSTIN     the first GSTIN in the text
   PAN       the first PAN in the text (a GSTIN's embedded PAN does not count)
-  EMAIL     the part before "@" of the first email address (the database stores only that part)
+  EMAIL     the first email address, whole; clipboard_watch.handle_source_uid looks it up whole and then
+            as the part before "@" (D3: the database usually stores only that part, some records hold it all)
   LOGIN_ID  the text when it is one compact token, else the token after the last ":" ("User ID: abc12")
   WHOLE     the whole text
 '' means "no UID in this text": the watcher then does not arm.
@@ -22,7 +23,7 @@ RULES = ("GSTIN", "PAN", "EMAIL", "LOGIN_ID", "WHOLE")
 
 _GSTIN = re.compile(r"(?<![0-9A-Z])[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z](?![0-9A-Z])")
 _PAN = re.compile(r"(?<![0-9A-Z])[A-Z]{5}[0-9]{4}[A-Z](?![0-9A-Z])")
-_EMAIL = re.compile(r"([A-Z0-9][A-Z0-9._%+-]*)@[A-Z0-9-]+(?:\.[A-Z0-9-]+)+")
+_EMAIL = re.compile(r"[A-Z0-9][A-Z0-9._%+-]*@[A-Z0-9-]+(?:\.[A-Z0-9-]+)+")
 
 
 def _ok(uid: str) -> str:
@@ -41,7 +42,7 @@ def clean(text: str, rule: str) -> str:
         return m.group(0) if m else ""
     if rule == "EMAIL":
         m = _EMAIL.search(t)
-        return _ok(m.group(1)) if m else ""
+        return _ok(m.group(0)) if m else ""
     if rule == "LOGIN_ID":
         if " " not in t:
             return _ok(t)
@@ -63,3 +64,13 @@ def auto_rule(text: str) -> str:
 def previews(text: str) -> Dict[str, str]:
     """{rule: uid} for every rule that finds one (the picker shows them)."""
     return {r: u for r in RULES for u in [clean(text, r)] if u}
+
+
+def lookup_keys(uid: str):
+    """The keys to try in the client index, in order: the UID, then for an email the part before "@"."""
+    out = [uid] if uid else []
+    if "@" in uid:
+        local = uid.split("@", 1)[0]
+        if _ok(local):
+            out.append(local)
+    return out

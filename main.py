@@ -390,6 +390,8 @@ class SeraApp:
             # Why a fill did not happen (e.g. an Income Tax password SCC has not verified yet)
             self.clipboard_watcher.sca_notice.connect(
                 lambda text, level: getattr(self, "shell", None) and self.shell.show_alert(text, level=level, duration=6000))
+            # UID-page notices happen while the browser is in front: also shown on top of it
+            self.clipboard_watcher.source_notice.connect(self._show_sca_popup)
             sca_active = (self.db.get_setting("sca_enabled", "1") == "1")
             self.clipboard_watcher.set_enabled(sca_active)
             self.clipboard_watcher.start_source_watch()
@@ -845,6 +847,16 @@ class SeraApp:
         asked (WSBridge.reply), never to every connected browser."""
         reply = self.clipboard_watcher.handle_password_request(msg)
         self.bridge.reply(msg, reply)
+
+    def _show_sca_popup(self, text: str, level: str = "warning") -> None:
+        """ui/components/sca_notice_popup: an SCA notice above the browser (never takes focus)."""
+        try:
+            if getattr(self, "_sca_popup", None) is None:
+                from ui.components.sca_notice_popup import ScaNoticePopup
+                self._sca_popup = ScaNoticePopup()
+            self._sca_popup.show_notice(text, level)
+        except Exception as e:
+            print(f"[SCA] popup error: {e}")
 
     def _on_sca_armed(self, client_id: int, client_token: str, services: list):
         try:

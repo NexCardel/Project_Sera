@@ -27,6 +27,8 @@ from core.sdis import keys
 TTL_S = 300
 WAIT_S = 90
 POLL_S = 0.5
+WEAK_WAIT_S = 5      # a page whose only UID-like texts are plain words is read only after this long
+STRONG_RULES = ("GSTIN", "PAN", "EMAIL")
 MAX_BODY = 4096
 
 
@@ -42,31 +44,56 @@ def candidates(docs: List[List[Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]:
             text = uid_node.node_text(n, field)
             rules = uid_clean.previews(text)
             if rules:
+                strong = field == "value" or any(r in rules for r in STRONG_RULES)
                 out[f"{k}:{i}"] = {"text": text[:120], "rules": rules, "auto": uid_clean.auto_rule(text),
-                                   "field": field}
+                                   "field": field, "strong": strong}
     return out
 
 
+def _strong(cands: Dict[str, Dict[str, Any]]) -> Tuple[Tuple[str, str], ...]:
+    """The candidates that are surely a UID: a box's typed value, or a GSTIN / PAN / email in a text. Most
+    one-word labels ("Login", "Username") pass the LOGIN_ID rule too, so they alone do not mean that
+    staff have set the UID yet."""
+    return tuple(sorted((k, c["text"]) for k, c in cands.items() if c.get("strong")))
+
+
 def wait_for_page(link: str, reader: Any, foreground: Callable[[], int], stop: threading.Event,
-                  status: Callable[[str], None] = lambda s: None,
-                  timeout: float = WAIT_S) -> Optional[Tuple[List[List[Dict[str, Any]]], str]]:
-    """(docs, url) of the first read of the UID page that has a password box and a UID; None on timeout/stop."""
+                  status: Callable[[str], None] = lambda s: None, timeout: float = WAIT_S,
+                  weak_wait: float = WEAK_WAIT_S,
+                  clock: Callable[[], float] = time.monotonic) -> Optional[Tuple[List[List[Dict[str, Any]]], str]]:
+    """(docs, url) of the UID page with a password box and a UID set; None on timeout/stop.
+
+    The read is taken only once a box holds a typed UID, or a text shows a GSTIN / PAN / email, and it
+    reads the same twice in a row (a UID still being typed is not taken). A page whose only UID-like texts
+    are plain words (a two-page login showing a login id) is taken after weak_wait seconds on it."""
     want = keys.page_link(link)
-    end = time.monotonic() + timeout
-    last = ""
-    while not stop.is_set() and time.monotonic() < end:
+    end = clock() + timeout
+    last, prev, since = "", None, None
+    while not stop.is_set() and clock() < end:
         hwnd = foreground()
         msg = "Open the page in your browser (in front), with a client's UID set."
         if hwnd:
             url = reader.read_url(hwnd)
             if want and keys.page_link(url) == want:
                 docs = reader.read_docs(hwnd)
+                cands = candidates(docs) if uid_node.has_password_box(docs) else {}
+                strong = _strong(cands)
+                since = clock() if since is None else since
                 if not uid_node.has_password_box(docs):
                     msg = "The page is open, but it shows no password box yet."
-                elif not candidates(docs):
-                    msg = "The page is open, but no text on it looks like a UID. Set a client's UID first."
-                else:
+                    prev = None
+                elif strong:
+                    if strong == prev:
+                        return docs, url
+                    prev = strong
+                    msg = "UID found, checking that it is complete..."
+                elif cands and clock() - since >= weak_wait:
                     return docs, url
+                else:
+                    prev = None
+                    msg = "The page is open. Type a client's UID in the username box (or open the page that shows it)."
+            else:
+                since, prev = None, None
         if msg != last:
             status(msg)
             last = msg

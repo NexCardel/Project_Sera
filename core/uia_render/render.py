@@ -942,7 +942,7 @@ if (D.pick) {
     bar.hidden = false;
     if (!sel) { bar.appendChild(mk('span', null, 'Click the box that shows the client\u2019s UID (green dashed boxes hold one).')); return; }
     const c = P.cands[sel.key];
-    bar.appendChild(mk('span', null, 'Text: '));
+    bar.appendChild(mk('span', null, c.field === 'value' ? 'Sera reads what is typed in this box, now: ' : 'Sera reads this text: '));
     bar.appendChild(mk('code', null, c.text));
     const lab = mk('label', null, 'Rule ');
     const s = document.createElement('select');
