@@ -1,16 +1,16 @@
-# OS Assist — report (2026-11-08 21:02)
+# OS Assist — report (2026-11-08 21:04)
 
 Deadline: 2026-11-15T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 7 |
+| Not started | 6 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 10 |
+| Done | 11 |
 | Blocked | 0 |
 
-Runs: 11   output tokens: 203377   API-equivalent cost: $14.38
+Runs: 12   output tokens: 212090   API-equivalent cost: $15.10
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -24,7 +24,7 @@ Runs: 11   output tokens: 203377   API-equivalent cost: $14.38
 | O2-3 | Done | opus | ae71e8c | MECP card (plain + SCC mode) (§4.5) | mecp_card.py plain + SCC mode; set_scc_hooks + thread-safe update_card/close_card for O3-4; 19 tests pass |
 | O2-4 | Done | sonnet | eca8c9b | SCA card + fill chip (§4.4, §4.6) | ScaCard (Inject signal, amber needs_confirm, SCK edit) and ScaChip (2.4 s fade) built; 10 new tests pass |
 | O2-R | Done | opus | 9b283ec | Review phase 2 (cards) + look-alike shots | Cards match extension CSS per card (MECP/SCA/chip geometry, fonts, shrink-to-fit), 7 shots in docs/os_assist/shots, queued SMTI jobs cancelled on dismiss; 120 o |
-| O3-1 | Not started | sonnet |  | Engine switch setting (§4.7, D1) |  |
+| O3-1 | Done | sonnet | 9b7efaa | Engine switch setting (§4.7, D1) | assist_engine()/set_assist_engine + listeners in automation.py; Assist engine combo on Action Buttons page; 5 new tests pass |
 | O3-2 | Not started | opus |  | SMTI/MECP launch through the OS engine |  |
 | O3-3 | Not started | opus |  | SCA engine in OS mode (§4.6) |  |
 | O3-4 | Not started | sonnet |  | SCC card through the OS MECP card |  |

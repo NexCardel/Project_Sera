@@ -134,13 +134,27 @@ def autofill_login(service: dict, user_id: str, password: str, client_id: int, o
 
 
 def trigger_manual_assist(service: dict, user_id: str, password: str, client_id: int, on_error=None):
-    """Open the portal and ask the companion extension to show SMTI Manual Assist."""
+    """Open the portal and ask the companion extension to show SMTI Manual Assist
+    (OS engine: a docked Sera card fills the boxes instead)."""
+    if assist_engine() == "os":
+        _launch_os_card("smti", service, user_id, password, client_id, on_error)
+        return
     _send_to_extension(service, user_id, password, client_id, on_error, mode="manual_assist")
 
 
 def trigger_mecp(service: dict, user_id: str, password: str, client_id: int, on_error=None):
-    """Open the portal and ask the companion extension to show the MECP floating card widget."""
+    """Open the portal and ask the companion extension to show the MECP floating card widget
+    (OS engine: the same card as a docked Sera window)."""
+    if assist_engine() == "os":
+        _launch_os_card("mecp", service, user_id, password, client_id, on_error)
+        return
     _send_to_extension(service, user_id, password, client_id, on_error, mode="mecp")
+
+
+def _launch_os_card(kind: str, service: dict, user_id: str, password: str, client_id, on_error=None):
+    from core.os_assist import launcher
+    launcher.launch(kind, service, user_id, password, client_id,
+                    service.get("_client_name", service.get("name", "Client")), on_error)
 
 
 def _settings_ini_path() -> Path:

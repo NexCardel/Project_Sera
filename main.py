@@ -644,6 +644,8 @@ class SeraApp:
         self.bridge.sck_edit_requested.connect(self._handle_sck_edit_requested)
         from ui.os_assist import dock_card as _os_dock_card     # ✎ on OS Assist cards (D3)
         _os_dock_card.set_sck_edit_handler(self._handle_sck_edit_requested)
+        from core.os_assist import launcher as _os_launcher     # OS SMTI/MECP copies clear after this
+        _os_launcher.set_clear_seconds_provider(lambda: self.db.get_setting("clipboard_clear_seconds", "30"))
         self.bridge.sck_candidate_received.connect(self._handle_sck_candidate)
         self.bridge.sck_outcome_received.connect(self._handle_sck_outcome)
         self.bridge.extension_settings_updated_received.connect(self._handle_extension_settings_updated)

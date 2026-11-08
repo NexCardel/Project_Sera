@@ -4,3 +4,4 @@ Check,WP,Text,Result,Date,Notes
 3,O2-3,"MECP OS card next to the extension's in-page MECP card (plain and SCC mode): same look, copies paste correctly, combo copies show in the SCC ledger, This one worked / None / x reach the desktop",Not run,2026-11-08 20:49,
 4,O2-4,"Look at the OS SCA card and fill chip next to the extension's in-page ones (colours, amber needs_confirm border, spacing, fade) in a real browser; chip must not steal focus.",Not run,2026-11-08 20:51,
 5,O2-R,Compare docs/os_assist/shots/*.png with the extension cards on a real page,Not run,2026-11-08 21:01,
+6,O3-2,OS engine: Client Detail SMTI and MECP buttons open a new portal tab and the card docks over that browser within a few seconds; a second press replaces the card; with no browser window found in 20 s an error dialog names the portal,Not run,2026-11-08 21:09,
