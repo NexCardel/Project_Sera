@@ -2,3 +2,4 @@ Check,WP,Text,Result,Date,Notes
 1,O1-3,On Windows 10/11 with clipboard history on: copy a fictional password via secure_clipboard.copy(secret=True) and confirm it does not appear in Win+V.,Not run,2026-11-08 20:27,
 2,O2-2,"SMTI OS card on TRACES and on a normal portal: look matches the in-page card (buttons, step cards, timer), Username/Password fill, copy fallback pastes, ✎ opens SCK for that client",Not run,2026-11-08 20:44,
 3,O2-3,"MECP OS card next to the extension's in-page MECP card (plain and SCC mode): same look, copies paste correctly, combo copies show in the SCC ledger, This one worked / None / x reach the desktop",Not run,2026-11-08 20:49,
+4,O2-4,"Look at the OS SCA card and fill chip next to the extension's in-page ones (colours, amber needs_confirm border, spacing, fade) in a real browser; chip must not steal focus.",Not run,2026-11-08 20:51,
