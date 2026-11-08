@@ -642,6 +642,8 @@ class SeraApp:
         self.bridge.sck_save_password_received.connect(self._handle_sck_save_password)
         self.bridge.sck_widget_closed_received.connect(self._handle_sck_widget_closed)
         self.bridge.sck_edit_requested.connect(self._handle_sck_edit_requested)
+        from ui.os_assist import dock_card as _os_dock_card     # ✎ on OS Assist cards (D3)
+        _os_dock_card.set_sck_edit_handler(self._handle_sck_edit_requested)
         self.bridge.sck_candidate_received.connect(self._handle_sck_candidate)
         self.bridge.sck_outcome_received.connect(self._handle_sck_outcome)
         self.bridge.extension_settings_updated_received.connect(self._handle_extension_settings_updated)

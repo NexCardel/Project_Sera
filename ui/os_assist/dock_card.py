@@ -14,7 +14,8 @@ The docked, no-focus base window every OS Assist card is built on (blueprint §4
   500 ms, never on the Qt thread. Hidden while the browser is minimised or the host stops matching
   the service (shown again when it matches; the timer keeps running); dismissed when it closes.
 - Shared pieces: slide-in from the right, `TimerBar`, header with badge + ✎ + ✕, and `dismissed`,
-  emitted after every secret the card holds has been dropped.
+  emitted after every secret the card holds has been dropped; `wire_sck_edit` points ✎ at the SCK
+  widget (D3).
 
 No card content here; smti_card / mecp_card / sca_card fill `self.body`.
 """
@@ -121,6 +122,30 @@ class WorkerLocator:
     def probe(self, hwnd: int, service):
         from core.os_assist import worker
         return worker.submit(_probe, hwnd, service)
+
+
+_sck_edit_handler: Optional[Callable[[dict], None]] = None
+
+
+def set_sck_edit_handler(handler: Optional[Callable[[dict], None]]) -> None:
+    """The app registers main.py `_handle_sck_edit_requested` here, the same handler the
+    extension's ✎ message reaches (D3); the OS cards call it in-process, no socket."""
+    global _sck_edit_handler
+    _sck_edit_handler = handler
+
+
+def wire_sck_edit(card: "DockCard", client_id, service_id, portal: str = "",
+                  handler: Optional[Callable[[dict], None]] = None) -> None:
+    """✎ on an OS card opens the SCK widget for this client and service, as the in-page ✎ does.
+    Shared by the SMTI, MECP and SCA cards."""
+    msg = {"client_id": client_id, "service_id": service_id, "portal": portal or ""}
+
+    def _open():
+        fn = handler or _sck_edit_handler
+        if fn is not None:
+            fn(dict(msg))
+
+    card.edit_requested.connect(_open)
 
 
 class TimerBar(QWidget):
