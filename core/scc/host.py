@@ -72,6 +72,13 @@ class SccHost:
         with self._lock:
             self._handlers.append(handler)
 
+    def set_handlers(self, handlers: List[Any]) -> None:
+        """Replace the handler list. A settings switch may add or remove a handler while the host
+        lives on (SCK's watcher shares this host): the next page uses the new list, and a page
+        already running finishes with the list it started with."""
+        with self._lock:
+            self._handlers = list(handlers)
+
     def set_enabled(self, on: bool) -> None:
         with self._lock:
             self._enabled = bool(on)

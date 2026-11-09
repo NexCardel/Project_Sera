@@ -115,11 +115,23 @@ def run_once(db: Any, app_dir: Path, log: Callable[[str], None] = print, min_age
     return counts
 
 
+def _enabled(db: Any) -> bool:
+    try:
+        return str(db.get_setting("arn_autofix_enabled", "1")) != "0"
+    except Exception:
+        return True
+
+
 def start_background(db: Any, app_dir: Path, on_event: Optional[Callable[[str, str, str], None]] = None,
                      on_done: Optional[Callable[[int], None]] = None, delay_s: float = START_DELAY_S,
                      log: Callable[[str], None] = print) -> Optional[threading.Thread]:
     """Runs run_once on a low-key daemon thread, on the admin PC only. on_done(fixed) is called when
-    rows changed (the caller refreshes its tracker view on its own thread)."""
+    rows changed (the caller refreshes its tracker view on its own thread).
+    The switch is Settings > "Run the ARN fixer automatically" (setting arn_autofix_enabled, on by default);
+    it is read at start-up and again once the start-up delay is over, so turning it off in that time stops it."""
+    if not _enabled(db):
+        log("ARN fixer: switched off in Settings")
+        return None
     try:
         import sync_admin
         if not sync_admin.is_admin_pc(app_dir):
@@ -130,6 +142,9 @@ def start_background(db: Any, app_dir: Path, on_event: Optional[Callable[[str, s
 
     def work() -> None:
         time.sleep(delay_s)
+        if not _enabled(db):
+            log("ARN fixer: switched off in Settings")
+            return
         try:
             c = run_once(db, app_dir, log=log, pause=Throttle())
             if c["fixed"]:

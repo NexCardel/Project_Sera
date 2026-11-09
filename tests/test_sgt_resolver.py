@@ -139,6 +139,8 @@ class TestLoading:
         for spec in data["profile"]:
             assert spec.get("examples"), spec["name"]
         for rec in data["records"]:
+            if rec.get("disabled") and not rec.get("fields"):
+                continue                                      # a placeholder waiting for the owner's labels
             assert rec.get("examples"), rec["name"]
             for f in rec["fields"]:
                 assert f.get("examples"), f"{rec['name']}.{f['field']}"
@@ -412,6 +414,15 @@ class TestRecords:
             {"period": "AY 2024-25", "form": "ITR-1", "arn": "987654321310724", "status": "Submitted (Not Verified)"},
         ]
 
+    def test_the_recovery_specs_ship_disabled_and_stay_out_of_the_live_registry(self):
+        """WP11: their labels wait for the owner's corpus (docs/sgt-recovery-spec-notes.md)."""
+        shipped = {r["name"]: r for r in json.loads(BUILTIN_FIELDS_PATH.read_text(encoding="utf-8"))["records"]}
+        for name in ("gst_track_return_status", "itr_filed_returns_history"):
+            assert shipped[name].get("disabled") is True and shipped[name].get("note")
+        reg = self.reg()
+        assert not reg.errors
+        assert not {"gst_track_return_status", "itr_filed_returns_history"} & {r.name for r in reg.records}
+
     def test_a_record_missing_a_required_field_is_dropped(self):
         rec = next(r for r in self.reg().records if r.name == "itr_dataset_cards")
         assert resolve_records(rec, ["A.Y. 2025-26", "ITR :", "ITR-4"], TODAY) == []     # no ack
@@ -535,6 +546,22 @@ class TestNeverOnAList:
         res = resolve_page(reg, lines, ITR, "https://x/#/dashboard/itrStatus", TODAY)
         assert {d.record for d in res.datasets} == {"itr_dataset_cards"}
         assert [d.values()["status"] for d in res.datasets] == ["Submitted (Not Verified)"]
+
+    def test_cards_without_an_identifier_still_thin_to_the_latest_period(self, tmp_path):
+        """6.5 / R5: a list page gives only its latest filing, whether or not each card has an ack."""
+        rec = json.loads(BUILTIN_FIELDS_PATH.read_text(encoding="utf-8"))["records"]
+        rec = dict(next(r for r in rec if r["name"] == "gst_track_return_status"))
+        rec.pop("disabled")
+        rec["require"] = ["form", "period"]
+        reg = load_registry([write_specs(tmp_path / "specs.json", records=[rec])])
+        assert [r.name for r in reg.records] == ["gst_track_return_status"]
+        lines = ["Track Return Status"]
+        for month in ("February", "March", "April", "May", "June"):
+            lines += ["Return Type", "GSTR3B", "Return Period", f"{month} 2026", "Status", "Filed"]
+        res = resolve_page(reg, lines, GST, "https://return.gst.gov.in/returns/auth/trackstatus", TODAY)
+        assert res.is_list
+        assert [d.values()["period"] for d in res.datasets] == ["June (FY 2026-27)"]
+        assert "arn" not in res.datasets[0].values()
 
 
 class TestFutureSteps:

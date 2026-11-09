@@ -30,13 +30,33 @@ def rows_of(result):
     return sorted(result["rows"].values(), key=lambda r: (r["period_label"], r["arn"]))
 
 
+def store_for(doc, tmp_path):
+    """The shipped specs. A scenario may name shipped-but-disabled records in "enable" to run them
+    switched on (their labels still wait for the owner's corpus)."""
+    names = doc.get("enable") or []
+    if not names:
+        return STORE
+    shipped = json.loads(BUILTIN_FIELDS_PATH.read_text(encoding="utf-8"))
+    records = [dict(r, disabled=False) for r in shipped["records"] if r["name"] in names]
+    assert len(records) == len(names), names
+    overlay = tmp_path / "enable.json"
+    overlay.write_text(json.dumps({"records": records}), encoding="utf-8")
+    store = SpecStore([BUILTIN_FIELDS_PATH, overlay], log=lambda m: None)
+    assert not store.get().errors, store.get().errors
+    return store
+
+
 # ── The golden sessions replay exactly ───────────────────────────────────────────
 @pytest.mark.parametrize("path", SCENARIOS, ids=[p.stem for p in SCENARIOS])
-def test_golden_session(path):
+def test_golden_session(path, tmp_path):
     doc = load(path)
-    res = replay_session(doc["pages"], STORE)
+    res = replay_session(doc["pages"], store_for(doc, tmp_path), keep_payloads=True)
     assert rows_of(res) == doc["expect"]["rows"], doc["about"]
     assert len(res["held"]) == doc["expect"]["held"], doc["about"]
+    if "first_seen_as" in doc["expect"]:
+        last = {p["dataset_key"]: p for p in res["payloads"]}
+        marks = sorted(p["raw_payload"]["source"]["first_seen_as"] for p in last.values())
+        assert marks == sorted(doc["expect"]["first_seen_as"]), doc["about"]
 
 
 def test_there_are_positive_negative_and_held_scenarios():
@@ -94,13 +114,14 @@ def invented(value, clean_text):
 
 @pytest.mark.parametrize("path", [p for p in SCENARIOS if not p.stem.startswith("negative")],
                          ids=[p.stem for p in SCENARIOS if not p.stem.startswith("negative")])
-def test_noise_never_invents_a_value(path):
+def test_noise_never_invents_a_value(path, tmp_path):
     doc = load(path)
+    store = store_for(doc, tmp_path)
     clean_text = _alnum(" ".join(ln for p in doc["pages"] for ln in p["lines"]))
     rng = random.Random(f"sgt-{path.stem}")            # fixed: a failure always reproduces
     for n in range(60):
         pages = [dict(p, lines=mutate(p["lines"], rng)) for p in doc["pages"]]
-        res = replay_session(pages, STORE)
+        res = replay_session(pages, store)
         for row in res["rows"].values():
             for f in KEY_FIELDS:
                 assert not invented(row.get(f, ""), clean_text), (
@@ -108,8 +129,9 @@ def test_noise_never_invents_a_value(path):
 
 
 @pytest.mark.parametrize("path", SCENARIOS, ids=[p.stem for p in SCENARIOS])
-def test_shuffled_pages_never_crash(path):
+def test_shuffled_pages_never_crash(path, tmp_path):
     doc = load(path)
+    store = store_for(doc, tmp_path)
     rng = random.Random(f"shuffle-{path.stem}")
     for _ in range(30):
         pages = []
@@ -117,7 +139,7 @@ def test_shuffled_pages_never_crash(path):
             lines = list(p["lines"])
             rng.shuffle(lines)
             pages.append(dict(p, lines=lines))
-        replay_session(pages, STORE)                      # must not raise
+        replay_session(pages, store)                      # must not raise
 
 
 OTHER_CLIENT_PAN = "XYZAB9876C"

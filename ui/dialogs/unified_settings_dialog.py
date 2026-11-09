@@ -12,7 +12,7 @@ Audit Log and CSV Import are intentionally kept as separate dialogs.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal, QSize
+from PySide6.QtCore import Qt, Signal, QSize, QObject
 from PySide6.QtGui import QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -39,7 +40,7 @@ from PySide6.QtWidgets import (
 from ui.components.kit import (
     MessageBox,
     ROLE_ACTIONS, ROLE_PILL, ROLE_TAG, Banner, Card, CellAction, DarkListTable, DialogFrame, EmptyState,
-    FieldLabel, Input, LabelledAction, NavItem, NavLabel, PageHeader, Pill, Select, SettingRow, Stepper,
+    Caption, FieldLabel, Input, LabelledAction, NavItem, NavLabel, PageHeader, Pill, Select, SettingRow, Stepper,
     Switch, Tag, Tile, UnsavedBar, sidebar_qss,
 )
 from ui.dialogs.mcl_manager_dialog import mcl_role as _mcl_role
@@ -65,6 +66,9 @@ _P_EXPORT    = 8
 _P_BACKUP    = 9
 _P_PURGE     = 10
 _P_TRACKER   = 11
+_P_SCREENTIME = 12
+_P_SCK       = 13
+_P_SCA       = 14
 
 _PAGE_MAP = {
     "general":  _P_GENERAL,
@@ -79,9 +83,12 @@ _PAGE_MAP = {
     "backup":   _P_BACKUP,
     "purge":    _P_PURGE,
     "tracker":  _P_TRACKER,
+    "screentime": _P_SCREENTIME,
+    "sck":      _P_SCK,
+    "sca":      _P_SCA,
 }
 
-_SETTINGS_PAGES = {_P_GENERAL, _P_ACTIONS, _P_SCC, _P_MAIN_VIS, _P_QC, _P_ADMIN_VIS, _P_TRACKER}
+_SETTINGS_PAGES = {_P_GENERAL, _P_ACTIONS, _P_SCC, _P_MAIN_VIS, _P_QC, _P_ADMIN_VIS, _P_TRACKER, _P_SCK, _P_SCA}
 
 # Setting rows stack (title above control) when the page pane gets this narrow; the two limits leave
 # a gap so a pane sitting on the edge does not flip on every resize.
@@ -95,12 +102,13 @@ _STATE_COMBOS = {"theme": "theme_combo", "window_mode": "window_mode_combo", "ma
                  "sca_mode": "sca_mode_combo", "scc_detect_mode": "scc_detect_combo",
                  "sgt_mode": "sgt_mode_combo", "sgt_i_mode": "sgt_i_combo"}
 _STATE_STEPPERS = {"reveal_count": "reveal_count_spin", "clipboard": "clipboard_spin",
-                   "sca_max_uses": "sca_max_uses_spin"}
+                   "sca_max_uses": "sca_max_uses_spin", "health_sync_min": "health_sync_spin"}
 _STATE_CHECKS = {"quick_copy": "quick_copy_check", "run_in_bg": "run_in_bg_check",
                  "autostart": "autostart_check", "arn_autofix": "arn_autofix_check",
                  "sca": "sca_check", "show_hide": "show_hide_check",
                  "scc_enabled": "scc_check", "vsdc_enabled": "vsdc_check", "vsdc_x_enabled": "vsdc_x_check",
-                 "vsdc247_enabled": "vsdc247_check", "vsdc_hud_enabled": "vsdc_hud_check",
+                 "vsdc247_enabled": "vsdc247_check", "vsdc247_verify": "vsdc247_verify_check",
+                 "sck_enabled": "sck_check", "vsdc_hud_enabled": "vsdc_hud_check",
                  "sgt_record_pages": "sgt_record_check", "sdis_record": "sdis_record_check"}
 _STATE_EDITS = {f"scc_opt{n}_{part}": f"scc_opt{n}_{part}_edit" for n in (1, 2, 3, 4) for part in ("label", "str")}
 
@@ -184,6 +192,9 @@ class UnifiedSettingsDialog(QDialog):
             _P_BACKUP: self._build_page_backup,
             _P_PURGE: self._build_page_purge,
             _P_TRACKER: self._build_page_tracker,
+            _P_SCREENTIME: self._build_page_screentime,
+            _P_SCK: self._build_page_sck,
+            _P_SCA: self._build_page_sca,
         }
         self._page_widgets = {}
 
@@ -304,7 +315,10 @@ class UnifiedSettingsDialog(QDialog):
         _item("mdi.cog-outline",            "General",            _P_GENERAL)
         _item("mdi.gesture-tap-button",     "Action Buttons",     _P_ACTIONS)
         _item("mdi.shield-key-outline",     "SCC Vault Presets",  _P_SCC)
+        _item("mdi.key-change",             "Credential Keeper",  _P_SCK)
+        _item("mdi.clipboard-arrow-down-outline", "SCA",          _P_SCA)
         _item("mdi.radar",                  "Tracker",            _P_TRACKER)
+        _item("mdi.timer-outline",          "Screentime",         _P_SCREENTIME)
 
         _sec("Column Schema")
         _item("mdi.view-column-outline",    "Master Column List", _P_MCL)
@@ -456,7 +470,71 @@ class UnifiedSettingsDialog(QDialog):
                                    "only. Applies from the next start of Sera.",
                                    self.arn_autofix_check))
 
-        assist = Card("Clipboard assist (SCA)")
+        schema = Card("Schema info")
+        id_col = self.db.get_id_column()
+        if id_col:
+            id_ctrl = Pill(f"'{id_col['label']}' — wired to client auto-serial numbers", "emerald")
+        else:
+            id_ctrl = Pill("Not assigned — set in Master Column List", "neutral")
+        schema.add_row(SettingRow("ID / Primary Key column",
+                                  "Column used as the client's unique identifier and auto-serial source.",
+                                  id_ctrl, width="auto"))
+
+        for combo in (self.theme_combo, self.window_mode_combo, self.mask_mode_combo):
+            combo.currentIndexChanged.connect(self._on_control_changed)
+        for stepper in (self.reveal_count_spin, self.clipboard_spin):
+            stepper.valueChanged.connect(self._on_control_changed)
+        for switch in (self.quick_copy_check, self.run_in_bg_check, self.autostart_check, self.arn_autofix_check):
+            switch.toggled.connect(self._on_control_changed)
+        self.mask_mode_combo.currentIndexChanged.connect(self._update_mask_preview)
+        self.reveal_count_spin.valueChanged.connect(self._update_mask_preview)
+        self._update_mask_preview()
+
+        return self._kit_page(header, display, secure, startup, schema)
+
+    def _update_mask_preview(self, *args):
+        masked = mask_password(_MASK_SAMPLE, self.mask_mode_combo.currentData() or "last_n",
+                               self.reveal_count_spin.value())
+        self._mask_row.set_sub(f"How passwords are obscured in the Client Detail view. Example: {masked}")
+
+    def _on_pick_uid(self, service_id, service_name: str) -> None:
+        """Pick UID (docs/sca-uid-node-plan.md WP2-3): wait for the page, read it once, open the picker page."""
+        link = self._sca_uid_edits[service_id].text().strip()
+        if not link:
+            MessageBox.information(self, "Pick UID", "Paste the UID page link first.")
+            return
+        if self._uid_pick is not None:
+            self._uid_pick.cancel()
+        self._uid_pick = _UidPickRun(service_id, service_name, link, self)
+        self._uid_pick.status.connect(self._on_uid_pick_status)
+        self._uid_pick.picked.connect(self._on_uid_picked)
+        for b in self._sca_pick_buttons.values():
+            b.setEnabled(False)
+        self._uid_pick.start()
+
+    def _on_uid_pick_status(self, text: str, finished: bool) -> None:
+        self._uid_pick_status.setText(text)
+        self._uid_pick_status.show()
+        if finished:
+            for b in self._sca_pick_buttons.values():
+                b.setEnabled(True)
+
+    def _on_uid_picked(self, service_id, link: str, fp_json: str) -> None:
+        """Saved at once (the pick is its own action): the link it was picked on, and the node."""
+        try:
+            self.db.set_service_uid_page_links({service_id: link})
+            self.db.set_service_uid_node(service_id, fp_json)
+        except Exception as exc:
+            self._on_uid_pick_status(f"Could not save the pick: {exc}", True)
+            return
+        self._show_uid_node_state(service_id, fp_json)
+        self._on_uid_pick_status("Saved. Sera now reads only that box on this page.", True)
+
+    def _build_page_sca(self) -> QScrollArea:
+        header = PageHeader("SCA",
+            lead="Sera Clipboard Assist: arms matching portal credentials when a client User ID is copied.")
+
+        assist = Card("Clipboard assist")
         self.sca_check = Switch()
         self.sca_check.setAccessibleName("SCA — Sera Clipboard Assist")
         assist.add_row(SettingRow("SCA — Sera Clipboard Assist",
@@ -473,33 +551,279 @@ class UnifiedSettingsDialog(QDialog):
                                   "Maximum successful SCA fills allowed after one UID is copied.",
                                   self.sca_max_uses_spin))
 
-        schema = Card("Schema info")
-        id_col = self.db.get_id_column()
-        if id_col:
-            id_ctrl = Pill(f"'{id_col['label']}' — wired to client auto-serial numbers", "emerald")
-        else:
-            id_ctrl = Pill("Not assigned — set in Master Column List", "neutral")
-        schema.add_row(SettingRow("ID / Primary Key column",
-                                  "Column used as the client's unique identifier and auto-serial source.",
-                                  id_ctrl, width="auto"))
+        uid = Card("UID sources")
+        uid.add_row(self._build_uid_sources_box())
 
-        for combo in (self.theme_combo, self.window_mode_combo, self.mask_mode_combo, self.sca_mode_combo):
-            combo.currentIndexChanged.connect(self._on_control_changed)
-        for stepper in (self.reveal_count_spin, self.clipboard_spin, self.sca_max_uses_spin):
-            stepper.valueChanged.connect(self._on_control_changed)
-        for switch in (self.quick_copy_check, self.run_in_bg_check, self.autostart_check, self.arn_autofix_check,
-                       self.sca_check):
-            switch.toggled.connect(self._on_control_changed)
-        self.mask_mode_combo.currentIndexChanged.connect(self._update_mask_preview)
-        self.reveal_count_spin.valueChanged.connect(self._update_mask_preview)
-        self._update_mask_preview()
+        self.sca_mode_combo.currentIndexChanged.connect(self._on_control_changed)
+        self.sca_max_uses_spin.valueChanged.connect(self._on_control_changed)
+        self.sca_check.toggled.connect(self._on_control_changed)
+        return self._kit_page(header, assist, uid)
 
-        return self._kit_page(header, display, secure, startup, assist, schema)
+    def _build_uid_sources_box(self) -> QWidget:
+        """One row per registered service: the link of its UID page (the login page that shows the password
+        box with the UID already set) and "Pick UID", which registers the node that shows the UID
+        (docs/sca-uid-node-plan.md). While that page is in front, Sera reads only that node (UIA) and arms
+        SCA for the client whose UID it shows, for that service only. Empty = none."""
+        box = QWidget()
+        v = QVBoxLayout(box)
+        v.setContentsMargins(KIT["pad_set_h"], 12, KIT["pad_set_h"], 12)
+        v.setSpacing(8)
+        hint = Caption("Paste the link of the login page that shows the password box with the UID already set "
+                       "(one-page login: the login page; two-page login: page 2). Then press Pick UID, open "
+                       "that page in your browser with a client's UID set, and click the box that shows the UID "
+                       "in the page Sera opens. Sera then reads only that box. Leave empty for none.")
+        hint.setWordWrap(True)
+        v.addWidget(hint)
+        self._sca_uid_edits = {}
+        self._sca_uid_state = {}
+        self._sca_pick_buttons = {}
+        self._uid_pick = None
+        for svc in self.db.get_services():
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            name = FieldLabel(str(svc.get("name") or ""))
+            name.setMinimumWidth(150)
+            edit = Input(placeholder="https://...")
+            edit.setText(str(svc.get("uid_page_link") or ""))
+            edit.textChanged.connect(self._on_control_changed)
+            self._sca_uid_edits[svc["id"]] = edit
+            state = Caption()
+            state.setMinimumWidth(130)
+            self._sca_uid_state[svc["id"]] = state
+            self._show_uid_node_state(svc["id"], svc.get("uid_node"))
+            pick = LabelledAction("Pick UID", variant="secondary", sm=True)
+            pick.clicked.connect(lambda _=False, sid=svc["id"], nm=str(svc.get("name") or ""): self._on_pick_uid(sid, nm))
+            self._sca_pick_buttons[svc["id"]] = pick
+            row.addWidget(name)
+            row.addWidget(edit, stretch=1)
+            row.addWidget(pick)
+            row.addWidget(state)
+            v.addLayout(row)
+        self._uid_pick_status = Caption()
+        self._uid_pick_status.setWordWrap(True)
+        self._uid_pick_status.hide()
+        v.addWidget(self._uid_pick_status)
+        if not self._sca_uid_edits:
+            v.addWidget(Caption("No services are registered yet."))
+        return box
 
-    def _update_mask_preview(self, *args):
-        masked = mask_password(_MASK_SAMPLE, self.mask_mode_combo.currentData() or "last_n",
-                               self.reveal_count_spin.value())
-        self._mask_row.set_sub(f"How passwords are obscured in the Client Detail view. Example: {masked}")
+    def _show_uid_node_state(self, service_id, raw) -> None:
+        from core.sca import uid_node
+        fp = uid_node.loads(raw)
+        lab = self._sca_uid_state.get(service_id)
+        if lab is None:
+            return
+        lab.setText("UID box set (%s)" % (fp.get("rule") or "?") if fp else "UID box not picked")
+
+    def _build_page_sck(self) -> QScrollArea:
+        header = PageHeader("Sera Credential Keeper",
+            lead="When a portal refuses a saved password, Sera asks for the new one in a persistent card "
+                 "on the portal's own login page. Each service's links decide where the card is shown and "
+                 "when it goes away.")
+
+        main = Card()
+        self.sck_check = Switch()
+        self.sck_check.setChecked(True)
+        self.sck_check.setAccessibleName("Enable Sera Credential Keeper")
+        main.add_row(SettingRow("Enable Sera Credential Keeper",
+            "Detect failed portal logins and ask for the new password in the browser. Works "
+            "independently of Detect login automatically.", self.sck_check))
+
+        links = Card("Login and dashboard pages")
+        note = Caption("Login page: the portal page where a refused password is seen and the card is shown. "
+                       "Dashboard / welcome page: the page reached after a successful login - the card "
+                       "disappears there. A blank link means the service's home page of that flow.")
+        note.setWordWrap(True)
+        note_box = QWidget()
+        nl = QVBoxLayout(note_box)
+        nl.setContentsMargins(KIT["pad_set_h"], 12, KIT["pad_set_h"], 4)
+        nl.addWidget(note)
+        links.add_row(note_box)
+
+        self.sck_link_edits = {}
+        self._sck_services = {}
+        try:
+            services = self.db.get_services() or []
+        except Exception:
+            services = []
+        if not services:
+            links.add_row(EmptyState("No services yet", "Add one under Services first."))
+        for svc in services:
+            sid = svc.get("id")
+            if sid is None:
+                continue
+            self._sck_services[sid] = svc
+            links.add_row(self._sck_service_block(svc))
+
+        self.sck_check.toggled.connect(self._on_control_changed)
+        return self._kit_page(header, main, links)
+
+    def _sck_service_block(self, svc: dict) -> QWidget:
+        """One service's two links. Plain inputs: nothing is written until Save."""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(KIT["pad_set_h"], 10, KIT["pad_set_h"], 10)
+        v.setSpacing(6)
+        v.addWidget(FieldLabel(str(svc.get("name") or "Service")))
+
+        def _line(text: str, value, placeholder: str):
+            row = QHBoxLayout()
+            row.setSpacing(10)
+            lbl = Caption(text)
+            lbl.setFixedWidth(170)
+            edit = Input(placeholder=placeholder)
+            edit.setText(str(value or ""))
+            edit.textChanged.connect(self._on_control_changed)
+            row.addWidget(lbl)
+            row.addWidget(edit, stretch=1)
+            return row, edit
+
+        login_row, login_edit = _line("Login page", svc.get("login_page_link"), "https://portal.example/login")
+        dash_row, dash_edit = _line("Dashboard / welcome page", svc.get("dashboard_page_link"),
+                                    "https://portal.example/dashboard")
+        v.addLayout(login_row)
+        v.addLayout(dash_row)
+        self.sck_link_edits[svc["id"]] = (login_edit, dash_edit)
+        return w
+
+    def _build_health_card(self) -> Card:
+        from core.vsdc.vsdc_health import SYNC_MIN_RANGE
+        card = Card("Capture health")
+        self.health_sync_spin = Stepper(value=SYNC_MIN_RANGE[0], minimum=SYNC_MIN_RANGE[0],
+                                        maximum=SYNC_MIN_RANGE[1], step=1, unit=" min")
+        card.add_row(SettingRow("Share this PC's capture health every",
+            "Every PC shares a short note on whether capture is working (state, build, counts; never client "
+            "details) so the table below shows the whole office. A change of state is shared at once; "
+            "otherwise at this interval. Applies when you save.", self.health_sync_spin))
+
+        box = QWidget()
+        v = QVBoxLayout(box)
+        v.setContentsMargins(KIT["pad_set_h"], 12, KIT["pad_set_h"], 12)
+        v.setSpacing(8)
+        heads = ["PC", "Build", "State", "Since", "Last record", "Blind / stalled today", "Rows"]
+        self.health_table = DarkListTable(0, len(heads))
+        self.health_table.setHorizontalHeaderLabels(heads)
+        self.health_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.health_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.health_table.set_column(0, kind="strong", minimum=90)
+        self.health_table.set_column(1, minimum=70)
+        self.health_table.set_column(2, minimum=120)
+        self.health_table.set_column(3, minimum=60)
+        self.health_table.set_column(4, minimum=90, priority=1)
+        self.health_table.set_column(5, minimum=120, priority=2)
+        self.health_table.set_column(6, kind="num", minimum=50)
+        self.health_table.setMinimumHeight(170)
+        v.addWidget(self.health_table)
+        buttons = QHBoxLayout()
+        refresh = LabelledAction("Refresh", variant="secondary", icon="mdi.refresh", sm=True)
+        refresh.clicked.connect(self._refresh_health_panel)
+        copy = LabelledAction("Copy report", variant="secondary", icon="mdi.content-copy", sm=True)
+        copy.clicked.connect(self._copy_health_report)
+        buttons.addWidget(refresh)
+        buttons.addWidget(copy)
+        buttons.addStretch()
+        v.addLayout(buttons)
+        v.addWidget(FieldLabel("Yesterday's digest"))
+        self.health_digest_label = Caption("")
+        self.health_digest_label.setWordWrap(True)
+        self.health_digest_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        v.addWidget(self.health_digest_label)
+        card.add_row(box)
+        self._health_rows = []
+        return card
+
+    def _refresh_health_panel(self, *args, snapshot: "dict | None" = None) -> None:
+        from datetime import datetime
+        from core import fleet_health
+        from core.sgt.sgt_digest import TEXT_KEY
+        try:
+            if snapshot is None:
+                snapshot = self.db.get_all_settings()
+            rows = fleet_health.read_fleet(snapshot, datetime.now())
+        except Exception:
+            rows = []
+            snapshot = snapshot or {}
+        self._health_rows = rows
+        tones = {fleet_health.OK: "green", fleet_health.WARN: "amber",
+                 fleet_health.ALERT: "red", fleet_health.OFF: "neutral"}
+        self.health_table.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            state_text = r.state if not r.note or r.note == r.state else f"{r.state} ({r.note})"
+            cells = [r.device, r.version or "?", state_text, r.since[11:16] or "?",
+                     fleet_health.age_text(r.age_min), f"{r.blind_min} / {r.stalled_min} min", str(r.rows_sent)]
+            for j, text in enumerate(cells):
+                item = QTableWidgetItem(text)
+                if j == 2:
+                    item.setData(ROLE_PILL, (state_text, tones.get(r.level, "neutral")))
+                self.health_table.setItem(i, j, item)
+        self.health_digest_label.setText(
+            snapshot.get(TEXT_KEY) or "No digest yet. The admin PC makes one on its first capture tick of each day.")
+
+    def _build_page_screentime(self) -> QWidget:
+        header = PageHeader("Screentime",
+            lead="When Sera was opened and closed on each PC in the office. Every PC publishes its own sessions "
+                 "through Sera Sync, so this list is the same on all of them (a PC that is switched off shows "
+                 "its last session once it has synced). Only times and PC names are kept.")
+
+        card = Card("Sessions")
+        box = QWidget()
+        v = QVBoxLayout(box)
+        v.setContentsMargins(KIT["pad_set_h"], 12, KIT["pad_set_h"], 12)
+        v.setSpacing(8)
+        self._st_summary = Caption("")
+        self._st_summary.setWordWrap(True)
+        v.addWidget(self._st_summary)
+
+        heads = ["PC", "Opened", "Closed", "Time open"]
+        self._st_table = DarkListTable(0, len(heads))
+        self._st_table.setHorizontalHeaderLabels(heads)
+        self._st_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._st_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self._st_table.set_column(0, kind="strong", minimum=100)
+        self._st_table.set_column(1, minimum=110)
+        self._st_table.set_column(2, minimum=140)
+        self._st_table.set_column(3, minimum=80)
+        self._st_table.setMinimumHeight(260)
+        v.addWidget(self._st_table, 1)
+
+        btns = QHBoxLayout()
+        refresh = LabelledAction("Refresh", variant="secondary", icon="mdi.refresh", sm=True)
+        refresh.clicked.connect(self._refresh_screentime)
+        open_btn = LabelledAction("Open this PC's text file", variant="secondary", sm=True)
+        open_btn.clicked.connect(self._open_screentime_file)
+        btns.addWidget(refresh)
+        btns.addWidget(open_btn)
+        btns.addStretch()
+        v.addLayout(btns)
+        card.add_row(box)
+
+        self._refresh_screentime()
+        return self._kit_page(header, card)
+
+    def _refresh_screentime(self):
+        from core import screentime
+        rows = screentime.read_office(self.db)
+        table = self._st_table
+        table.setRowCount(len(rows))
+        running = sorted({r["pc"] for r in rows if r.get("running")})
+        for i, r in enumerate(rows):
+            pill = None
+            if r.get("running"):
+                closed, span = "Open now", screentime.duration_text(r["seconds"])
+                pill = ("Open now", "green")
+            elif r.get("stale"):
+                closed, span = f"No close recorded (last seen {r['seen'][5:16]})", ""
+            else:
+                closed = r["closed"] + ("" if r["clean"] else "  (not a clean close)")
+                span = screentime.duration_text(r["seconds"])
+            for col, text in enumerate((r["pc"], r["started"], closed, span)):
+                item = QTableWidgetItem(text)
+                if col == 2 and pill:
+                    item.setData(ROLE_PILL, pill)
+                table.setItem(i, col, item)
+        self._st_summary.setText("Open now: " + ", ".join(running) if running else
+                                 ("No PC has Sera open right now." if rows else
+                                  "No sessions yet. They appear after Sera has started once with this version."))
 
     def _build_page_actions(self) -> QScrollArea:
         header = PageHeader("Action Buttons",
@@ -676,6 +1000,7 @@ class UnifiedSettingsDialog(QDialog):
 
         return self._kit_page(header, verify, counts, opt1_card, opt2_card, opt3_card, opt4_card, preview)
 
+    # ── SCK (Sera Credential Keeper) ──────────────────────────────────────────
     def _build_page_mcl(self) -> QWidget:
         header = PageHeader("Master Column List",
             lead="The schema for every client field; changes apply at once. "
@@ -895,17 +1220,43 @@ class UnifiedSettingsDialog(QDialog):
         self.vsdc247_check.setAccessibleName("Enable VSDC 24/7")
         older.add_row(SettingRow("Enable VSDC 24/7",
             "Always-on background optical screen harvester. Periodically takes screenshots of designated web portals and runs OCR to detect compliance receipts.", self.vsdc247_check))
+        self.vsdc247_verify_check = Switch()
+        self.vsdc247_verify_check.setAccessibleName("Enable SGT Verifier (VSDC247-V)")
+        older.add_row(SettingRow("Enable SGT Verifier (VSDC247-V)",
+            "Independent OCR verifier for the GST portal. Passively cross-checks GSTR-1 and GSTR-3B filings against SGT without affecting live capture.", self.vsdc247_verify_check))
 
         self.vsdc_check.toggled.connect(self._on_control_changed)
         self.vsdc_x_check.toggled.connect(self._on_control_changed)
         self.vsdc247_check.toggled.connect(self._on_control_changed)
+        self.vsdc247_verify_check.toggled.connect(self._on_control_changed)
         self.vsdc_hud_check.toggled.connect(self._on_control_changed)
+
         self.sgt_mode_combo.currentIndexChanged.connect(self._on_control_changed)
         self.sgt_record_check.toggled.connect(self._on_control_changed)
         self.sdis_record_check.toggled.connect(self._on_control_changed)
         self.sgt_i_combo.currentIndexChanged.connect(self._on_control_changed)
+        health = self._build_health_card()
+        self.health_sync_spin.valueChanged.connect(self._on_control_changed)
 
-        return self._kit_page(header, sgt, older)
+        return self._kit_page(header, sgt, older, health)
+
+    def _copy_health_report(self) -> None:
+        from PySide6.QtWidgets import QApplication
+        from core import fleet_health
+        QApplication.clipboard().setText(fleet_health.report_text(self._health_rows))
+
+    def _open_screentime_file(self):
+        import os
+        from core import screentime
+        folder = screentime.app_dir_now()
+        path = screentime.file_path(folder) if folder else None
+        if path is None or not path.exists():
+            MessageBox.information(self, "Screentime", "This PC has no screentime file yet.")
+            return
+        try:
+            os.startfile(str(path))
+        except OSError as exc:
+            MessageBox.warning(self, "Screentime", f"Could not open the file: {exc}")
 
     def _build_page_export(self) -> QScrollArea:
         header = PageHeader("Export CSV", lead="Download client data or a blank import template.")
@@ -992,9 +1343,11 @@ class UnifiedSettingsDialog(QDialog):
             state["run_in_bg"] = self.run_in_bg_check.isChecked()
             state["autostart"] = self.autostart_check.isChecked()
             state["arn_autofix"] = self.arn_autofix_check.isChecked()
+        if hasattr(self, "sca_check"):
             state["sca"] = self.sca_check.isChecked()
             state["sca_mode"] = self.sca_mode_combo.currentData()
             state["sca_max_uses"] = self.sca_max_uses_spin.value()
+            state["sca_uid_pages"] = sorted((i, e.text().strip()) for i, e in self._sca_uid_edits.items())
         if hasattr(self, "show_hide_check"):
             state["show_hide"] = self.show_hide_check.isChecked()
         if hasattr(self, "scc_check"):
@@ -1009,15 +1362,25 @@ class UnifiedSettingsDialog(QDialog):
             state["scc_opt4_label"] = getattr(self, "scc_opt4_label_edit", QLineEdit()).text()
             state["scc_opt4_str"] = getattr(self, "scc_opt4_str_edit", QLineEdit()).text()
 
+        if hasattr(self, "sck_check"):
+            state["sck_enabled"] = self.sck_check.isChecked()
+            state["sck_links"] = {
+                sid: (login_edit.text(), dash_edit.text())
+                for sid, (login_edit, dash_edit) in getattr(self, "sck_link_edits", {}).items()
+            }
+
         if hasattr(self, "vsdc_check"):
             state["vsdc_enabled"] = self.vsdc_check.isChecked()
             state["vsdc_x_enabled"] = self.vsdc_x_check.isChecked()
             state["vsdc247_enabled"] = self.vsdc247_check.isChecked()
+            state["vsdc247_verify"] = self.vsdc247_verify_check.isChecked()
             state["vsdc_hud_enabled"] = self.vsdc_hud_check.isChecked()
+
             state["sgt_mode"] = self.sgt_mode_combo.currentData()
             state["sgt_record_pages"] = self.sgt_record_check.isChecked()
             state["sdis_record"] = self.sdis_record_check.isChecked()
             state["sgt_i_mode"] = self.sgt_i_combo.currentData()
+            state["health_sync_min"] = self.health_sync_spin.value()
         for key, field, _default in _FLAGS:
             state[key] = {col["id"]: _flag(col, field) for col in self.mcl_columns}
         return state
@@ -1175,8 +1538,15 @@ class UnifiedSettingsDialog(QDialog):
             self.clipboard_spin.setValue(int(g("clipboard_clear_seconds", "30")))
             self.quick_copy_check.setChecked(g("quick_copy_enabled", "0") == "1")
             self.run_in_bg_check.setChecked(g("run_in_background", "1") == "1")
-            self.sca_check.setChecked(g("sca_enabled", "1") == "1")
+            try:
+                from ui.utils import autostart
+                self.autostart_check.setChecked(autostart.is_autostart_enabled())
+            except Exception:
+                self.autostart_check.setChecked(False)
             self.arn_autofix_check.setChecked(g("arn_autofix_enabled", "1") != "0")
+
+        if self._pending("sca", "sca_check", force):
+            self.sca_check.setChecked(g("sca_enabled", "1") == "1")
             try:
                 self.sca_max_uses_spin.setValue(max(1, min(int(g("sca_max_uses", "1")), 20)))
             except (TypeError, ValueError):
@@ -1186,12 +1556,11 @@ class UnifiedSettingsDialog(QDialog):
             if sca_mode == "assist":
                 sca_mode = "widget"
             _set(self.sca_mode_combo, sca_mode)
-
-            try:
-                from ui.utils import autostart
-                self.autostart_check.setChecked(autostart.is_autostart_enabled())
-            except Exception:
-                self.autostart_check.setChecked(False)
+            for sid, e in self._sca_uid_edits.items():
+                svc = next((x for x in self.db.get_services() if x["id"] == sid), None)
+                e.blockSignals(True)
+                e.setText(str((svc or {}).get("uid_page_link") or ""))
+                e.blockSignals(False)
 
         if self._pending("scc", "scc_check", force):
             self.scc_check.setChecked(g("scc_enabled", "1") == "1")
@@ -1213,6 +1582,16 @@ class UnifiedSettingsDialog(QDialog):
             if hasattr(self, "scc_opt4_str_edit"):
                 self.scc_opt4_str_edit.setText(g("scc_opt4_fixed_str", ""))
 
+        if self._pending("sck", "sck_check", force):
+            self.sck_check.setChecked(
+                str(g("sck_enabled", "1")).strip().lower() in ("1", "true", "on", "yes"))
+            self._sck_links_loaded = {}
+            for sid, (login_edit, dash_edit) in getattr(self, "sck_link_edits", {}).items():
+                svc = getattr(self, "_sck_services", {}).get(sid) or {}
+                login_edit.setText(str(svc.get("login_page_link") or ""))
+                dash_edit.setText(str(svc.get("dashboard_page_link") or ""))
+                self._sck_links_loaded[sid] = (login_edit.text().strip(), dash_edit.text().strip())
+
         if self._pending("actions", "show_hide_check", force):
             self.show_hide_check.setChecked(g("show_hide_btn_enabled", "1") == "1")
 
@@ -1222,16 +1601,22 @@ class UnifiedSettingsDialog(QDialog):
             self.vsdc_check.setChecked(g("vsdc_enabled", "0") == "1")
             self.vsdc_x_check.setChecked(g("vsdc_x_enabled", "0") == "1")
             self.vsdc247_check.setChecked(g("vsdc247_enabled", "0") == "1")
+            self.vsdc247_verify_check.setChecked(g("vsdc247_verify", "0") == "1")
             self.vsdc_hud_check.setChecked(g("vsdc_hud_enabled", "1") == "1")
+
             _set(self.sgt_mode_combo, g("sgt_mode", "live"))
             self.sgt_record_check.setChecked(g("sgt_record_pages", "1") == "1")
             self.sdis_record_check.setChecked(g("sdis_record", "1") == "1")
             _set(self.sgt_i_combo, g("sgt_i_mode", "off"))
+            from core.fleet_health import read_sync_min
+            self.health_sync_spin.setValue(read_sync_min(g))
+            self._refresh_health_panel(snapshot=snapshot)
 
     #── Save settings ─────────────────────────────────────────────────────────
     def _on_save_settings(self):
         try:
             bulk_settings = {}
+            autostart_message = ""
             b = lambda cb: "1" if cb.isChecked() else "0"
 
             if hasattr(self, "theme_combo"):
@@ -1242,26 +1627,68 @@ class UnifiedSettingsDialog(QDialog):
                 bulk_settings["clipboard_clear_seconds"]    = str(self.clipboard_spin.value())
                 bulk_settings["quick_copy_enabled"]         = b(self.quick_copy_check)
                 bulk_settings["run_in_background"]          = b(self.run_in_bg_check)
-                bulk_settings["sca_enabled"]                = b(self.sca_check)
                 bulk_settings["arn_autofix_enabled"]        = b(self.arn_autofix_check)
-                bulk_settings["sca_action_mode"]            = self.sca_mode_combo.currentData() or "autofill"
-                bulk_settings["sca_max_uses"]               = str(self.sca_max_uses_spin.value())
-
-                try:
-                    from automation import update_extension_settings
-                    update_extension_settings(
-                        sca_enabled=self.sca_check.isChecked(),
-                        sca_mode=self.sca_mode_combo.currentData() or "autofill",
-                        sca_max_uses=self.sca_max_uses_spin.value(),
-                        allowed_services=self.db.get_services(),
-                        clipboard_clear_seconds=self.clipboard_spin.value(),
-                    )
-                except Exception:
-                    pass
 
                 try:
                     from ui.utils import autostart
-                    autostart.set_autostart_enabled(self.autostart_check.isChecked())
+                    want = self.autostart_check.isChecked()
+                    # Only touch Windows when the box changed, so every Save is not a registry write.
+                    if want != autostart.is_autostart_enabled() or (want and autostart.user_mismatch()):
+                        result = autostart.apply_autostart(want)
+                        autostart_message = result.message
+                        if not result.ok:
+                            self.autostart_check.blockSignals(True)
+                            self.autostart_check.setChecked(autostart.is_autostart_enabled())
+                            self.autostart_check.blockSignals(False)
+                except Exception as exc:
+                    autostart_message = f"Start at logon could not be changed: {exc}"
+
+            if hasattr(self, "sca_check"):
+                bulk_settings["sca_enabled"]                = b(self.sca_check)
+                bulk_settings["sca_action_mode"]            = self.sca_mode_combo.currentData() or "autofill"
+                bulk_settings["sca_max_uses"]               = str(self.sca_max_uses_spin.value())
+                try:
+                    old_links = {x["id"]: str(x.get("uid_page_link") or "").strip() for x in self.db.get_services()}
+                    self.db.set_service_uid_page_links({i: e.text() for i, e in self._sca_uid_edits.items()})
+                    for i, e in self._sca_uid_edits.items():
+                        if e.text().strip() != old_links.get(i, ""):
+                            self.db.set_service_uid_node(i, "")     # a picked box belongs to the old page
+                            self._show_uid_node_state(i, "")
+                except Exception:
+                    pass
+
+            if hasattr(self, "theme_combo") or hasattr(self, "sca_check"):
+                # One push covers both pages; whichever page was never opened falls back to the saved value.
+                try:
+                    from automation import update_extension_settings
+                    saved = self.db.get_all_settings()
+                    if hasattr(self, "sca_check"):
+                        sca_on = self.sca_check.isChecked()
+                        sca_mode = self.sca_mode_combo.currentData() or "autofill"
+                        sca_uses = self.sca_max_uses_spin.value()
+                    else:
+                        sca_on = saved.get("sca_enabled", "1") == "1"
+                        sca_mode = saved.get("sca_action_mode", "autofill")
+                        if sca_mode == "assist":
+                            sca_mode = "widget"
+                        try:
+                            sca_uses = int(saved.get("sca_max_uses", "1"))
+                        except (TypeError, ValueError):
+                            sca_uses = 1
+                    if hasattr(self, "clipboard_spin"):
+                        clip = self.clipboard_spin.value()
+                    else:
+                        try:
+                            clip = int(saved.get("clipboard_clear_seconds", "30"))
+                        except (TypeError, ValueError):
+                            clip = 30
+                    update_extension_settings(
+                        sca_enabled=sca_on,
+                        sca_mode=sca_mode,
+                        sca_max_uses=sca_uses,
+                        allowed_services=self.db.get_services(),
+                        clipboard_clear_seconds=clip,
+                    )
                 except Exception:
                     pass
 
@@ -1285,6 +1712,16 @@ class UnifiedSettingsDialog(QDialog):
                 if hasattr(self, "scc_opt4_str_edit"):
                     bulk_settings["scc_opt4_fixed_str"] = self.scc_opt4_str_edit.text()
 
+            if hasattr(self, "sck_check"):
+                bulk_settings["sck_enabled"] = b(self.sck_check)
+                loaded = getattr(self, "_sck_links_loaded", {})
+                for sid, (login_edit, dash_edit) in getattr(self, "sck_link_edits", {}).items():
+                    now = (login_edit.text().strip(), dash_edit.text().strip())
+                    if loaded.get(sid) != now:
+                        self.db.update_service_links(sid, now[0], now[1])
+                        loaded[sid] = now
+                self._sck_links_loaded = loaded
+
             if hasattr(self, "show_hide_check"):
                 bulk_settings["show_hide_btn_enabled"]      = b(self.show_hide_check)
 
@@ -1293,11 +1730,14 @@ class UnifiedSettingsDialog(QDialog):
                 bulk_settings["vsdc_enabled"] = b(self.vsdc_check)
                 bulk_settings["vsdc_x_enabled"] = b(self.vsdc_x_check)
                 bulk_settings["vsdc247_enabled"] = b(self.vsdc247_check)
+                bulk_settings["vsdc247_verify"] = b(self.vsdc247_verify_check)
                 bulk_settings["vsdc_hud_enabled"] = b(self.vsdc_hud_check)
+
                 bulk_settings["sgt_mode"] = self.sgt_mode_combo.currentData() or "live"
                 bulk_settings["sgt_record_pages"] = b(self.sgt_record_check)
                 bulk_settings["sdis_record"] = b(self.sdis_record_check)
                 bulk_settings["sgt_i_mode"] = self.sgt_i_combo.currentData() or "off"
+                bulk_settings["capture_health_sync_min"] = str(self.health_sync_spin.value())
 
             if hasattr(self.db, "set_settings_bulk"):
                 self.db.set_settings_bulk(bulk_settings)
@@ -1319,6 +1759,8 @@ class UnifiedSettingsDialog(QDialog):
             self.settings_saved.emit()
             self._initial_state = self._capture_state()
             self._update_save_btn_state()
+            if autostart_message:
+                MessageBox.warning(self, "Start at Windows logon", autostart_message)
 
         except Exception as e:
             MessageBox.critical(self, "Error Saving Settings", str(e))
@@ -1690,3 +2132,55 @@ class UnifiedSettingsDialog(QDialog):
         from ui.dialogs.change_master_password_dialog import ChangeMasterPasswordDialog
         dlg = ChangeMasterPasswordDialog(app_dir, parent=self)
         dlg.exec()
+
+
+class _UidPickRun(QObject):
+    """One "Pick UID" run off the UI thread (core/sca/uid_picker): wait for the page in front, read it once,
+    serve the picker page on 127.0.0.1 and open it in the default browser. Signals come back queued."""
+    status = Signal(str, bool)            # text, finished
+    picked = Signal(object, str, str)     # service_id, link, fingerprint JSON
+
+    def __init__(self, service_id, service_name: str, link: str, parent=None) -> None:
+        super().__init__(parent)
+        import threading
+        self.service_id, self.service_name, self.link = service_id, service_name, link
+        self._stop = threading.Event()
+        self._session = None
+
+    def start(self) -> None:
+        import threading
+        threading.Thread(target=self._run, name="sca-uid-pick", daemon=True).start()
+
+    def cancel(self) -> None:
+        self._stop.set()
+        if self._session is not None:
+            self._session.stop()
+
+    def _run(self) -> None:
+        name = self.service_name
+        try:
+            import webbrowser
+            from core.sca import uid_node
+            from core.sca.page_nodes import UiaReader
+            from core.sca.uid_picker import PickSession, wait_for_page, WAIT_S
+            from core.sca.uid_source_watch import _foreground_browser
+            self.status.emit(f"{name}: open the page in your browser with a client's UID set "
+                             f"(waiting up to {int(WAIT_S)} s)...", False)
+            got = wait_for_page(self.link, UiaReader(), _foreground_browser, self._stop,
+                                lambda t: self.status.emit(f"{name}: {t}", False))
+            if got is None:
+                if not self._stop.is_set():
+                    self.status.emit(f"{name}: the page was not found in time. Press Pick UID again.", True)
+                return
+            docs, url = got
+
+            def done(fp):
+                self.picked.emit(self.service_id, self.link, uid_node.dumps(fp))
+
+            self._session = PickSession(docs, url, name, done)
+            self._session.start()
+            webbrowser.open(self._session.url)
+            self.status.emit(f"{name}: page read. Click the UID box in the page Sera opened in your "
+                             f"browser, then Use this.", True)
+        except Exception as exc:
+            self.status.emit(f"{name}: Pick UID failed: {exc}", True)

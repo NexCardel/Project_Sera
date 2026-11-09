@@ -1,0 +1,334 @@
+{
+ "about": "OS Assist work packages (blueprint docs/os_assist/os-assist-blueprint.md). Fixed data: edit by hand only to re-plan. Live status is in os-assist-status.csv, written only by tools/os_assist.py.",
+ "deadline": "2026-11-15T23:00:00+05:30",
+ "models": {
+  "sonnet": {
+   "runner": "claude",
+   "id": "claude-sonnet-5-5"
+  },
+  "opus": {
+   "runner": "claude",
+   "id": "claude-opus-5-5"
+  },
+  "haiku": {
+   "runner": "claude",
+   "id": "claude-haiku-4-5-20251001"
+  },
+  "gemini-flash": {
+   "runner": "antigravity",
+   "id": "gemini-3.8-flash-high"
+  },
+  "gemini-pro": {
+   "runner": "antigravity",
+   "id": "gemini-3.1-pro-high"
+  }
+ },
+ "tiers": {
+  "_note": "Claude only (owner decision 2026-09-29: the Gemini fallback was unnecessary).",
+  "sonnet": [
+   "sonnet"
+  ],
+  "haiku": [
+   "haiku"
+  ],
+  "opus": [
+   "opus"
+  ]
+ },
+ "runners": {
+  "claude": {
+   "enabled": true,
+   "exe": "claude",
+   "prompt": "stdin",
+   "args": [
+    "-p",
+    "--model",
+    "{model}",
+    "--output-format",
+    "json",
+    "--permission-mode",
+    "{permission_mode}",
+    "--allowedTools",
+    "{allowed_tools}",
+    "--disallowedTools",
+    "{disallowed_tools}"
+   ],
+   "coauthor": "Claude <noreply@anthropic.com>"
+  },
+  "antigravity": {
+   "enabled": false,
+   "exe": "agy",
+   "prompt": "arg",
+   "args": [
+    "--model",
+    "{model}",
+    "--output-format",
+    "json",
+    "--dangerously-skip-permissions",
+    "-p"
+   ],
+   "coauthor": "Gemini (Antigravity) <noreply@google.com>",
+   "_note": "agy 1.2.12 (Go flags; the prompt is the value of -p, so it goes last). Kept to the restricted mode (accept-edits + sandbox). Disabled until a test shows workers can run the tests in that mode; the unrestricted --dangerously-skip-permissions mode is the owner's decision, not the dispatcher's."
+  }
+ },
+ "cli": {
+  "permission_mode": "acceptEdits",
+  "allowed_tools": [
+   "Read",
+   "Edit",
+   "Write",
+   "Glob",
+   "Grep",
+   "TodoWrite",
+   "Bash(../APP/venv/Scripts/python.exe:*)",
+   "Bash(git status:*)",
+   "Bash(git diff:*)",
+   "Bash(git log:*)",
+   "Bash(git add:*)",
+   "Bash(git commit:*)",
+   "Bash(git show:*)",
+   "Bash(git rev-parse:*)",
+   "Bash(git stash:*)",
+   "Bash(ls:*)",
+   "Bash(cat:*)",
+   "Bash(head:*)",
+   "Bash(tail:*)",
+   "Bash(wc:*)",
+   "Bash(grep:*)",
+   "Bash(sed -n:*)",
+   "Bash(find:*)",
+   "Bash(mkdir:*)",
+   "Bash(cp:*)",
+   "Bash(mv:*)",
+   "Bash(rm:*)",
+   "Bash(echo:*)",
+   "Bash(date:*)",
+   "Bash(node:*)"
+  ],
+  "disallowed_tools": [
+   "Bash(git push:*)",
+   "Bash(git merge:*)",
+   "Bash(git rebase:*)",
+   "Bash(git reset --hard:*)",
+   "Bash(git checkout main:*)",
+   "Bash(git switch main:*)",
+   "Bash(git branch -D:*)",
+   "WebFetch",
+   "WebSearch"
+  ],
+  "run_timeout_min": 150,
+  "max_attempts": 3
+ },
+ "wps": [
+  {
+   "wp": "O0-1",
+   "phase": 0,
+   "model": "haiku",
+   "kind": "auto",
+   "size": "S",
+   "deps": [],
+   "what": "Baseline: tests before any change",
+   "focus": "Change no code. Run and record pass/fail counts (and names of pre-existing failures) in your hand-off note: tests/test_sca_protocol.py, tests/test_clipboard_assist.py, tests/test_clipboard_clear_setting.py, tests/test_sca_suppress_client.py, tests/test_sca_uid_source_watch.py, tests/test_service_automation_mode.py, tests/test_ws_bridge.py, tests/test_ui_scale.py, every tests/test_scc_*.py, and `node tests/js/test_sca_coordinator.js`. Check that core/sca/page_nodes.py, core/sca/uid_source_watch.py and docs/sca-uid-node-plan.md exist on this branch and are committed (git log -- core/sca). If they are missing, say so clearly in the note: O3-3 must then be blocked until the owner merges that work. Confirm tools/pre_dev/os_assist/fill_spike.py is present (the reference code)."
+  },
+  {
+   "wp": "O1-1",
+   "phase": 1,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "O0-1"
+   ],
+   "what": "core/os_assist: UIA worker thread + locate (§3, §4.2)",
+   "focus": "Read docs/os_assist/os-assist-blueprint.md §0, §2, §3, §4.2, §8 and tools/pre_dev/os_assist/fill_spike.py (port its Uia/describe/visible/find_fields, do not import the spike). Create core/os_assist/__init__.py, core/os_assist/worker.py and core/os_assist/locate.py. worker.py: one daemon thread owning its own UIA object (CoInitialize + CUIAutomation8, fallback CUIAutomation, as core/sca/page_nodes.UiaReader does), a job queue, `submit(fn, *args) -> concurrent.futures.Future`, `stop()`; never vsdc_uia_text's shared worker. locate.py (runs on the worker): `browser_windows()` (visible top-level windows of BROWSER_EXE_NAMES from core/vsdc/vsdc_router), `read_url(hwnd)` via vsdc_uia_text.address_bar_here, `window_for_host(host_or_url) -> hwnd|0` (foreground window first, D4), `host_matches_service(hwnd, service)` using sca_protocol.host_matches on the service's login_page_link, `page_documents(hwnd)` (on-screen Documents, skip NativeViewHost), `find_fields(hwnd, username_selector, password_selector) -> (user_el, pass_el)` with the §4.2 rules (#id selector -> AutomationId; ignore other selector shapes), and `page_rect(hwnd)` (the on-screen Document's bounding rect, for docking). Read-only: no pattern method calls here. Tests in tests/test_os_assist_locate.py with fake elements: decoys skipped (hiddenPassword, aria hidden, zero size, offscreen, disabled), username-before-password, PAN page with no password box, #id selector wins, non-#id selector ignored."
+  },
+  {
+   "wp": "O1-2",
+   "phase": 1,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "O1-1"
+   ],
+   "what": "core/os_assist/fill.py + one-writer test (§4.1, §4.3)",
+   "focus": "Read docs/os_assist/os-assist-blueprint.md §0, §4.1, §4.3 and the spike's fill_one/verify/check/type_text/focus_mode. Create core/os_assist/fill.py (runs on the worker): `fill(hwnd, element, text, is_password, service, method='auto') -> FillResult(outcome, method, reason)` with outcome filled|failed|refused; the host check before EACH write (rule 3); SetValue then verify at 0.15 s and 1.0 s; the D2 bullet-count check for password boxes (never compare or keep the text read back); SendInput fallback with KEYEVENTF_UNICODE, focus check via CompareElements, abort when the foreground window changes. Also `type_into_focused(hwnd, text, is_password, service)` and `FocusWatcher` for the Flutter step mode (§4.3: 200 ms GetFocusedElement poll, ignores the address bar, reports each new Edit once). SendInput and the window calls go through a small injectable `keyboard` object so tests can fake them. Never log or print a value. Tests in tests/test_os_assist_fill.py with fakes: SetValue ok; SetValue ignored -> keys fallback; read-only -> keys; host changed between find and write -> refused; window changed mid-type -> failed; password verify uses length only; method='setvalue' never types. Add tests/test_os_assist_one_writer.py: scans every .py under the repo (skip venv, .build_venv, backups, .restore_points, build, dist, tests) and fails if `SetValue(`, `SendInput` or `.SetFocus(` appears outside core/os_assist/fill.py and tools/pre_dev/os_assist/."
+  },
+  {
+   "wp": "O1-3",
+   "phase": 1,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "S",
+   "deps": [
+    "O0-1"
+   ],
+   "what": "core/os_assist/secure_clipboard.py (§4.5)",
+   "focus": "Read docs/os_assist/os-assist-blueprint.md §4.5 and how the app clears copied passwords today (grep clipboard_clear in clipboard_watch.py, ui/dialogs/unified_settings_dialog.py, tests/test_clipboard_clear_setting.py). Create core/os_assist/secure_clipboard.py: `copy(text, secret: bool, clear_after_s: int|None)` on the Qt main thread with QMimeData: text/plain plus, when secret, the formats ExcludeClipboardContentFromMonitorProcessing (empty), CanIncludeInClipboardHistory and CanUploadToCloudClipboard (each a 4-byte little-endian DWORD 0) — check Qt writes custom Windows formats with the `application/x-qt-windows-mime;value=\"<Name>\"` mime name and use that. Clear after clear_after_s only if the clipboard still holds that text (compare in memory, never log). Tests in tests/test_os_assist_clipboard.py (QT_QPA_PLATFORM=offscreen): formats present when secret, absent when not, clear only when unchanged."
+  },
+  {
+   "wp": "O1-R",
+   "phase": 1,
+   "model": "opus",
+   "kind": "review",
+   "size": "S",
+   "deps": [
+    "O1-1",
+    "O1-2",
+    "O1-3"
+   ],
+   "what": "Review phase 1 (core)",
+   "focus": "Review core/os_assist/ against docs/os_assist/os-assist-blueprint.md §0 and §4.1–4.3, 4.5. Look for: any value logged or printed; a write without the host check just before it; UIA calls off the worker thread; SetValue/SendInput outside fill.py; field rules that differ from sera_dom.js isVisible/findField; COM objects leaking across threads. Fix what you find (small, with tests), run the phase-1 tests and the O0-1 list, and write what you checked in the hand-off note."
+  },
+  {
+   "wp": "O2-1",
+   "phase": 2,
+   "model": "opus",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "O1-R"
+   ],
+   "what": "ui/os_assist/dock_card.py: the docked, no-focus base window (§4.4)",
+   "focus": "Read docs/os_assist/os-assist-blueprint.md §4.4. Create ui/os_assist/__init__.py and ui/os_assist/dock_card.py: `DockCard(QWidget)` base: frameless, translucent background, Qt.Tool, Qt.WindowDoesNotAcceptFocus, WA_ShowWithoutActivating, and WS_EX_NOACTIVATE set with SetWindowLongPtrW after the native window exists; `attach(browser_hwnd, service)` sets GWLP_HWNDPARENT to the browser; a 100 ms QTimer while visible: follows GetWindowRect / the page rect (ask the worker for locate.page_rect at most every 500 ms), hides while the browser is minimised (IsIconic) or closed (IsWindow), hides when the address-bar host stops matching the service and shows again when it matches; anchored top-right with the extension's offsets (top 18 px, right 24 px, DPI-scaled with the app's scale helpers). Shared pieces every card uses: slide-in from the right (0.38 s cubic-bezier feel via QPropertyAnimation), `TimerBar` (scaleX countdown, pause on hover, resume, reset on click, expiry -> dismiss()), header with badge + ✎ + ✕, and a `dismissed` signal that clears any secret the card holds. No card content yet. Tests in tests/test_os_assist_dock_card.py (offscreen): flags set, timer pause/resume/reset/expiry, hide on host mismatch via a fake locator, dismiss clears secrets."
+  },
+  {
+   "wp": "O2-2",
+   "phase": 2,
+   "model": "opus",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "O2-1"
+   ],
+   "what": "SMTI card (normal + Flutter steps) (§4.4)",
+   "focus": "Read docs/os_assist/os-assist-blueprint.md §2 (SMTI row), §4.3 Flutter, §4.4, §6 D3, and background.js manualAssistWidget (~L807–1556: its CSS is the visual spec — colours, sizes, fonts, emoji labels, button states done/warn/primary, timer durations). Create ui/os_assist/smti_card.py on DockCard: badge '⚡ Sera Assist', client title, '👤  Username' and '🔑  Password' buttons. Username click: reset timer, worker -> locate.find_fields + fill.fill(user); filled -> '✓  Username Injected' 2 s; no box or failed -> secure_clipboard.copy (not secret) and '📋  Copied Username (Ctrl+V)' 2.5 s. Password click: filled -> dismiss; else secure copy (secret, clipboard-clear seconds) + '📋  Copied Password (Ctrl+V)' then dismiss after 1.2 s. Flutter mode (service host is tdscpc.gov.in / traces, or the page has no Edit until one is focused): hide the buttons, show the two step cards with the same texts and active/done styles, run fill.FocusWatcher. D3: run `../APP/venv/Scripts/python.exe tools/os_assist.py ask O2-2 --question \"OS mode: what should the pencil (edit password) button on the SMTI/MECP/SCA cards do?\" --options \"Open the SCK card via the extension, hidden when no browser is connected|Open the client's record in Sera|Hide the button in OS mode\" --default \"Open the SCK card via the extension, hidden when no browser is connected\"` and implement the answer as a shared helper in dock_card.py that the other cards reuse; write it into docs/os_assist/os-assist-blueprint.md §6 D3. The card never touches the extension for filling. Tests in tests/test_os_assist_smti_card.py with a fake worker/fill: button texts and states, copy fallbacks, dismiss on password, Flutter step flow, secrets cleared."
+  },
+  {
+   "wp": "O2-3",
+   "phase": 2,
+   "model": "opus",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "O2-2"
+   ],
+   "what": "MECP card (plain + SCC mode) (§4.5)",
+   "focus": "Read docs/os_assist/os-assist-blueprint.md §2 (MECP row), §4.5, background.js mecpWidget (~L2735–3150, the visual spec) and core/scc/card.py (open_card / update_card / close_card signatures and what the extension card does with failed labels, next label, message, stop, ask rows). Create ui/os_assist/mecp_card.py on DockCard. Plain: rows 'User ID (PAN)' and 'Password' with '📋 Copy' -> secure_clipboard.copy (password secret) -> '✓ Copied' then back; 90 s timer; closes when done the same way the extension card does today (check its code). SCC mode: combo rows with Copy and 'This one worked', 'None - I typed my own', failed rows marked '✗', note line, the same messages to the desktop the extension card sends today (find them in background.js / ui/ws_bridge.py and call the same main.py handlers directly instead of a socket). Copies in SCC mode also call the SccCard ledger directly (§4.5). Values shown on the card are as today (the card shows them). Never log them. Tests in tests/test_os_assist_mecp_card.py with fakes."
+  },
+  {
+   "wp": "O2-4",
+   "phase": 2,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "S",
+   "deps": [
+    "O2-2"
+   ],
+   "what": "SCA card + fill chip (§4.4, §4.6)",
+   "focus": "Read docs/os_assist/os-assist-blueprint.md §4.6 and sca_coordinator.js showWidgetInPage / showFillChipInPage (the visual spec). Create ui/os_assist/sca_card.py on DockCard: title (business name), subtitle (owner name · portal), optional amber note and amber border for needs_confirm with the same text, an Inject button that emits `inject_requested(arm_id, service_id)`, ✎ via the D3 helper, ✕. Create ui/os_assist/sca_chip.py: 'Filled <portal> for <client>[ (<token>)]', fades in, gone after 2.4 s, docked like the cards, never takes focus. Tests (offscreen) for texts, amber state, signal, chip lifetime."
+  },
+  {
+   "wp": "O2-R",
+   "phase": 2,
+   "model": "opus",
+   "kind": "review",
+   "size": "S",
+   "deps": [
+    "O2-3",
+    "O2-4"
+   ],
+   "what": "Review phase 2 (cards) + look-alike shots",
+   "focus": "Review ui/os_assist/ against docs/os_assist/os-assist-blueprint.md §0 and §4.4–4.6 and the extension CSS. Render every card state offscreen to PNG in docs/os_assist/shots/ (smti, smti-flutter, mecp, mecp-scc, sca, sca-confirm, chip) with a small script in tools/pre_dev/os_assist/render_cards.py. Fix visual drift you can see from the CSS (colours, radii, font sizes, spacing). Check no card can take focus and every dismiss path clears secrets. Add a check with `../APP/venv/Scripts/python.exe tools/os_assist.py check-add O2-R --text \"Compare docs/os_assist/shots/*.png with the extension cards on a real page\"`."
+  },
+  {
+   "wp": "O3-1",
+   "phase": 3,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "S",
+   "deps": [
+    "O1-R"
+   ],
+   "what": "Engine switch setting (§4.7, D1)",
+   "focus": "Read docs/os_assist/os-assist-blueprint.md §4.7. Add `automation.assist_engine() -> 'extension'|'os'` reading settings.ini [Automation] assist_engine (default 'extension'; read the way open_in_default_browser reads [Automation] browser) and a setter. Add 'Assist engine: Extension / OS' to the Automation part of ui/dialogs/unified_settings_dialog.py, following the existing controls and the lazy-loading rules in tests/test_unified_settings_lazy.py, with a one-line hint 'OS: Sera fills from outside the browser; the extension is used only for Fast Autofill'. Emit/notify a change so later WPs can react without a restart (a small Qt signal or callback list in automation). Tests: default, round-trip, the dialog control saves it."
+  },
+  {
+   "wp": "O3-2",
+   "phase": 3,
+   "model": "opus",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "O2-3",
+    "O3-1"
+   ],
+   "what": "SMTI/MECP launch through the OS engine",
+   "focus": "Read docs/os_assist/os-assist-blueprint.md §3, §4.4, §4.7 and automation.py trigger_manual_assist / trigger_mecp / _send_to_extension / open_in_default_browser, and how Client Detail and the Tracker Dump call them (ui/windows/client_detail_window.py, ui/windows/tracker_dump_window.py). Create core/os_assist/launcher.py: `launch(kind 'smti'|'mecp', service, user_id, password, client_id, client_name, on_error)` — open_in_default_browser(login url) (new tab each time, owner answer 3), wait up to 20 s on the worker for a browser window whose address bar matches the service host (window_for_host), then show the card on the Qt main thread attached to that hwnd; on timeout call on_error with a clear message. One live card per kind: a new launch dismisses the old one (and clears its secret). Card lifetimes as today (SMTI duration the desktop passes today, MECP 90 s). In automation.trigger_manual_assist / trigger_mecp: if assist_engine()=='os' call the launcher, else the current extension path unchanged. Keep clipboard_watch.suppress_client behaviour for MECP/SMTI launches. Tests with fakes: OS path chosen only in OS mode, extension path untouched, timeout message, one card per kind, secrets cleared."
+  },
+  {
+   "wp": "O3-3",
+   "phase": 3,
+   "model": "opus",
+   "kind": "auto",
+   "size": "L",
+   "deps": [
+    "O2-4",
+    "O3-1"
+   ],
+   "what": "SCA engine in OS mode (§4.6)",
+   "focus": "FIRST check O0-1's note: if the UID-node work (core/sca/page_nodes.py, uid_source_watch.py) is not committed on this branch, run `../APP/venv/Scripts/python.exe tools/os_assist.py block O3-3 --reason \"needs the SCA UID-node work merged\"` and stop. Read docs/os_assist/os-assist-blueprint.md §4.6, §4.7, clipboard_watch.py (_arm_client_services, handle_password_request, handle_fill_result, sca_notice), automation.arm_sca, sca_protocol.py, main.py _handle_sca_password_request, and sca_coordinator.js onCandidate / pickService / candidateMatches / isArmLive / onWidgetFill (port these rules to Python, same behaviour). Create core/os_assist/sca_engine.py on the worker: holds the current arm (no passwords; as the extension keeps it), ticks ~0.6 s only while an arm is live, does steps 1–7 of §4.6, calls handle_password_request in-process with the same dict shape, fills with fill.fill, reports with handle_fill_result, shows sca_card / sca_chip on the Qt thread, respects the assist lock (an OS SMTI/MECP card open on that hwnd). In OS mode arms go to the engine instead of automation.arm_sca, and disarm/expiry behave as today; on switching to OS send update_extension_settings(sca_enabled=False), and back on switching to extension restore the user's SCA setting. Tests in tests/test_os_assist_sca_engine.py with fakes: match + autofill, needs_confirm card + Inject, blocked service notice once, wrong host ignored, non-approved domain ignored, one fill per arm/window/service, Income Tax two-page wait, assist lock, idle when no arm. Run the O0-1 SCA tests too."
+  },
+  {
+   "wp": "O3-4",
+   "phase": 3,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "S",
+   "deps": [
+    "O2-3",
+    "O3-1"
+   ],
+   "what": "SCC card through the OS MECP card",
+   "focus": "Read docs/os_assist/os-assist-blueprint.md §4.5 and main.py ~L1356 (SccCard wiring) and automation.send_scc_card / update_scc_card / close_scc_card. In OS mode route open/update/close to ui/os_assist/mecp_card.py in SCC mode, docked to att.hwnd (the attempt's browser window); extension mode unchanged. Keep every SccCard callback (on_worked, on_none, on_closed, on_copy, on_asking) working. Run every tests/test_scc_*.py; add tests for the routing."
+  },
+  {
+   "wp": "O3-R",
+   "phase": 3,
+   "model": "opus",
+   "kind": "review",
+   "size": "S",
+   "deps": [
+    "O3-2",
+    "O3-3",
+    "O3-4"
+   ],
+   "what": "Review phase 3 (wiring)",
+   "focus": "Review the OS-mode paths end to end against docs/os_assist/os-assist-blueprint.md §0 and §4.6–4.7: extension mode byte-for-byte unchanged in behaviour; no password reaches the extension, a log, or an arm in OS mode; host check before every write; SCA can't fill twice (extension SCA off in OS mode); switching engines live works; no UIA work when no card and no arm. Fix small issues with tests; record bigger ones as decisions or checks."
+  },
+  {
+   "wp": "O4-1",
+   "phase": 4,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "O3-R"
+   ],
+   "what": "Full suite, leak and idle checks",
+   "focus": "Run the full suite with the live T/F/S plugin exactly as CLAUDE.md says (background, log file, --basetemp inside the worktree). Fix failures caused by this project; list pre-existing ones. Add tests/test_os_assist_no_leak.py: drive SMTI, MECP and SCA OS paths with fake UIA and the fictional passwords from the spike, capture stdout/stderr and every logging record, and assert none of the passwords appear. Add an idle test: with no card and no arm the worker runs no UIA job for 5 s."
+  },
+  {
+   "wp": "O4-R",
+   "phase": 4,
+   "model": "opus",
+   "kind": "review",
+   "size": "S",
+   "deps": [
+    "O4-1"
+   ],
+   "what": "Final review + merge-readiness note",
+   "focus": "Read docs/os_assist/os-assist-blueprint.md fully and every §9 note. Check each §0 rule against the code. Write docs/os_assist/merge-readiness.md: what was built, files, tests, known gaps, how to switch engines. Add every owner check of docs/os_assist/os-assist-blueprint.md §7 with `../APP/venv/Scripts/python.exe tools/os_assist.py check-add O4-R --text \"...\"` (one per check). Do not merge."
+  }
+ ]
+}

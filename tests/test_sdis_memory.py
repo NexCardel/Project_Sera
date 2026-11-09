@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT / "tools" / "pre_dev" / "class_diff"))
 
 import keys  # noqa: E402
 import link_map  # noqa: E402
-import memory  # noqa: E402
+from core.sdis import memory  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

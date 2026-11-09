@@ -15,6 +15,12 @@ import re
 SDIS_INFO_METHOD = "SGT_sdis_info"
 NOT_CARRIER_SQL = "(capture_method IS NULL OR capture_method != 'SGT_sdis_info')"
 
+# VSDC247-V: independent flagged rows for SGT-missed filings (plan section 6.5)
+VSDC247_VERIFY_METHOD = "VSDC247_verify"
+NOT_VSDC247_VERIFY_SQL = "(capture_method IS NULL OR capture_method != 'VSDC247_verify')"
+NOT_CARRIER_OR_FLAGGED_SQL = "(capture_method IS NULL OR (capture_method != 'SGT_sdis_info' AND capture_method != 'VSDC247_verify'))"
+
+
 
 def compute_dataset_key(portal: str, identifier: str, form_type: str, period_label: str,
                         preference: str = "") -> str:

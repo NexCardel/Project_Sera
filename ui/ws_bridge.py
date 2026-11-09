@@ -38,14 +38,17 @@ scheme itself cannot be forged by web content), so it is a strict improvement ov
 """
 
 import json
+import time
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QObject, Signal, Qt, QThread
+from PySide6.QtCore import QObject, Signal, Qt, QThread, QTimer
 from PySide6.QtNetwork import QHostAddress
 from PySide6.QtWebSockets import QWebSocketServer, QWebSocket
 
 WS_PORTS = (48765, 48766, 48767, 48768)  # tried in order; all below Windows' dynamic port range
+_BIND_RETRY_MS = 5000
+_BIND_RETRY_TRIES = 24                   # 2 minutes in all
 
 CHROME_ORIGIN_PREFIX = "chrome-extension://"
 EDGE_ORIGIN_PREFIX = "chrome-extension://"  # Edge is Chromium; same scheme, same id
@@ -87,6 +90,85 @@ def _load_chrome_extension_id(manifest_path: Path) -> Optional[str]:
         return None
 
 
+def _as_positive_int(value) -> Optional[int]:
+    """A positive integer id, or None. Accepts an int or a numeric string only."""
+    if isinstance(value, bool):
+        return None
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+def _clean_sck_password(msg: dict) -> Optional[dict]:
+    """Validate an SCK save message before any handler touches it.
+
+    The password is the only sensitive value here, so it is bounded (1-256 chars) and kept in
+    local memory only; callers must never log or store the returned dict. Everything else is an
+    id or a short label, bounded so a malformed page message cannot arrive as a huge string.
+    """
+    service_id = _as_positive_int(msg.get("service_id"))
+    if service_id is None:
+        return None
+    password = msg.get("password")
+    if not isinstance(password, str) or not 1 <= len(password) <= 256:
+        return None
+    client_id = msg.get("client_id")
+    if client_id in (None, ""):
+        client_id = None
+    else:
+        client_id = _as_positive_int(client_id)
+        if client_id is None:
+            return None
+    arm_id = msg.get("arm_id") or ""
+    portal = msg.get("portal") or ""
+    if not isinstance(arm_id, str) or len(arm_id) > 64:
+        return None
+    if not isinstance(portal, str) or len(portal) > 100:
+        return None
+    return {
+        "type": "sck_save_password",
+        "service_id": service_id,
+        "client_id": client_id,
+        "arm_id": arm_id.strip(),
+        "portal": portal.strip(),
+        "password": password,
+    }
+
+
+def _clean_sck_candidate(msg: dict) -> Optional[dict]:
+    """Validate the candidate the card filled, before the desktop holds it in memory.
+
+    Same bounds as ``_clean_sck_password``: the password is 1-256 chars and lives only in the
+    returned dict (the caller stores it in a private in-memory map, never in a setting, log or
+    audit line). A malformed page message is dropped whole.
+    """
+    service_id = _as_positive_int(msg.get("service_id"))
+    if service_id is None:
+        return None
+    password = msg.get("password")
+    if not isinstance(password, str) or not 1 <= len(password) <= 256:
+        return None
+    client_id = msg.get("client_id")
+    if client_id in (None, ""):
+        client_id = None
+    else:
+        client_id = _as_positive_int(client_id)
+        if client_id is None:
+            return None
+    portal = msg.get("portal") or ""
+    if not isinstance(portal, str) or len(portal) > 100:
+        return None
+    return {
+        "type": "sck_candidate",
+        "service_id": service_id,
+        "client_id": client_id,
+        "portal": portal.strip(),
+        "password": password,
+    }
+
+
 class WSBridge(QObject):
     # Fed only by core/vsdc's filing_captured signal (SGT/VSDC desktop capture), connected
     # directly to main.py's _handle_extension_result - not by anything over this websocket.
@@ -101,6 +183,21 @@ class WSBridge(QObject):
     scc_row_worked_received = Signal(dict)
     scc_card_closed_received = Signal(dict)     # {attempt_id}
     scc_row_none_received = Signal(dict)        # {attempt_id}: "None - I typed my own" (step 5)
+    # SCK: the new password staff typed into the portal card. Carries the password - the handler
+    # must never log, print or store the message.
+    sck_save_password_received = Signal(dict)
+    # SCK: the card closed itself (staff pressed x, or the service's dashboard page was reached).
+    sck_widget_closed_received = Signal(dict)   # {service_id, reason}
+    # SCK: staff pressed the ✎ edit button on SMTI / MECP / SCA widget to update a
+    # password without a detected failure.  {service_id, client_id, portal}
+    sck_edit_requested = Signal(dict)
+    # SCK: the card's Fill & Test succeeded. The browser hands the candidate password to the
+    # desktop (memory only) so a login that succeeds after the page navigates can still be saved.
+    # Carries the password - the handler must never log, print or store the message.
+    sck_candidate_received = Signal(dict)
+    # SCK: internal only - one page outcome from the watcher (SCC-U's thread), marshalled to the
+    # Qt thread. (service_id, kind) where kind is worked / wrong_password / locked.
+    sck_outcome_received = Signal(object, str)
     extension_settings_updated_received = Signal(dict)
 
     # automation.py calls broadcast()/send_first() from plain background threads (autofill
@@ -138,6 +235,7 @@ class WSBridge(QObject):
         # sends carries one); the socket itself never goes into a message dict, so nothing here
         # risks being json.dumps()'d by a signal handler that logs/echoes the message it received.
         self._pending_replies: dict[str, QWebSocket] = {}
+        self._last_sca_arm: Optional[dict] = None
         # The server may be started before the app has connected its signal handlers; messages
         # received in that window are held here and replayed by mark_ready().
         self._ready = False
@@ -187,14 +285,34 @@ class WSBridge(QObject):
         self._server = QWebSocketServer("Sera Bridge", QWebSocketServer.SslMode.NonSecureMode, self)
         self._server.newConnection.connect(self._on_new_connection)
 
+        if not self._try_listen():
+            # At logon another program (or this app's previous run) can still hold the ports for
+            # a few seconds; keep trying instead of leaving the extension offline until a restart.
+            print(f"[WSBridge] Could not bind any of {WS_PORTS} - will retry every "
+                  f"{_BIND_RETRY_MS // 1000} s for {_BIND_RETRY_TRIES * _BIND_RETRY_MS // 60000} min.")
+            self._bind_attempts_left = _BIND_RETRY_TRIES
+            QTimer.singleShot(_BIND_RETRY_MS, self._retry_listen)
+
+    def _try_listen(self) -> bool:
+        if self._server is None:
+            return False
         for port in WS_PORTS:
             if self._server.listen(QHostAddress.LocalHost, port):
                 self._bound_port = port
-                break
-        else:
-            print(f"[WSBridge] Could not bind any of {WS_PORTS} - extension bridge is offline.")
+                print(f"[WSBridge] Listening on 127.0.0.1:{self._bound_port}")
+                return True
+        return False
+
+    def _retry_listen(self):
+        if self._server is None or self._bound_port is not None:
+            return    # stopped, or already bound
+        if self._try_listen():
             return
-        print(f"[WSBridge] Listening on 127.0.0.1:{self._bound_port}")
+        self._bind_attempts_left -= 1
+        if self._bind_attempts_left > 0:
+            QTimer.singleShot(_BIND_RETRY_MS, self._retry_listen)
+        else:
+            print(f"[WSBridge] Gave up binding {WS_PORTS} - extension bridge is offline.")
 
 
     def stop(self):
@@ -272,6 +390,7 @@ class WSBridge(QObject):
             self._kinds[sock] = self._browser_kind(sock, origin)
             sock.textMessageReceived.connect(lambda text, s=sock: self._on_text_message(s, text))
             sock.disconnected.connect(lambda s=sock: self._on_disconnected(s))
+            self._replay_sca_arm(sock)
 
     @staticmethod
     def _browser_kind(sock: QWebSocket, origin: str) -> str:
@@ -339,6 +458,14 @@ class WSBridge(QObject):
 
     def dispatch(self, msg: dict):
         mtype = msg.get("type")
+        if isinstance(mtype, str) and mtype.startswith("SCA_"):
+            try:                    # logs/sca.log: ids and states only, never a UID or password
+                from core.sca import sca_log
+                fields = ("command_id", "arm_id", "state", "action", "service_id", "result", "reason", "page_host")
+                sca_log.note("browser -> " + mtype + " " + " ".join(
+                    f"{k}={str(msg.get(k))[:60]}" for k in fields if msg.get(k) not in (None, "")))
+            except Exception:
+                pass
         if mtype == "SCA_ACK":
             cmd_id = msg.get("command_id")
             if cmd_id:
@@ -364,6 +491,28 @@ class WSBridge(QObject):
             attempt_id = msg.get("attempt_id")
             if isinstance(attempt_id, str) and 0 < len(attempt_id) <= 64:
                 self.scc_row_none_received.emit({"type": mtype, "attempt_id": attempt_id})
+        elif mtype == "sck_save_password":
+            clean = _clean_sck_password(msg)
+            if clean is not None:
+                self.sck_save_password_received.emit(clean)
+        elif mtype in ("sck_dismissed", "sck_widget_done"):
+            service_id = _as_positive_int(msg.get("service_id"))
+            if service_id is not None:
+                self.sck_widget_closed_received.emit({
+                    "type": mtype, "service_id": service_id,
+                    "reason": "dismissed" if mtype == "sck_dismissed" else "dashboard"})
+        elif mtype == "sck_edit_request":
+            service_id = _as_positive_int(msg.get("service_id"))
+            client_id  = _as_positive_int(msg.get("client_id"))
+            portal = msg.get("portal", "")
+            if service_id is not None and isinstance(portal, str) and len(portal) <= 100:
+                self.sck_edit_requested.emit({
+                    "type": mtype, "service_id": service_id,
+                    "client_id": client_id, "portal": portal.strip()})
+        elif mtype == "sck_candidate":
+            clean = _clean_sck_candidate(msg)
+            if clean is not None:
+                self.sck_candidate_received.emit(clean)
         elif mtype == "extension_settings_updated":
             self.extension_settings_updated_received.emit(msg)
         elif mtype in ("request_settings", "get_settings"):
@@ -372,6 +521,35 @@ class WSBridge(QObject):
         return None
 
     # ------------------------------------------------------------------ sending
+
+    def _remember_sca_arm(self, payload: dict):
+        """Cache (or clear) the live SCA arm for _replay_sca_arm(). Runs on the Qt thread."""
+        mtype = payload.get("type")
+        if mtype == "SCA_ARM_REQUEST":
+            arm = payload.get("arm")
+            expires_at = arm.get("expires_at") if isinstance(arm, dict) else None
+            live = (isinstance(expires_at, (int, float))
+                    and not isinstance(expires_at, bool)
+                    and expires_at > time.time() * 1000)
+            self._last_sca_arm = payload if live else None
+        elif mtype == "SCA_DISARM_REQUEST":
+            self._last_sca_arm = None
+
+    def _replay_sca_arm(self, sock: QWebSocket):
+        """Arms a browser that connects after arm_sca() broadcast (its service worker may have
+        been asleep while another browser acknowledged the arm and stopped the retry loop)."""
+        payload = self._last_sca_arm
+        if not payload:
+            return
+        arm = payload.get("arm")
+        try:
+            expires_at = float((arm or {}).get("expires_at") or 0)
+        except (TypeError, ValueError):
+            expires_at = 0
+        if expires_at <= time.time() * 1000:
+            self._last_sca_arm = None
+            return
+        self._send(sock, payload)
 
     def _send(self, sock: QWebSocket, payload: dict):
         try:
@@ -410,6 +588,7 @@ class WSBridge(QObject):
         every QWebSocket in self._sockets belongs to the Qt thread - so the actual send is
         marshalled there via _call_on_qt_thread if this isn't already that thread."""
         def _do():
+            self._remember_sca_arm(payload)
             sent = 0
             for sock in list(self._sockets):
                 self._send(sock, payload)

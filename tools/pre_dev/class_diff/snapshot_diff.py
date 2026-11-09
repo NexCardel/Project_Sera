@@ -43,11 +43,13 @@ ONE complete page (AnchorPage). key_probe.py hands each kept snapshot to it whil
     each later    compared with the snapshot before it (alignment: shape + text, align.py):
     snapshot        paired      the same node - its text is updated, its place stays
                     disappeared it leaves the anchor page (the live page)
-                    returned    a node that had left comes back: attached again at the END
-                    new         never seen: attached at the END of the anchor page
+                    returned    a node that had left comes back: it keeps its place
+                    new         never seen: attached (origin "attached") right after the node before
+                                it in that snapshot - where the page shows it, inside its own parent
     comp page     when the capture stops: every node that was ever on the anchor page, once, in
-                  the order it FIRST appeared (anchor nodes, then each batch of new ones), its
-                  latest text, every value seen, and whether it was still there at the end.
+                  PAGE order (until 2026-10-16 attached nodes went to the end, which split a late
+                  card from its siblings and broke the arrangement's leaf order), its latest text,
+                  every value seen, and whether it was still there at the end.
 
 compare.py --comp compares one client's comp page with another client's of the same link.
 Not handled yet: variable list rows / cards (a separate mechanism will come).
@@ -198,6 +200,7 @@ class AnchorPage:
         self.settled = False
         self.settled_at = ""
         self.anchor_order: List[int] = []
+        self.order: List[int] = []                # the comp page's order: page order, attached nodes in place
         self.entries: List[Dict[str, Any]] = []
         self.live: List[int] = []                 # the anchor page now: anchor order, then attached
         self.prev: List[Dict[str, Any]] = []      # the previous snapshot (flat) ...
@@ -314,11 +317,21 @@ class AnchorPage:
             self.anchor_order = list(ids) + [k for k in self.anchor_order if k not in now]
             for i, e in enumerate(flat):
                 self.entries[ids[i]]["parent0"] = ids[e["parent"]] if e["parent"] >= 0 else -1
+            self.order = list(self.anchor_order)
             if self.anchor_mode == "first" or (not first and not new):
                 self.settled, self.settled_at = True, stamp
         else:
-            # Returned and new nodes go to the END of the anchor page, in this snapshot's page order.
+            # Returned and new nodes join the live page after the anchor nodes still there.
             self.live = [k for k in self.live if k in now] + [ids[i] for i in sorted(returned + new)]
+            # In the comp page's ORDER a new node goes right after the node before it in this snapshot,
+            # so it sits where the page shows it (a card that loaded late sits beside the other cards,
+            # inside its own parent), not at the end. A returned node keeps the place it had.
+            for i in new:
+                k = ids[i]
+                if i == 0:
+                    self.order.insert(0, k)
+                else:
+                    self.order.insert(self.order.index(ids[i - 1]) + 1, k)
         changed = 0
         for i, e in enumerate(flat):
             ent = self.entries[ids[i]]
@@ -340,12 +353,39 @@ class AnchorPage:
         self.log.append(row)
         return row
 
+    def _tree_order(self) -> List[int]:
+        """self.order walked as a tree: every entry under its own parent (parent0), siblings in their
+        self.order sequence, so a subtree is never split. self.order alone can split one: when a new
+        card's node is paired with an older node elsewhere on the page (alignment pairs by shape), the
+        card's following nodes would be placed after that older node, away from the rest of the card."""
+        pos = {k: n for n, k in enumerate(self.order)}
+        kids: Dict[int, List[int]] = {}
+        roots: List[int] = []
+        for k in self.order:
+            p = self.entries[k]["parent0"]
+            if p >= 0 and p in pos:
+                kids.setdefault(p, []).append(k)
+            else:
+                roots.append(k)
+        out: List[int] = []
+        seen: set = set()
+        stack = list(reversed(roots))
+        while stack:
+            k = stack.pop()
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append(k)
+            stack.extend(reversed(kids.get(k, [])))
+        out += [k for k in self.order if k not in seen]      # a parent cycle (never expected): kept, at the end
+        return out
+
     def comp_flat(self) -> List[Dict[str, Any]]:
         """The comp page in keys.flatten()'s shape (key, parent index, depth, cls, type, text, node)
         plus values, first, last, origin, present (still on the page at the end), left, came_back.
-        An attached node keeps its real parent, which may sit earlier (in the anchor part)."""
+        Page order: an attached node sits where its snapshot showed it, inside its own parent."""
         live = set(self.live)
-        order = self.anchor_order + [k for k in range(len(self.entries)) if self.entries[k]["origin"] == ATTACHED]
+        order = self._tree_order()
         pos = {k: n for n, k in enumerate(order)}
         depth: Dict[int, int] = {}
 

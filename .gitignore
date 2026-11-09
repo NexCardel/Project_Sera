@@ -128,3 +128,12 @@ Mockups/overhaul/logs/
 !Mockups/overhaul/ui-overhaul-questions.csv
 # Worker pytest --basetemp paths whose backslashes got stripped (land in the repo root)
 /Users*AppDataLocalTemp*/
+tmp_pytest/
+# SGT never-miss tracker (same machinery, task status only, no client data)
+!docs/sgt_never_miss/sgt-never-miss-status.csv
+!docs/sgt_never_miss/sgt-never-miss-runs.csv
+!docs/sgt_never_miss/sgt-never-miss-decisions.csv
+!docs/sgt_never_miss/sgt-never-miss-checks.csv
+!docs/sgt_never_miss/sgt-never-miss-questions.csv
+.sgt-never-miss.lock
+logs/sgt-never-miss/

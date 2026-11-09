@@ -1,0 +1,595 @@
+"""
+core/vsdc/vsdc_capture.py - the capture loop: SGT's path, out of the router
+============================================================================
+SGT never-miss blueprint sections 4.4, 4.7, 4.8 and WP4, with the review corrections R2, R7 and
+R10. WP10: visible browser windows that are not in front are watched too, each every BG_TICK_SEC,
+by the same rules as the one in front (their own scope gate, lane and reads; ctx.background).
+
+Before: SGT's page reads ran inside the router's tick, behind the router's own address-bar read
+on the capture thread, and a read that took longer than 3 s was thrown away. Now, each tick:
+
+  1. Every read the reader (core/vsdc/vsdc_reader) finished since the last tick is taken: its URL
+     and tab update what the loop knows of that window; a clean page read is handed to SGT.
+  2. For each watched window (core/vsdc/vsdc_windows): the scope gate first. The URL is the one
+     the window's last read reported (Document first, address bar second), if it is younger than
+     URL_FRESH_SEC; the reader's scope worker is asked for a URL-only read often enough to keep it
+     so, even while a heavy page read runs (R2). Without a fresh URL, the title grace as before
+     (SCOPE_GRACE_SEC, never refreshed by a title). A window never verified on a portal is not
+     read and not even screenshotted.
+  3. In scope: one screenshot, one frame signature (core/vsdc/vsdc_gate). A page read is asked for
+     when the URL changed (then BURST_READS reads), the frame changed by GATE_MIN_CELLS or more,
+     REREAD_AFTER_SEC passed, a torn read needs asking again, or SGT-I / SCC-U want one - spaced by
+     the last read's own duration, and never while the window's previous read is unanswered.
+
+The capture thread never waits on the browser: Win32 calls and a screenshot only. The crosshair
+engines keep the router's own URL read (R7); this loop is used only while SGT is on.
+Never logs page text, values or links outside the portals (the heartbeat gets counts).
+"""
+
+import ctypes
+import itertools
+import time
+from collections import deque
+from dataclasses import dataclass, field
+from typing import Any, Callable, Deque, Dict, List, Optional, Protocol, Tuple
+
+from . import vsdc_gate, vsdc_scope, vsdc_windows
+from .vsdc_ocr_lane import OcrLane
+from .vsdc_reader import (REASON_SCOPE, RESULT_MAX_AGE_SEC, URL_FRESH_SEC, WEDGE_SEC, PageReader, ReadContext,
+                          ReadResult)
+from .vsdc_windows import WindowInfo
+
+FRAME_TICK_SEC = 0.35         # R10 / D7: the fallback until WP0's gate probe measures a tick under 15 ms
+FRAME_TICK_FAST_SEC = 0.2     # D7's frame tick, once that is measured
+REREAD_AFTER_SEC = 5.0        # a still page is read again this often (D5)
+MIN_READ_GAP_SEC = 0.35
+READ_GAP_FACTOR = 1.0         # a 500 ms page is read at most every ~1 s: 50 % duty per lane (D5)
+BURST_READS = 3               # after a URL change: 3 reads, BURST_GAP_SEC apart, whatever the frame does
+BURST_GAP_SEC = 0.3
+TORN_RETRIES = 3              # a torn read is asked again at most this often per page visit (R1)
+REASON_BLIND_RETRY = "blind-retry"   # SGT's absorb asks for it (sgt_shadow.BLIND_RETRIES, then OCR)
+SCOPE_POLL_SEC = 1.0          # a URL-only read is asked once the window's URL is this old (< URL_FRESH_SEC)
+SCOPE_GRACE_SEC = 8.0         # the router's _SCOPE_GRACE_SEC: no readable URL, portal title, verified this recently
+STATE_KEEP_SEC = 600.0        # a window not watched for this long is forgotten (its SGT sessions are not ended)
+PRUNE_EVERY_SEC = 5.0
+OCR_DUE_KEEP_SEC = 3.0        # an OCR scan the lane refused (rate limit) is asked again on later ticks this long
+OCR_ARM_SEC = 1.0             # a big picture change can still become a flash this long, once a read is running
+OCR_VERIFY_MAX_SEC = 4.0     # an OCR result whose tab no later read confirmed within this long is dropped
+URGENT_FRAME_CELLS = 64       # B4: cells changed (32x32) needed to trigger an urgent post-slow-read (≈6 % of screen)
+URGENT_COOLDOWN_SEC = 2.0     # B4: at most one urgent read per window in this window
+
+_seq = itertools.count(1)     # ReadContext.seq: unique per process run, shared by every loop
+
+
+class Platform(Protocol):
+    """Everything the loop asks of Windows, so it can be tested without it."""
+    def foreground(self) -> int: ...
+    def windows(self, foreground: int) -> List[WindowInfo]: ...
+    def screenshot(self, hwnd: int) -> Any: ...
+    def is_window(self, hwnd: int) -> bool: ...
+    def now(self) -> float: ...
+
+
+class WinPlatform:
+    """The real one: Win32 and VSDCOcrEngine.capture_window_image (PrintWindow fallback included)."""
+
+    def __init__(self, ocr: Any):
+        self._ocr = ocr
+
+    def foreground(self) -> int:
+        return int(ctypes.windll.user32.GetForegroundWindow() or 0)
+
+    def windows(self, foreground: int) -> List[WindowInfo]:
+        return vsdc_windows.browser_windows(foreground)
+
+    def screenshot(self, hwnd: int) -> Any:
+        return self._ocr.capture_window_image(hwnd)
+
+    def is_window(self, hwnd: int) -> bool:
+        return bool(ctypes.windll.user32.IsWindow(hwnd))
+
+    def now(self) -> float:
+        return time.monotonic()
+
+
+@dataclass
+class WindowState:
+    hwnd: int
+    tab: Optional[str] = None
+    url: str = ""                       # the page's URL as the last read reported it ("" = none found)
+    url_source: str = ""                # "document" | "address_bar" | ""
+    url_at: float = 0.0                 # when that read finished (0 = no read yet)
+    portal: str = ""
+    scope_verified_at: float = 0.0
+    scope_asked_at: float = 0.0         # a URL-only read asked and not answered yet (0 = none)
+    last_sig: Optional[bytes] = None    # the frame when the last page read was asked
+    prev_sig: Optional[bytes] = None    # the frame of the previous tick (the flash trigger compares with it)
+    green: tuple = ()                   # the success-coloured boxes of the previous tick's frame
+    ocr_due: str = ""                   # an OCR scan was due and the lane refused it: its reason
+    ocr_due_at: float = 0.0
+    flash_armed_at: float = 0.0         # the last tick the picture changed by FLASH_MIN_CELLS or more (0 = none)
+    proofs: Deque[Tuple[float, Optional[str]]] = field(default_factory=lambda: deque(maxlen=8))
+    # (started_at, tab) of the last clean reads: an OCR picture is attributed only once a read that began after it
+    # shows the same tab in front (the loop's own idea of the tab can be a second old when the picture is taken)
+    last_read_finished: float = 0.0
+    last_read_ms: float = 0.0
+    last_request_at: float = 0.0
+    burst_left: int = 0
+    torn_retries: int = 0
+    blind_retries: int = 0              # WP5 / WP8
+    retry: str = ""                     # "torn-retry" waiting to be asked
+    wanted: str = ""                    # a read was due but could not be asked yet: its reason
+    wanted_urgent: bool = False         # B4: the waiting reason qualifies for an urgent (fast-gap) read
+    frame_cells: int = 0               # B4: cells changed at the last frame check (0..1024)
+    last_urgent_at: float = 0.0        # B4: when the last urgent read was asked for this window
+    pending_seq: int = 0                # the page read asked and not answered yet (0 = none)
+    pending_at: float = 0.0
+    frame: Any = None                   # the screenshot taken when frame_seq was asked (OCR of a blind page)
+    frame_seq: int = 0
+    last_bg_tick: float = 0.0           # WP10
+    last_seen: float = 0.0
+
+
+def _title_portal(title_lower: str) -> str:
+    """The router's dialect guess from a window title ("" = it says nothing)."""
+    if "gst" in title_lower or "goods and services" in title_lower:
+        return "GST Portal"
+    if "income tax" in title_lower or "e-filing" in title_lower or "itr" in title_lower:
+        return "Income Tax"
+    return ""
+
+
+class CaptureLoop:
+    """One per router while SGT is on. tick() runs on the capture thread and never raises."""
+
+    def __init__(self, platform: Platform, reader: PageReader, sgt: Any, ocr: Any, health: Any,
+                 scope: Any = vsdc_scope, clock: Optional[Callable[[], float]] = None,
+                 on_out_of_scope: Optional[Callable[[int, str], None]] = None,
+                 ocr_lane: Optional[OcrLane] = None):
+        """clock must be the reader's clock (a ReadContext's asked_at is checked against it).
+        on_out_of_scope(hwnd, url): a window's own URL is off the portals (the router's tripwire).
+        ocr_lane: where flash / green / paused scans go (default: a lane over `ocr`)."""
+        self._platform = platform
+        self._reader = reader
+        self._sgt = sgt
+        self._ocr = ocr
+        self._clock = clock or platform.now
+        self._ocr_lane = ocr_lane if ocr_lane is not None else (OcrLane(ocr, self._clock) if ocr is not None else None)
+        self._health = health
+        self._scope = scope
+        self._on_out_of_scope = on_out_of_scope
+        self._states: Dict[int, WindowState] = {}
+        self._held_ocr: List[ReadResult] = []   # finished OCR scans waiting for a read that confirms their tab
+        self._ended_seq = 0                 # results asked at or before this were ended by end_all
+        self._pruned_at = 0.0
+        self._diag: Dict[str, Any] = {}
+        self._counts = {"asked": 0, "absorbed": 0, "torn": 0, "errors": 0, "ocr_asked": 0, "ocr_absorbed": 0,
+                       "ocr_dropped": 0}
+
+    # ---- the tick ----------------------------------------------------------------------------
+
+    def tick(self) -> None:
+        now = self._clock()
+        self._diag = {}
+        for r in self._reader.results():
+            try:
+                self._take(r)
+            except Exception as e:
+                self._counts["errors"] += 1
+                self._diag["error"] = type(e).__name__
+        if self._ocr_lane is not None:
+            try:
+                self._held_ocr.extend(self._ocr_lane.results())
+                self._release_ocr(now)
+            except Exception as e:
+                self._counts["errors"] += 1
+                self._diag["error"] = type(e).__name__
+        foreground = self._platform.foreground()
+        windows = self._platform.windows(foreground)
+        if all(w.background for w in windows):
+            self._diag["front"] = "none" if not foreground else "other"
+        if any(w.background for w in windows):
+            self._diag["bg"] = sum(1 for w in windows if w.background)
+        for w in windows:
+            ws = self._states.get(w.hwnd)
+            if ws is None:
+                ws = self._states[w.hwnd] = WindowState(hwnd=w.hwnd)
+            if w.background:                # WP10: a window not in front is looked at every BG_TICK_SEC
+                if now - ws.last_bg_tick < vsdc_windows.BG_TICK_SEC:
+                    continue
+                ws.last_bg_tick = now
+            ws.last_seen = now
+            try:
+                self._window(w, ws, now)
+            except Exception as e:
+                self._counts["errors"] += 1
+                self._diag["error"] = type(e).__name__
+        if now - self._pruned_at >= PRUNE_EVERY_SEC:
+            self._pruned_at = now
+            self._prune(now, {w.hwnd for w in windows})
+
+    def end_all(self, reason: str) -> None:
+        """SGT switched off or to another mode, or shutdown: every session ends, every lane closes,
+        and a read asked before now is never absorbed."""
+        self._ended_seq = next(_seq)
+        for hwnd in list(self._states):
+            self._reader.close_lane(hwnd)
+        self._states.clear()
+        if self._sgt is not None:
+            self._sgt.end_all(reason)
+
+    def close(self) -> None:
+        """The loop is no longer used: the reader's threads are let go (wedged ones are daemons)."""
+        try:
+            self._reader.close()
+        except Exception:
+            pass
+        if self._ocr_lane is not None:
+            self._ocr_lane.close()
+
+    def paused(self) -> bool:
+        """UIA reads paused after repeated hangs (health state uia-paused)."""
+        try:
+            return self._reader.paused()
+        except Exception:
+            return False
+
+    def diag(self) -> Dict[str, Any]:
+        """For the heartbeat: this tick's window (exe, scope, portal; the page only when in scope)
+        and the loop's counts since the last call."""
+        out = dict(self._diag)
+        out.update({f"loop_{k}": v for k, v in self._counts.items() if v})
+        self._counts = dict.fromkeys(self._counts, 0)
+        return out
+
+    def health_extra(self) -> Dict[str, Any]:
+        """The reader's numbers for the health record (vsdc_health.CaptureHealth)."""
+        st = self._reader.stats()
+        return {"lanes": st.get("lanes", 0), "abandoned": st.get("abandoned", 0),
+                "stuck": st.get("stuck", 0), "late": st.get("late", 0)}
+
+    # ---- one result ----------------------------------------------------------------------------
+
+    def _take(self, r: ReadResult) -> None:
+        hwnd = r.ctx.hwnd
+        if r.ctx.seq <= self._ended_seq:
+            return
+        ws = self._states.get(hwnd)
+        if r.error == "no-window":
+            if not self._platform.is_window(hwnd):
+                self._window_gone(hwnd)
+            return
+        if ws is None:
+            return
+        frame = None
+        if r.url_only:
+            if ws.scope_asked_at and r.ctx.asked_at >= ws.scope_asked_at:
+                ws.scope_asked_at = 0.0
+        else:
+            self._answered()
+            if r.ctx.seq == ws.frame_seq:
+                frame, ws.frame, ws.frame_seq = ws.frame, None, 0
+            if r.ctx.seq >= ws.pending_seq:
+                ws.pending_seq, ws.pending_at = 0, 0.0
+        if r.error:                         # timeout-abandoned, uia-init, exception: never absorbed
+            self._counts["errors"] += 1
+            if not r.url_only:
+                ws.wanted = ws.wanted or "frame"
+            return
+        if not r.torn:
+            ws.proofs.append((r.started_at, r.tab_after))
+        newest = r.finished_at >= ws.url_at
+        if newest:
+            if r.torn == "tab":
+                # A1 skips the post-read locate on a tab switch, so r.url is the old tab's URL.
+                # Learn the new tab, but keep the old URL until the torn retry reads the new tab.
+                ws.tab = r.tab_after
+            else:
+                self._learn_url(ws, r)
+        if r.url_only:
+            return
+        ws.last_read_finished, ws.last_read_ms = r.finished_at, r.ms
+        if r.torn:                          # R1: both kinds are dropped and asked again
+            self._counts["torn"] += 1
+            ws.torn_retries += 1
+            if ws.torn_retries <= TORN_RETRIES:
+                ws.retry = "torn-retry"
+            return
+        if not r.scope_rule:                # nothing on the page was in scope: nothing was read
+            return
+        self._absorb(r, ws, frame, newest)
+
+    def _release_ocr(self, now: float) -> None:
+        """A finished OCR scan goes to SGT as it is: the session that was in view when the picture was
+        taken owns it, and the policy for source "ocr" (add-only, R6) decides what it may change. It
+        says nothing of the window's URL or tab, so the loop learns nothing from it - and, unlike a page
+        read, nothing brackets the picture in tab time. The loop's idea of the tab may be a second old
+        (a switch just happened: the picture is another client's page), so the scan waits for the first
+        clean read that began after the picture; it is absorbed when that read shows the same tab in
+        front, dropped when it shows another (or none comes within OCR_VERIFY_MAX_SEC)."""
+        keep: List[ReadResult] = []
+        for r in self._held_ocr:
+            ws = self._states.get(r.ctx.hwnd)
+            if r.ctx.seq <= self._ended_seq or ws is None or self._sgt is None:
+                continue
+            verdict = next((tab == r.ctx.tab for started, tab in ws.proofs if started >= r.ctx.asked_at), None)
+            if verdict is None and now - r.ctx.asked_at <= OCR_VERIFY_MAX_SEC:
+                keep.append(r)
+            elif verdict:
+                self._counts["ocr_absorbed"] += 1
+                self._health_reading(r.ctx.hwnd)
+                self._sgt.absorb(r, now=now)
+            else:
+                self._counts["ocr_dropped"] += 1
+        self._held_ocr = keep
+
+    def _answered(self) -> None:
+        try:
+            self._health.answered()
+        except Exception:
+            pass
+
+    def _health_reading(self, hwnd: int) -> None:
+        """SGT reports the read it absorbs to health without a window: say which one it is (with windows not
+        in front, the last window of a tick is not always the one read)."""
+        reading = getattr(self._health, "reading", None)
+        if reading is not None:
+            try:
+                reading(hwnd)
+            except Exception:
+                pass
+
+    def _learn_url(self, ws: WindowState, r: ReadResult) -> None:
+        url = r.url
+        ws.url_at = r.finished_at
+        ws.url_source = r.scope_rule
+        ws.tab = r.tab_after
+        if url != ws.url:
+            ws.url = url
+            ws.torn_retries = ws.blind_retries = 0
+            ws.retry = ""
+            ws.wanted_urgent = False        # B4: a URL change resets any waiting urgent flag
+            if url and self._scope.is_in_scope_url(url):
+                ws.burst_left = BURST_READS
+
+    def _absorb(self, r: ReadResult, ws: WindowState, frame: Any, newest: bool) -> None:
+        """SGT takes the read into the session that asked for it (blueprint 6.1). When this read is
+        the newest word on the window's page, SGT's bookkeeping sees that page first, so a logout or
+        login page reached during the read ends the session before its text could land there (R1)."""
+        if self._sgt is None:
+            return
+        if newest:
+            url = self._scope.sanitize_page_url(r.url)
+            portal = self._scope.portal_for_url(r.url) or r.ctx.portal
+            self._sgt.observe_window(r.ctx.hwnd, r.tab_after, portal, url, r.ctx.title)
+        self._counts["absorbed"] += 1
+        self._health_reading(r.ctx.hwnd)
+        out = self._sgt.absorb(r, frame=frame, ocr=self._ocr, now=self._clock(), blind_retries=ws.blind_retries)
+        if isinstance(out, str) and out == REASON_BLIND_RETRY:
+            ws.blind_retries += 1           # a page that read fine before came back blind: again, 0.3 s on
+            ws.retry = ws.retry or REASON_BLIND_RETRY
+        else:
+            from core.sgt.sgt_shadow import is_blind
+            if not is_blind(list(r.lines)):
+                ws.blind_retries = 0
+
+    # ---- one window ----------------------------------------------------------------------------
+
+    def _window(self, w: WindowInfo, ws: WindowState, now: float) -> None:
+        title_lower = w.title.lower()
+        from .vsdc_router import PORTAL_KEYWORDS
+        titled_portal = any(k in title_lower for k in PORTAL_KEYWORDS)
+        ws.portal = _title_portal(title_lower) or ws.portal or "Income Tax"
+
+        # Scope: the URL the window's last read reported, kept fresh by URL-only reads (R2).
+        if ws.scope_asked_at and now - ws.scope_asked_at >= URL_FRESH_SEC:
+            ws.scope_asked_at = 0.0         # unanswered (a stuck scope worker): ask again
+        if not ws.scope_asked_at and (not ws.url_at or now - ws.url_at >= SCOPE_POLL_SEC):
+            self._request(w, ws, now, REASON_SCOPE, None)
+        fresh = bool(ws.url) and ws.url_at > 0 and now - ws.url_at < URL_FRESH_SEC
+        if fresh:
+            in_scope = self._scope.is_in_scope_url(ws.url)
+            if in_scope:
+                ws.scope_verified_at = now
+            elif self._on_out_of_scope is not None and not w.background:
+                self._on_out_of_scope(w.hwnd, ws.url)   # the tripwire looks only at the window in front
+        else:
+            in_scope = (titled_portal and ws.scope_verified_at > 0
+                        and now - ws.scope_verified_at <= SCOPE_GRACE_SEC)
+        portal = (self._scope.portal_for_url(ws.url) if fresh else "") or ws.portal
+        if w.background:
+            # WP10: a window not in front counts for health only while its own Document URL is on a portal
+            # (browser_windows already left out covered ones); it never raises scope-lost.
+            self._health.window(w.hwnd, in_scope and fresh and ws.url_source == "document", portal,
+                                titled_portal=False, url_readable=fresh)
+        else:
+            self._health.window(w.hwnd, in_scope, portal, titled_portal=titled_portal, url_readable=fresh)
+            self._diag.update(front=w.proc_name or "?", url=(ws.url_source or "read") if fresh else "none",
+                              in_scope="yes" if in_scope else "no", tab="known" if ws.tab else "unknown")
+        if not in_scope:
+            ws.last_sig = ws.prev_sig = None    # nothing of a page outside the portals is kept
+            ws.green, ws.ocr_due, ws.flash_armed_at = (), "", 0.0
+            return
+        if not w.background:
+            self._diag.update(portal=portal, page=self._scope.sanitize_page_url(ws.url) if fresh else None)
+        owner = None
+        if self._sgt is not None:
+            # SGT's session bookkeeping for the page in view; a read asked now belongs to `owner`.
+            owner = self._sgt.observe_window(w.hwnd, ws.tab, portal,
+                                             self._scope.sanitize_page_url(ws.url) if ws.url else "", w.title)
+            if owner is None:
+                return                      # a logout page: nothing about a client is read there
+
+        # Pixels only: one screenshot and its signature.
+        try:
+            img = self._platform.screenshot(w.hwnd)
+        except Exception:
+            img = None
+        sig = vsdc_gate.frame_signature(img)
+        self._ocr_trigger(w, ws, img, sig, now, portal, owner)
+
+        if ws.pending_seq and now - ws.pending_at > RESULT_MAX_AGE_SEC:
+            ws.pending_seq, ws.pending_at = 0, 0.0      # the reader dropped it as too old
+        elif ws.pending_seq and now - ws.pending_at > WEDGE_SEC and self._reader.inflight(w.hwnd) is None:
+            ws.pending_seq, ws.pending_at = 0, 0.0      # its worker was abandoned: the answer may never come
+        reason = self._read_reason(w, ws, sig, now)
+        if not reason:
+            return
+        urgent = self._urgent(ws, reason, now)
+        # B5: if an urgent read arrives while a slow read has been running for >= 3 s,
+        # abandon the slow read early so the urgent read does not wait behind it.
+        if ws.pending_seq and urgent and hasattr(self._reader, "abandon_slow_content"):
+            if self._reader.abandon_slow_content(w.hwnd):
+                ws.pending_seq, ws.pending_at = 0, 0.0
+        if ws.pending_seq or not self._spaced(ws, reason, now, urgent):
+            ws.wanted, ws.wanted_urgent = reason, urgent    # asked as soon as the read in flight is answered
+            return
+        status = self._request(w, ws, now, reason, sig, img, portal, owner)
+        if status in ("started", "queued"):
+            ws.wanted, ws.wanted_urgent = "", False
+            ws.last_sig, ws.last_request_at = sig, now
+            if urgent:
+                ws.last_urgent_at = now
+            if reason in ("url", "burst"):
+                ws.burst_left -= 1
+            elif reason in ("torn-retry", REASON_BLIND_RETRY):
+                ws.retry = ""
+        else:
+            ws.wanted, ws.wanted_urgent = reason, urgent    # paused / no lane: health shows it
+
+    def _ocr_wanted(self, ws: WindowState, cells: int, inflight: bool, last_ms: float) -> str:
+        """Blueprint 5.1: "paused" (every frame change over FLASH_MIN_CELLS while UIA is paused) or
+        "flash" (the same change while a read of this window runs or the page's last read was slow)."""
+        paused = self.paused()
+        if not vsdc_gate.flash_wanted(cells, inflight, last_ms, paused):
+            return ""
+        return "paused" if paused else "flash"
+
+    def _ocr_trigger(self, w: WindowInfo, ws: WindowState, img: Any, sig: Optional[bytes], now: float,
+                     portal: str, owner: Any) -> None:
+        """The Submission Net's pixel triggers: a flash on a busy page, a new green banner, or any big
+        change while UIA is paused. The picture goes to the OCR lane, apart from every page read; a scan
+        the lane refuses (once per OCR_MIN_GAP_SEC per window) is asked again on the next ticks."""
+        prev, ws.prev_sig = ws.prev_sig, sig
+        lane = self._ocr_lane
+        if lane is None or img is None:
+            return
+        boxes = tuple(vsdc_gate.green_boxes(img))
+        green_new = vsdc_gate.new_green_box(ws.green, boxes)
+        ws.green = boxes
+        cells = vsdc_gate.cells_changed(prev, sig) if prev is not None and sig is not None else 0
+        url = self._scope.sanitize_page_url(ws.url) if ws.url else ""
+        inflight = bool(ws.pending_seq) or self._reader.inflight(w.hwnd) is not None
+        if cells >= vsdc_gate.FLASH_MIN_CELLS:
+            ws.flash_armed_at = now
+        if ws.flash_armed_at and now - ws.flash_armed_at <= OCR_ARM_SEC:
+            # A toast comes with the page that carries it: that tick's read was only just asked, so the
+            # busy test fails there and passes a tick later, while the toast is still up.
+            cells = max(cells, vsdc_gate.FLASH_MIN_CELLS)
+        reason = self._ocr_wanted(ws, cells, inflight, self._reader.page_ms(w.hwnd, url)) or ("green" if green_new else "")
+        if reason in ("flash", "paused"):
+            ws.flash_armed_at = 0.0
+        if reason and not ws.ocr_due:
+            ws.ocr_due, ws.ocr_due_at = reason, now
+        if ws.ocr_due and now - ws.ocr_due_at > OCR_DUE_KEEP_SEC:
+            ws.ocr_due = ""
+        if not ws.ocr_due or not lane.ready(w.hwnd):
+            return
+        ctx = ReadContext(seq=next(_seq), hwnd=w.hwnd, title=w.title, portal=portal or ws.portal, url=url,
+                          url_source=ws.url_source or ("title" if not url else ""), tab=ws.tab, frame_sig=sig,
+                          asked_at=self._clock(), reason=ws.ocr_due, background=w.background)
+        if not lane.request(img, ctx):
+            return
+        ws.ocr_due = ""
+        self._counts["ocr_asked"] += 1
+        if self._sgt is not None and owner is not None:
+            self._sgt.request_made(ctx, owner)
+        if not ws.scope_asked_at:           # the read that confirms the tab, without waiting for the next poll
+            self._request(w, ws, now, REASON_SCOPE, None)
+
+    def _read_reason(self, w: WindowInfo, ws: WindowState, sig: Optional[bytes], now: float) -> str:
+        if ws.retry:                        # before the burst: a torn read is not one of its reads
+            return ws.retry
+        if ws.burst_left > 0:
+            return "url" if ws.burst_left == BURST_READS else "burst"
+        # B4: compute and store the changed-cell count so _urgent can use it without re-comparing.
+        if sig is not None and ws.last_sig is not None:
+            ws.frame_cells = vsdc_gate.cells_changed(ws.last_sig, sig)
+        else:
+            ws.frame_cells = 0          # no screenshot evidence: never qualifies as an urgent change
+        if sig is None or ws.last_sig is None or ws.frame_cells >= vsdc_gate.GATE_MIN_CELLS:
+            return "frame"
+        if ws.wanted:
+            return ws.wanted
+        if now - ws.last_read_finished >= REREAD_AFTER_SEC:
+            return "periodic"
+        if self._sgt is not None and getattr(self._sgt, "wants_read", None) is not None and self._sgt.wants_read(w.hwnd):
+            return "wants_read"
+        return ""
+
+    @staticmethod
+    def _urgent(ws: WindowState, reason: str, now: float) -> bool:
+        """B4: a large frame change after a slow read skips the post-read cooldown (down to
+        BURST_GAP_SEC) so a short-lived success dialog is not missed while waiting for the
+        normal READ_GAP_FACTOR * last_read_ms gap to expire. At most one per URGENT_COOLDOWN_SEC."""
+        if reason != "frame":
+            return False
+        if ws.wanted == reason and ws.wanted_urgent:
+            return True                     # already flagged urgent while waiting behind a pending read
+        if now - ws.last_urgent_at < URGENT_COOLDOWN_SEC:
+            return False
+        return ws.last_read_ms > vsdc_gate.FLASH_UIA_SLOW_MS and ws.frame_cells >= URGENT_FRAME_CELLS
+
+    @staticmethod
+    def _spaced(ws: WindowState, reason: str, now: float, urgent: bool = False) -> bool:
+        if not ws.last_read_finished:
+            return True
+        quick = reason in ("url", "burst", "torn-retry", REASON_BLIND_RETRY)
+        if urgent:
+            gap = BURST_GAP_SEC             # B4: bypass the slow-read cooldown for large frame changes
+        else:
+            gap = max(BURST_GAP_SEC if quick else MIN_READ_GAP_SEC, READ_GAP_FACTOR * ws.last_read_ms / 1000.0)
+        return now - ws.last_read_finished >= gap
+
+    def _request(self, w: WindowInfo, ws: WindowState, now: float, reason: str, sig: Optional[bytes],
+                 img: Any = None, portal: str = "", owner: Any = None) -> str:
+        url = self._scope.sanitize_page_url(ws.url) if ws.url else ""
+        ctx = ReadContext(seq=next(_seq), hwnd=w.hwnd, title=w.title, portal=portal or ws.portal, url=url,
+                          url_source=ws.url_source or ("title" if not url else ""), tab=ws.tab, frame_sig=sig,
+                          asked_at=now, reason=reason, background=w.background)
+        status = self._reader.request(ctx)
+        if status not in ("started", "queued"):
+            return status
+        if reason == REASON_SCOPE:
+            ws.scope_asked_at = now
+        else:
+            ws.pending_seq, ws.pending_at = ctx.seq, now
+            ws.frame, ws.frame_seq = img, ctx.seq
+            self._counts["asked"] += 1
+            if self._sgt is not None and owner is not None:
+                self._sgt.request_made(ctx, owner)
+            try:
+                self._health.requested(ctx)
+            except Exception:
+                pass
+        return status
+
+    # ---- windows that went away ------------------------------------------------------------------
+
+    def _prune(self, now: float, watched: set) -> None:
+        for hwnd, ws in list(self._states.items()):
+            if hwnd in watched:
+                continue
+            if not self._platform.is_window(hwnd):
+                self._window_gone(hwnd)
+            elif now - ws.last_seen > STATE_KEEP_SEC:
+                self._states.pop(hwnd, None)
+                self._reader.close_lane(hwnd)
+
+    def _window_gone(self, hwnd: int) -> None:
+        self._states.pop(hwnd, None)
+        self._reader.close_lane(hwnd)
+        if self._ocr_lane is not None:
+            self._ocr_lane.close_window(hwnd)
+        if self._sgt is not None:
+            self._sgt.window_gone(hwnd)

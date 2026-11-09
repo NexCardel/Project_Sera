@@ -135,6 +135,28 @@ for (const build of BUILDS) {
     assert.strictEqual(dom.findField(doc, 'pass', '#loginPassword', PASS_FB), shown, label + 'configured selector still fills it');
   }
 
+  // 4b. "show password" box with NO configured selector: still the Password target
+  {
+    const shown = el({ type: 'text', id: 'loginPassword' });
+    const user = el({ type: 'text', id: 'panAdhaarUserId' });
+    const { doc, win } = makeDom([user, shown]);
+    const dom = loadDom(build, win);
+    assert.strictEqual(dom.findField(doc, 'pass', null, PASS_FB), shown, label + 'revealed password box without a selector');
+    assert.strictEqual(dom.findField(doc, 'user', '#panAdhaarUserId', USER_FB, '#loginPassword'), user,
+      label + 'username is still the username');
+    const ac = el({ type: 'text', id: 'x1', autocomplete: 'current-password' });
+    const d2 = makeDom([ac]);
+    assert.strictEqual(loadDom(build, d2.win).findField(d2.doc, 'pass', null, []), ac, label + 'autocomplete=current-password');
+  }
+
+  // 4c. a text box that only looks like a search box is never filled
+  {
+    const search = el({ type: 'text', id: 'searchBox', name: 'q' });
+    const { doc, win } = makeDom([search], search);
+    const dom = loadDom(build, win);
+    assert.strictEqual(dom.findField(doc, 'pass', null, [], null), null, label + 'plain text box is not a password');
+  }
+
   // 5. Username never falls back to a focused password box, Password never to a focused text box
   {
     const user = el({ type: 'text', id: 'somethingElse' });

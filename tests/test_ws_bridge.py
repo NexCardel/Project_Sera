@@ -224,6 +224,59 @@ def test_send_first_with_nobody_connected(bridge):
     assert bridge.send_first({"type": "autofill"}) is False
 
 
+# ------------------------------------------------------------------ late SCA arm replay
+def _live_arm(cmd="cmd-late", ttl_ms=60_000):
+    return {"type": "SCA_ARM_REQUEST", "command_id": cmd, "sent_at": int(time.time() * 1000),
+            "arm": {"expires_at": int(time.time() * 1000) + ttl_ms}}
+
+
+def test_a_browser_connecting_late_still_receives_the_live_sca_arm(bridge):
+    assert bridge.broadcast(_live_arm()) == 0
+    late = MagicMock()
+    bridge._replay_sca_arm(late)
+    late.sendTextMessage.assert_called_once()
+    assert json.loads(late.sendTextMessage.call_args[0][0])["command_id"] == "cmd-late"
+
+
+def test_a_new_socket_is_armed_as_soon_as_it_connects(bridge):
+    bridge.broadcast(_live_arm("cmd-connect"))
+    sock = MagicMock()
+    sock.origin.return_value = "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+    server = MagicMock()
+    server.hasPendingConnections.side_effect = [True, False]
+    server.nextPendingConnection.return_value = sock
+    bridge._server = server
+
+    bridge._on_new_connection()
+
+    sock.sendTextMessage.assert_called_once()
+    assert json.loads(sock.sendTextMessage.call_args[0][0])["command_id"] == "cmd-connect"
+
+
+def test_an_expired_sca_arm_is_not_replayed(bridge):
+    bridge.broadcast(_live_arm(ttl_ms=-1))
+    late = MagicMock()
+    bridge._replay_sca_arm(late)
+    late.sendTextMessage.assert_not_called()
+    assert bridge._last_sca_arm is None
+
+
+def test_a_disarm_forgets_the_cached_sca_arm(bridge):
+    bridge.broadcast(_live_arm())
+    bridge.broadcast({"type": "SCA_DISARM_REQUEST"})
+    late = MagicMock()
+    bridge._replay_sca_arm(late)
+    late.sendTextMessage.assert_not_called()
+
+
+def test_other_broadcasts_keep_the_cached_sca_arm(bridge):
+    bridge.broadcast(_live_arm())
+    bridge.broadcast({"type": "update_settings", "sca_enabled": True})
+    late = MagicMock()
+    bridge._replay_sca_arm(late)
+    late.sendTextMessage.assert_called_once()
+
+
 # ------------------------------------------------------------------ cross-thread safety
 # automation.py calls broadcast()/send_first() from plain threading.Thread workers (autofill
 # push, SCA arming, extension settings pushes - see _attempt_send/arm_sca/
@@ -357,3 +410,99 @@ def test_the_coordinator_js_tests_pass():
     out = subprocess.run(["node", str(ROOT / "tests" / "js" / "test_sca_coordinator.js")],
                          capture_output=True, text=True, timeout=120)
     assert out.returncode == 0, out.stdout + out.stderr
+
+
+def test_sck_edit_request_reaches_the_desktop(bridge):
+    received = []
+    bridge.sck_edit_requested.connect(received.append)
+    bridge.dispatch({
+        "type": "sck_edit_request",
+        "service_id": 3,
+        "client_id": 42,
+        "portal": "GST Portal",
+    })
+    assert len(received) == 1
+    assert received[0] == {
+        "type": "sck_edit_request",
+        "service_id": 3,
+        "client_id": 42,
+        "portal": "GST Portal",
+    }
+
+
+def test_sck_edit_request_with_no_client_id(bridge):
+    received = []
+    bridge.sck_edit_requested.connect(received.append)
+    bridge.dispatch({
+        "type": "sck_edit_request",
+        "service_id": 5,
+        "portal": "Income Tax",
+    })
+    assert len(received) == 1
+    assert received[0]["service_id"] == 5
+    assert received[0]["client_id"] is None
+    assert received[0]["portal"] == "Income Tax"
+
+
+def test_sck_candidate_reaches_the_desktop(bridge):
+    """The card's Fill & Test hands the candidate to the desktop, which saves it on success."""
+    received = []
+    bridge.sck_candidate_received.connect(received.append)
+    bridge.dispatch({
+        "type": "sck_candidate",
+        "service_id": 3,
+        "client_id": 42,
+        "portal": "GST Portal",
+        "password": "s3cret-new",
+    })
+    assert received == [{
+        "type": "sck_candidate",
+        "service_id": 3,
+        "client_id": 42,
+        "portal": "GST Portal",
+        "password": "s3cret-new",
+    }]
+
+
+def test_sck_candidate_without_a_client_id_still_arrives(bridge):
+    """A failure that could not be matched to a client still reaches the card's save path."""
+    received = []
+    bridge.sck_candidate_received.connect(received.append)
+    bridge.dispatch({"type": "sck_candidate", "service_id": 5, "password": "p",
+                     "portal": "  Income Tax  "})
+    assert len(received) == 1
+    assert received[0]["client_id"] is None
+    assert received[0]["portal"] == "Income Tax"
+
+
+def test_sck_candidate_accepts_a_password_at_the_bound(bridge):
+    received = []
+    bridge.sck_candidate_received.connect(received.append)
+    bridge.dispatch({"type": "sck_candidate", "service_id": 3, "password": "x" * 256})
+    assert len(received) == 1
+    assert received[0]["password"] == "x" * 256
+
+
+@pytest.mark.parametrize("msg", [
+    {"type": "sck_candidate", "password": "p"},                        # no service id
+    {"type": "sck_candidate", "service_id": 0, "password": "p"},       # not a positive id
+    {"type": "sck_candidate", "service_id": 3},                        # no password
+    {"type": "sck_candidate", "service_id": 3, "password": ""},        # empty password
+    {"type": "sck_candidate", "service_id": 3, "password": "x" * 257},  # too long
+    {"type": "sck_candidate", "service_id": 3, "password": 5},         # not a string
+    {"type": "sck_candidate", "service_id": 3, "password": "p", "client_id": 0},
+    {"type": "sck_candidate", "service_id": 3, "password": "p", "portal": "x" * 101},
+    {"type": "sck_candidate", "service_id": 3, "password": "p", "portal": 7},
+])
+def test_a_malformed_sck_candidate_is_dropped(bridge, msg):
+    received = []
+    bridge.sck_candidate_received.connect(received.append)
+    bridge.dispatch(msg)
+    assert received == []
+
+
+def test_sck_widget_done_reports_a_dashboard_close(bridge):
+    received = []
+    bridge.sck_widget_closed_received.connect(received.append)
+    bridge.dispatch({"type": "sck_widget_done", "service_id": 9})
+    assert received == [{"type": "sck_widget_done", "service_id": 9, "reason": "dashboard"}]

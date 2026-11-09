@@ -10,7 +10,10 @@ import asyncio
 import ctypes
 from ctypes import wintypes
 import io
+import queue
+import threading
 import time
+from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from typing import Dict, List, Optional, Tuple, Any
 from PIL import Image
 
@@ -20,6 +23,99 @@ import winrt.windows.storage.streams as streams
 
 user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
+
+# One OCR engine, its event loop and its thread live for the whole process. Creating them
+# per call was the largest fixed cost of a scan (more than the OCR itself on office PCs),
+# and a call could wait forever on a WinRT promise. A scan now gives up after this long.
+_OCR_TIMEOUT_SEC = 8.0
+_AVAILABILITY_RECHECK_SEC = 30.0
+_OCR_MAX_PENDING = 4
+
+
+def _create_ocr_engine():
+    """The Windows OCR engine, or None when the profile has no OCR language."""
+    try:
+        return ocr.OcrEngine.try_create_from_user_profile_languages()
+    except Exception:
+        return None
+
+
+def _empty_scan() -> Dict[str, Any]:
+    return {"text": "", "lines": [], "words": [], "latency_ms": 0.0}
+
+
+class _OcrRunner:
+    """A daemon thread owning one asyncio loop and one OcrEngine.
+
+    WinRT promises need a thread with a running loop and COM affinity, so the engine is
+    created (once) and used entirely on this thread. Callers submit a picture and wait at
+    most `_OCR_TIMEOUT_SEC`; a stuck recognise_async therefore never freezes the capture
+    tick. The thread is not killed on timeout - if it is wedged, at most
+    `_OCR_MAX_PENDING` further scans queue behind it, then submissions fail fast.
+    """
+
+    def __init__(self, owner: "VSDCOcrEngine") -> None:
+        self._owner = owner
+        self._queue: "queue.Queue" = queue.Queue()
+        self._lock = threading.Lock()
+        self._pending_lock = threading.Lock()
+        self._thread: Optional[threading.Thread] = None
+        self._pending = 0
+
+    def _ensure_started(self) -> None:
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._thread = threading.Thread(target=self._loop, name="vsdc-ocr", daemon=True)
+            self._thread.start()
+
+    def _loop(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        engine = None
+        try:
+            while True:
+                item = self._queue.get()
+                if item is None:
+                    return
+                img, fut = item
+                try:
+                    if engine is None:
+                        engine = _create_ocr_engine()
+                    result = loop.run_until_complete(self._owner._run_ocr_async(img, engine))
+                    if not fut.cancelled():
+                        fut.set_result(result)
+                except BaseException as e:
+                    engine = None
+                    if not fut.cancelled():
+                        fut.set_exception(e)
+                finally:
+                    with self._pending_lock:
+                        self._pending = max(0, self._pending - 1)
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
+            with self._pending_lock:
+                self._pending = 0
+
+    def submit(self, img: Image.Image) -> Dict[str, Any]:
+        with self._pending_lock:
+            if self._pending >= _OCR_MAX_PENDING:
+                return _empty_scan()
+            self._pending += 1
+        try:
+            self._ensure_started()
+            fut: Future = Future()
+            self._queue.put((img, fut))
+            return fut.result(timeout=_OCR_TIMEOUT_SEC)
+        except FutureTimeoutError:
+            print("[VSDC OCR] scan timed out - the capture tick continues without it")
+            return _empty_scan()
+        except Exception as e:
+            print(f"[VSDC OCR Error] {e}")
+            return _empty_scan()
 
 
 class BITMAPINFOHEADER(ctypes.Structure):
@@ -44,14 +140,24 @@ class VSDCOcrEngine:
     """
 
     def __init__(self):
-        pass
+        # Built once, eagerly: `scan_image` can be reached from the capture worker, the
+        # verifier and the UI thread, and a lazy check there could build two runners (two
+        # engines) under a race. The runner's own thread only starts on the first scan.
+        self._runner: _OcrRunner = _OcrRunner(self)
+        self._available: Optional[bool] = None
+        self._available_checked_at: Optional[float] = None
 
     @property
     def is_available(self) -> bool:
-        try:
-            return ocr.OcrEngine.try_create_from_user_profile_languages() is not None
-        except Exception:
-            return False
+        """Whether Windows OCR can run at all. Cached: building an engine is not free, and
+        the old code built one for every single scan just to answer this."""
+        now = time.monotonic()
+        if (self._available is not None and self._available_checked_at is not None
+                and now - self._available_checked_at < _AVAILABILITY_RECHECK_SEC):
+            return self._available
+        self._available = _create_ocr_engine() is not None
+        self._available_checked_at = now
+        return self._available
 
     def capture_window_image(self, hwnd: int) -> Optional[Image.Image]:
         """
@@ -130,6 +236,77 @@ class VSDCOcrEngine:
 
         return None
 
+    def capture_window_full(self, hwnd: int) -> Optional[Image.Image]:
+        """
+        Captures the WHOLE browser window - title bar, tabs, address bar and page - for
+        evidence. Used by VSDC247 when it saves the frame it read: a screenshot of the
+        confirmation plus the page that carried it is worth more than the page alone.
+
+        A window in front is read straight off the screen (Chromium's real pixels); otherwise
+        PrintWindow is tried. Returns None when neither gives a picture.
+        """
+        if not hwnd or not user32.IsWindow(hwnd):
+            return None
+
+        from .vsdc_windows import window_rect
+        try:
+            left, top, right, bottom = window_rect(hwnd)
+        except Exception:
+            return None
+        w, h = right - left, bottom - top
+        if w <= 0 or h <= 0:
+            return None
+
+        bmi = BITMAPINFOHEADER()
+        bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+        bmi.biWidth = w
+        bmi.biHeight = -h  # top-down DIB
+        bmi.biPlanes = 1
+        bmi.biBitCount = 32
+        bmi.biCompression = 0
+
+        buf = ctypes.create_string_buffer(w * h * 4)
+
+        # 1. Screen pixels while the window is in front - exactly what the user sees.
+        try:
+            screen_hdc = user32.GetDC(0)
+            if screen_hdc:
+                memdc = gdi32.CreateCompatibleDC(screen_hdc)
+                hbmp = gdi32.CreateCompatibleBitmap(screen_hdc, w, h)
+                gdi32.SelectObject(memdc, hbmp)
+                gdi32.BitBlt(memdc, 0, 0, w, h, screen_hdc, left, top, 0x00CC0020)
+                gdi32.GetDIBits(screen_hdc, hbmp, 0, h, buf, ctypes.byref(bmi), 0)
+                gdi32.DeleteObject(hbmp)
+                gdi32.DeleteDC(memdc)
+                user32.ReleaseDC(0, screen_hdc)
+                img = Image.frombuffer("RGBA", (w, h), buf, "raw", "BGRA", 0, 1).convert("RGB")
+                if img and img.getextrema() != ((0, 0), (0, 0), (0, 0)):
+                    return img
+        except Exception:
+            pass
+
+        # 2. PrintWindow fallback for a window that is covered or otherwise not on screen.
+        hdc = user32.GetWindowDC(hwnd)
+        if not hdc:
+            return None
+        try:
+            memdc = gdi32.CreateCompatibleDC(hdc)
+            hbmp = gdi32.CreateCompatibleBitmap(hdc, w, h)
+            gdi32.SelectObject(memdc, hbmp)
+            if not user32.PrintWindow(hwnd, memdc, 2):
+                gdi32.BitBlt(memdc, 0, 0, w, h, hdc, 0, 0, 0x00CC0020)
+            gdi32.GetDIBits(hdc, hbmp, 0, h, buf, ctypes.byref(bmi), 0)
+            gdi32.DeleteObject(hbmp)
+            gdi32.DeleteDC(memdc)
+            img = Image.frombuffer("RGBA", (w, h), buf, "raw", "BGRA", 0, 1).convert("RGB")
+            if img and img.getextrema() != ((0, 0), (0, 0), (0, 0)):
+                return img
+        except Exception:
+            pass
+        finally:
+            user32.ReleaseDC(hwnd, hdc)
+        return None
+
     @staticmethod
     def crop_region(img: Image.Image, region_type: str) -> Image.Image:
         """
@@ -170,16 +347,14 @@ class VSDCOcrEngine:
             return img.crop((0, 0, w, min(int(h * 0.52), h)))
         return img
 
-    async def _run_ocr_async(self, img: Image.Image) -> Dict[str, Any]:
+    async def _run_ocr_async(self, img: Image.Image, engine=None) -> Dict[str, Any]:
         """
-        Executes asynchronous OCR via Windows.Media.Ocr.
-        Creates OcrEngine inside the async thread context to ensure COM apartment affinity.
+        Executes asynchronous OCR via Windows.Media.Ocr on the caller's own loop.
+        The engine is built once by _OcrRunner on the same thread (COM apartment affinity);
+        `engine=None` means OCR is unavailable.
         """
-        try:
-            engine = ocr.OcrEngine.try_create_from_user_profile_languages()
-        except Exception:
-            engine = None
-
+        if engine is None:
+            engine = _create_ocr_engine()
         if not engine:
             return {"text": "", "lines": [], "words": [], "latency_ms": 0.0}
 
@@ -229,20 +404,11 @@ class VSDCOcrEngine:
     def scan_image(self, img: Image.Image, region_type: str = "full") -> Dict[str, Any]:
         """
         Synchronously crops and scans an image using the Windows.Media.Ocr pipeline.
-        Thread-safe and supports execution from within threads with active event loops.
+        Thread-safe: scans run on one persistent worker thread/loop/engine, and a call
+        gives up after `_OCR_TIMEOUT_SEC` instead of blocking the capture tick forever.
         """
         if not img or not self.is_available:
             return {"text": "", "lines": [], "words": [], "latency_ms": 0.0}
 
         cropped = self.crop_region(img, region_type)
-        try:
-            # WinRT async completion requires isolation from caller threads that may have
-            # initialized COM in Single-Threaded Apartment (STA) mode (e.g. comtypes/UIAutomation).
-            # Running in a dedicated worker thread avoids message pump deadlocks.
-            from concurrent.futures import ThreadPoolExecutor
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(lambda: asyncio.run(self._run_ocr_async(cropped)))
-                return future.result()
-        except Exception as e:
-            print(f"[VSDC OCR Error] {e}")
-            return {"text": "", "lines": [], "words": [], "latency_ms": 0.0}
+        return self._runner.submit(cropped)

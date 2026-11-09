@@ -259,7 +259,7 @@ class AdminWindow(WidthAware, QWidget):
     request_slide_panel = Signal(QWidget, str)
     toast_requested = Signal(str, int)
     action_alert_requested = Signal(str, str)
-    settings_saved = Signal()  # Forwarded from SettingsDialog when user saves
+    settings_saved = Signal()  # Forwarded from UnifiedSettingsDialog when user saves
 
     def __init__(self, db, actor: str = "Admin"):
         super().__init__()

@@ -1,5 +1,8 @@
 # Project rules
 
+## Problem Diagnosis Workflow
+Whenever the user reports a bug, error, or issue, ALWAYS investigate and determine the root cause first. Report the cause, findings, and proposed fix clearly to the user, and wait for their explicit confirmation/instruction before applying any code fixes or modifying code.
+
 ## Running the test suite
 
 Whenever running the full test suite, use the live T/F/S plugin instead of plain `pytest`:

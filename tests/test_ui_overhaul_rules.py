@@ -19,7 +19,8 @@ from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 from ui.components.kit import LabelledAction, MessageBox
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT_OF_OVERHAUL = {"sgt_lab_dialog.py", "sdis_dialog.py", "sdis_containers_dialog.py"}
+# drs_config_dialog.py arrived from main after the overhaul branched (DRS prototype); not converted yet.
+OUT_OF_OVERHAUL = {"sgt_lab_dialog.py", "sdis_dialog.py", "sdis_containers_dialog.py", "drs_config_dialog.py"}
 SCREEN_FILES = sorted(p for d in ("ui/windows", "ui/dialogs", "ui/shell") for p in (ROOT / d).glob("*.py")
                       if p.name not in OUT_OF_OVERHAUL and p.name != "__init__.py")
 HEX = re.compile(r"#[0-9A-Fa-f]{6}\b|#[0-9A-Fa-f]{3}\b|rgba?\(")

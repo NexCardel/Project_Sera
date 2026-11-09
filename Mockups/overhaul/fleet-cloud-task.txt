@@ -1,0 +1,54 @@
+You are the designer for a UI overhaul of the Amas Sera app, a Windows desktop app (Python + PySide6) that a small accounting office uses all day to look up clients, open government portals and track filings. This is DESIGN ONLY: change no app code. Nobody can answer questions mid-session; when something is unclear, choose, and write the choice down in your README.
+
+TASK
+Redesign the whole app (every screen and dialog) from screenshots of today's screens, and deliver it as ONE new clickable HTML mockup.
+
+SETUP
+- Start from main: git checkout main, git pull, then git checkout -b fleet-mockup.
+- Everything you create goes in Mockups/fleet/. Do not edit any other file.
+- At the end push only this branch: git push -u origin fleet-mockup. Never push to main, never merge, never force-push.
+
+READ, IN THIS ORDER
+1. Today's screens: every PNG in Mockups/current/ (31 files, 1875x1055). Look at each one. SKIP dlg_sgt_lab.png: the SGT lab and the SDIS panels are out of the overhaul. List them in the README as not redesigned.
+2. The earlier redesign of six screens: Mockups/redesign/index.html, its specs Mockups/01-*.md to 06-*.md, and Mockups/images/. That is the direction the owner liked: dark surfaces, one emerald primary, white data grid, chips, cards, labelled actions. You may improve on it, but say where and why you departed from it.
+3. The rules in Mockups/IMPLEMENTATION.md section 1, the component kit in section 6, and the Where every current control goes tables in the 01-06 specs. The standard is that no control disappears.
+4. docs/ui-scale-adaptive-layout-plan.md, for the display scale and COMPACT mode.
+5. When a screenshot leaves a control's purpose unclear, grep ui/windows/, ui/dialogs/ and ui/shell/ for its label. Read only.
+
+SCREENS TO COVER
+- Shell and daily screens: sidebar, All Clients / search, Client detail panel, Manage Clients (admin), Tracker Dump.
+- Settings hub: every settings_*.png page (general, actions, SCC, services, tracker, export, backup, purge, QC, columns/MCL, main and admin visibility).
+- Dialogs: audit log, Sera Sync, MCL manager and column edit, service manager and edit, CSV import, change master password, office recovery, rejoin office, first run, force update, startup loading, legacy settings.
+- Display scale (no screenshot exists): a per-PC scale picker with Automatic, 80, 90, 100, 110 and 125 %. A change applies at the next start, with a Restart now button. It is reached from Settings > General and from a sidebar Display entry.
+- COMPACT width mode for the daily screens. The app switches to it when a page is narrower than 1080 px (a small office PC is about 1280 px wide at 125 %). Tracker Dump today moves its filter chips to a second row in COMPACT, shortens labels, and hides the Device, Updated and Filing columns in that order.
+
+DESIGN RULES
+- Keep every control. Each control in a screenshot appears in your design: moved, regrouped, relabelled or put in a menu is fine; dropped is not.
+- Dark theme only. Emerald #2E9B5F is the one primary action colour per screen; red only for destructive actions. Data grids stay highly readable (the white grid is the owner's preference; argue for a change if you have one).
+- Small laptop first: every screen works at 1366x768, with no sideways scroll except inside a data grid.
+- Fictional data only: made-up client names, PANs like ABCDE1234F, made-up workstation names. Secrets always appear masked.
+- Build it the way the app can follow. Use one :root token block (colours, radii 6/8/12, spacing, font sizes, control height) and a small set of reusable components: chip, switch, card, pill, tag, labelled action, setting row, status strip, selection bar, unsaved bar, empty state. Make every screen only from those, because it will be rebuilt in Qt from them.
+- No new product features. Put any ideas in the README under Ideas instead of drawing them.
+- The logo is assets/logo/sera_mark.svg. Embed it as is; do not redraw it.
+
+DELIVERABLES (in Mockups/fleet/)
+1. index.html, one self-contained file: inline CSS and JS only, no CDN, no web fonts (use Segoe UI, system-ui, sans-serif). It must open offline and stay under about 400 KB. It has:
+   - a navigation list of every screen, grouped as above, and a 1366x768 app frame where the chosen screen renders;
+   - a WIDE / COMPACT toggle (frame width 1366 vs about 1024) and a scale toggle (80 / 100 / 125 %);
+   - enough interaction to judge the design: tabs switch, chips toggle, selecting a row shows the selection bar, a Settings change shows the unsaved bar, dialogs open over the screen they come from;
+   - a Before button per screen that shows the matching screenshot via the relative path ../current/<file>.png. Do not copy the PNGs.
+2. README.md, containing:
+   - the token table and the component list;
+   - per screen: one paragraph on what changed and why, and a short where-every-control-went list (it may be brief for simple dialogs, but nothing may be missing);
+   - your departures from Mockups/redesign/index.html, and why;
+   - the screens left out (SGT lab, SDIS);
+   - Ideas, and open questions for the owner.
+
+BEFORE FINISHING
+- Check that index.html parses and that every navigation entry has a screen. Click through every screen in both width modes if you can serve and view the page.
+- Compare each screen with its screenshot once more and confirm no control is missing.
+
+FINISH
+Commit Mockups/fleet with the message: Fleet redesign mockup (W0-D), and the last line of the message: Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Then: git push -u origin fleet-mockup
+Final message: the list of screens covered, where the mockup is, your main departures, and the open questions for the owner.

@@ -55,7 +55,7 @@ from ui.utils.responsive import WidthAware, WidthMode
 from ui.utils.tokens import TOKENS
 
 _ACTIONS = [
-    "All Actions", "view", "manual_assist", "autofill", "manual_copy",
+    "All Actions", "SCA (All)", "sca_autofill", "sca_widget", "view", "manual_assist", "autofill", "manual_copy",
     "create", "update", "archive", "unarchive", "delete",
     "csv_import", "backup", "restore", "csv_export",
     "filing_submitted", "sync_pushed", "sync_received", "audit_log_viewed",
@@ -122,9 +122,15 @@ def _get_action_badge(action: str) -> tuple[str, str, str]:
         return "👁️ View", "View", "neutral"
     elif act == "audit_log_viewed":
         return "🛡️ Audit View", "Audit View", "red"
-    elif act in ("autofill", "sca_autofill", "autofill_extension", "autofill_playwright"):
+    elif act == "sca_autofill":
+        return "🪄 SCA Autofill", "SCA Autofill", "amber"
+    elif act == "sca_widget":
+        return "⚡ SCA Widget", "SCA Widget", "amber"
+    elif act in ("sca", "sca_usage", "sca_fill"):
+        return "⚡ SCA", "SCA", "amber"
+    elif act in ("autofill", "autofill_extension", "autofill_playwright"):
         return "🪄 Autofill", "Autofill", "amber"
-    elif act in ("manual_assist", "sca_widget"):
+    elif act in ("manual_assist",):
         return "⚡ Manual Assist", "Manual Assist", "amber"
     elif act == "manual_copy":
         return "📋 Copy", "Copy", "amber"

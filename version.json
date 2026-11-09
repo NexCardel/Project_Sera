@@ -1,8 +1,8 @@
 {
-  "version": "2.12.8",
+  "version": "2.13.7",
   "min_required_version": "2.9.9",
-  "mandatory": false,
-  "download_url": "https://github.com/NexCardel/Project_Sera/releases/download/v2.12.8/Amas_Sera_Setup_v2.12.8.exe",
-  "sha256": "a2054359ea7d21650048b17e350437c83a7d4b15886ddbb25c42515bdef7222a",
-  "release_notes": "Project Sera v2.12.8: GST login username linked to the master DB company, SGT abrupt-close safety, unattended ARN-row fixer."
+  "mandatory": true,
+  "download_url": "https://github.com/NexCardel/Project_Sera/releases/download/v2.13.7/Amas_Sera_Setup_v2.13.7.exe",
+  "sha256": "78beb25e644554b54991740ab45e711dd8ed289a71132e042dd24906d2fd3356",
+  "release_notes": "Project Sera v2.13.7 - Sera Credential Keeper (SCK) Test & Fill card, Firefox companion parity, DRS 768p layout overflow fixes, and original_author tracking propagation"
 }

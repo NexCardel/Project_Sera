@@ -163,8 +163,8 @@ def test_replicated_tables_excludes_local():
 
 def test_pending_tables_for_lists_not_yet_created_tables():
     pending = {t.name for t in sync_schema.pending_tables_for(RAW_DB)}
-    assert pending == {"client_container_notes"}
-    assert sync_schema.get("client_container_notes").pending_creation is True
+    assert pending == set()
+    assert sync_schema.get("client_container_notes").pending_creation is False
     assert sync_schema.get("client_raw_containers").pending_creation is False
     assert sync_schema.pending_tables_for(MASTER_DB) == []
 
@@ -213,12 +213,10 @@ def test_verify_against_live_schema_accepts_real_master_db(tmp_path):
 def test_verify_against_live_schema_accepts_real_raw_db(tmp_path):
     db = _scratch_db(tmp_path)
     with db._connect_raw() as conn:
-        # client_container_notes is pending_creation=True: doesn't exist in a
-        # real rawPayload.db yet, and that must not be flagged as a problem.
         live = {r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
         )}
-        assert "client_container_notes" not in live
+        assert "client_container_notes" in live
         sync_schema.verify_against_live_schema(conn, RAW_DB)
 
 

@@ -159,6 +159,23 @@ class TestPortalChangeWatch:
         self.fill(st, today, ACTIVE_READS, ocr=ACTIVE_READS)
         assert [a["kind"] for a in st.alerts(today)] == ["portal_blind"]
 
+    def test_ocr_only_rows_are_counted_per_day(self, tmp_path):
+        st = SpecStats(tmp_path)
+        d1, d2 = date(2026, 9, 21), date(2026, 9, 22)
+        st.record_ocr_only_row(ITR, d1)
+        st.record_ocr_only_row(ITR, d2)
+        st.record_ocr_only_row(ITR, d2)
+        st.record_ocr_only_row("GST Portal", d2)
+        assert (st.ocr_only_rows(d1), st.ocr_only_rows(d2)) == (1, 3)
+        assert (st.ocr_only_rows(d2, ITR), st.ocr_only_rows(d2, "GST Portal")) == (2, 1)
+        assert st.ocr_only_rows(date(2026, 9, 23)) == 0
+        st.record_read("GST Portal", "ocr", d2)
+        summary = st.summary(d2)
+        assert (summary[ITR]["ocr_only_rows"], summary["GST Portal"]["ocr_only_rows"]) == (3, 1)
+        assert summary[ITR]["pages"] == 0 and summary["GST Portal"]["pages"] == 1
+        st.save()
+        assert SpecStats(tmp_path).ocr_only_rows(d2) == 3             # kept across a restart
+
     def test_counts_persist_and_carry_no_client_data(self, tmp_path):
         st = SpecStats(tmp_path)
         st.record_read(ITR, "uia", date(2026, 9, 22))
@@ -182,8 +199,12 @@ class TestPortalChangeWatch:
 
 
 # ── #5 one hung UI Automation read must not blind every later one ────────────────
-def test_a_hung_uia_read_does_not_block_the_next_one():
+def test_a_hung_uia_read_does_not_block_the_next_one(monkeypatch):
     import core.vsdc.vsdc_uia_text as u
+    # A read still running is only "hung" past the grace (slower ones are skipped as busy -
+    # tests/test_vsdc_diag.py); shortened here so the test need not wait 20 s.
+    monkeypatch.setattr(u, "SLOW_GRACE_SEC", 0.1)
+    monkeypatch.setattr(u, "_inflight", None)
     before = u.worker_health()["abandoned_workers"]
     gate = threading.Event()
     try:

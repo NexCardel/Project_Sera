@@ -1,0 +1,17 @@
+{
+ "synthetic": true,
+ "note": "Negative: GSTR-1 page on the filing path BEFORE submission. Form and status words but no ARN, so no reading. Placeholders only.",
+ "page_kind": "gstr1_submit",
+ "portal": "GST Portal",
+ "url": "return.gst.gov.in/returns/auth/file",
+ "source": "ocr",
+ "lines": [
+  "Dashboard Returns GSTR-1 File",
+  "GSTIN - 00AAAAA0000A1Z0",
+  "Return Period - September(Q)",
+  "Status - Not Filed",
+  "Returns Filing for GST GSTR1",
+  "Preview Draft GSTR1",
+  "File GSTR1 with EVC"
+ ]
+}

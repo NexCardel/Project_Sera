@@ -16,6 +16,11 @@ Admin PC, every pass: nothing to send (its own folder is mined in place); it che
 PCs delivered under corpus/<device id>/ - complete, readable, no half-received .part files - and
 says so in the sync panel when that changes.
 
+Discard mode (setting sdis_corpus_discard, ON by default since 2026-10-12): a staff PC does not send at
+all. It reads the size of its finished recorder files, deletes exactly those files for good and says so
+in the sync panel (one line: how many files, how many MB). This keeps the corpus push off the admin
+PC's four sync-port slots. Today's open file is never touched. Set the setting to 0 to send again.
+
 Only counts and sizes are ever logged, never names of clients or contents. The wire protocol and the
 admin side live in core/sdis/transfer.py.
 """
@@ -51,8 +56,10 @@ def _plural(n: int, word: str) -> str:
 
 class Excavator:
     def __init__(self, engine, folder: Optional[Path] = None, on_event=None, tick_s: float = TICK_S,
-                 backoff: Tuple[float, ...] = BACKOFF_S, received_root: Optional[Path] = None):
+                 backoff: Tuple[float, ...] = BACKOFF_S, received_root: Optional[Path] = None,
+                 discard: Optional[bool] = None):
         self.engine = engine
+        self._discard = discard                       # None: read the setting at every pass
         self.on_event = on_event                      # on_event(category, title, detail): the sync panel's live log
         self._folder = folder
         self._received_root = received_root
@@ -131,6 +138,15 @@ class Excavator:
         except Exception:
             pass
 
+    def discarding(self) -> bool:
+        """True when finished files are measured and deleted instead of sent."""
+        if self._discard is not None:
+            return bool(self._discard)
+        try:
+            return str(self.engine.db.get_setting("sdis_corpus_discard", "1")) != "0"
+        except Exception:
+            return False
+
     def _set(self, state: str, reason: str = "", **extra) -> None:
         self.status.update(state=state, reason=reason, **extra)
 
@@ -188,6 +204,9 @@ class Excavator:
             if self._last_key and self._last_key[0] in ("parked", "error"):
                 self._last_key = None
             return
+        if self.discarding():
+            self._discard_unsent(all_files, size)
+            return
         admin, why = self._admin_target()
         if admin is None:
             self._park(why, len(all_files), size)
@@ -237,6 +256,29 @@ class Excavator:
             return
         self._fails = 0
         self._set("idle", "", unsent_files=0, unsent_bytes=0)
+
+    def _discard_unsent(self, files: List[Path], size: int) -> None:
+        """Deletes exactly the finished files that were measured, never anything else."""
+        removed, freed, failed = 0, 0, 0
+        for p in files:
+            n = _size(p)
+            try:
+                p.unlink()
+                removed += 1
+                freed += n
+            except FileNotFoundError:
+                pass
+            except OSError:
+                failed += 1
+        self.stats["deleted"] += removed
+        self._fails = 0
+        left = transfer.finished_files(self.folder, cap=False)
+        self._set("idle" if not left else "error", "" if not left else "some files could not be deleted",
+                  unsent_files=len(left), unsent_bytes=sum(_size(p) for p in left))
+        detail = f"{_plural(removed, 'file')} ({_mb(freed)}) deleted on this PC, not sent to the admin PC"
+        if failed:
+            detail += f"; {_plural(failed, 'file')} could not be deleted (in use?) and will be tried again"
+        self._say(("discard", self.stats["deleted"], failed), "Corpus deleted on this PC", detail)
 
     def _progress(self, i: int, n: int) -> None:
         self._say(("sending", i, n), "Corpus sending", f"file {i} of {n} sent, waiting for the admin PC's ack"

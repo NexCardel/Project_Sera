@@ -350,7 +350,7 @@ WRITE_CASES = {
     "save_tracker_dump_media": (_setup_tracker, lambda db, c: db.save_tracker_dump_media(
         c["dump"], "invented note", "shot.png"), {("tracker_dump", "upsert")}, set()),
     "save_srpf_container_media": (_setup_container, lambda db, c: db.save_srpf_container_media(
-        "ABCDE1234F", "note", "shot.png"), set(), "ALL"),
+        "ABCDE1234F", "note", "shot.png"), {("client_container_notes", "upsert")}, set()),
     "delete_tracker_dump": (_setup_tracker, lambda db, c: db.delete_tracker_dump(c["dump"]),
                             {("tracker_dump", "delete")}, set()),
     "clear_tracker_dumps": (_setup_tracker, lambda db, c: db.clear_tracker_dumps(),

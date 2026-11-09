@@ -1,0 +1,314 @@
+{
+ "about": "SGT never-miss work packages (blueprint docs/sgt-never-miss-blueprint.md, with section 10 owner answers and section 10a review corrections). Fixed data: edit by hand only to re-plan. Live status is in sgt-never-miss-status.csv, written only by tools/sgt_never_miss.py. Workers run on main in the APP folder (owner decision 2026-10-14).",
+ "deadline": "2026-10-17T23:00:00+05:30",
+ "models": {
+  "sonnet": {
+   "runner": "claude",
+   "id": "claude-sonnet-5-5"
+  },
+  "opus": {
+   "runner": "claude",
+   "id": "claude-opus-5-5"
+  },
+  "haiku": {
+   "runner": "claude",
+   "id": "claude-haiku-5-5"
+  }
+ },
+ "tiers": {
+  "_note": "Claude only. Opus for WP3, WP4, WP5, WP10 and the final review (owner answer D15).",
+  "sonnet": [
+   "sonnet"
+  ],
+  "haiku": [
+   "haiku"
+  ],
+  "opus": [
+   "opus"
+  ]
+ },
+ "runners": {
+  "claude": {
+   "enabled": true,
+   "exe": "claude",
+   "prompt": "stdin",
+   "args": [
+    "-p",
+    "--model",
+    "{model}",
+    "--output-format",
+    "json",
+    "--permission-mode",
+    "{permission_mode}",
+    "--allowedTools",
+    "{allowed_tools}",
+    "--disallowedTools",
+    "{disallowed_tools}"
+   ],
+   "coauthor": "Claude <noreply@anthropic.com>"
+  }
+ },
+ "cli": {
+  "permission_mode": "acceptEdits",
+  "allowed_tools": [
+   "Read",
+   "Edit",
+   "Write",
+   "Glob",
+   "Grep",
+   "TodoWrite",
+   "Bash(venv/Scripts/python.exe:*)",
+   "Bash(git status:*)",
+   "Bash(git diff:*)",
+   "Bash(git log:*)",
+   "Bash(git add:*)",
+   "Bash(git commit:*)",
+   "Bash(git show:*)",
+   "Bash(git rev-parse:*)",
+   "Bash(ls:*)",
+   "Bash(cat:*)",
+   "Bash(head:*)",
+   "Bash(tail:*)",
+   "Bash(wc:*)",
+   "Bash(grep:*)",
+   "Bash(sed -n:*)",
+   "Bash(find:*)",
+   "Bash(mkdir:*)",
+   "Bash(cp:*)",
+   "Bash(mv:*)",
+   "Bash(echo:*)",
+   "Bash(date:*)"
+  ],
+  "disallowed_tools": [
+   "Bash(git push:*)",
+   "Bash(git merge:*)",
+   "Bash(git rebase:*)",
+   "Bash(git reset:*)",
+   "Bash(git checkout:*)",
+   "Bash(git switch:*)",
+   "Bash(git stash:*)",
+   "Bash(git branch:*)",
+   "Bash(git tag:*)",
+   "Bash(git clean:*)",
+   "Bash(rm:*)",
+   "WebFetch",
+   "WebSearch"
+  ],
+  "run_timeout_min": 150,
+  "max_attempts": 3
+ },
+ "wps": [
+  {
+   "wp": "WB",
+   "phase": 0,
+   "model": "haiku",
+   "kind": "auto",
+   "size": "S",
+   "deps": [],
+   "what": "Baseline: the test suite before any change",
+   "focus": "Change no code. Run the whole suite once with `venv/Scripts/python.exe tools/sgt_never_miss_suite.py` (Bash timeout 600000 ms; if it times out, run it again on tests/test_sgt_*.py tests/test_vsdc_*.py and say so). In your hand-off note list the T/F/S counts and the node ids of every failing test: these are the pre-existing failures every later WP compares against. Also run `venv/Scripts/python.exe tools/sgt_replay.py --help` and record how a baseline is taken. Add section `## 14. Hand-off notes` with the line `(written by each WP)` at the end of the blueprint if it is missing."
+  },
+  {
+   "wp": "WP0",
+   "phase": 0,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "WB"
+   ],
+   "what": "Probe pack: the Windows measurements tool",
+   "focus": "Blueprint docs/sgt-never-miss-blueprint.md section 9 WP0, plus R9 (add a `read-timing` run with two windows of one browser read at once vs one at a time) and R10. Build the tool and its tests only. NEVER run a probe against a real browser window (rule 1): the owner runs them. Done = tests pass and `--help` works. Record the owner STOP as checks: one check per probe (doc-url, read-timing, read-timing --mta, gate, toast, switches), each saying the exact command and what to fill in the blueprint's section 12."
+  },
+  {
+   "wp": "WP1",
+   "phase": 1,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "WB"
+   ],
+   "what": "Capture health: states, HUD event, phone alert, log",
+   "focus": "Blueprint docs/sgt-never-miss-blueprint.md section 7.1 and section 9 WP1 as written. Owner answers D8 (20 s, 5 min / 30 min) apply. The HUD stays momentary (constraint 8). Record the STOP (HUD wording) as a check."
+  },
+  {
+   "wp": "WP2",
+   "phase": 1,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "WB"
+   ],
+   "what": "Rows never lost: database retry and dead letter",
+   "focus": "Blueprint docs/sgt-never-miss-blueprint.md section 9 WP2, with R11: do NOT add `PRAGMA busy_timeout` (the connection already waits 5 s); the retry and the dead letter are the work. Done when a test holds a write lock longer than 5 s while a row is queued and the row still lands."
+  },
+  {
+   "wp": "WP3",
+   "phase": 2,
+   "model": "opus",
+   "kind": "auto",
+   "size": "L",
+   "deps": [
+    "WP0"
+   ],
+   "what": "Reader v2: MTA lanes, cached read, tickets, torn detection, Document URL",
+   "focus": "Blueprint docs/sgt-never-miss-blueprint.md sections 4.2, 4.3, 4.5, 4.6 and section 9 WP3, with R2 (each lane has a content worker AND a scope worker; URL-only jobs never wait behind a page read), R3 (a URL-only request never replaces a queued page read), R9 (at most one heavy read per browser process) and R4 (no SDIS change). Owner answers D1 = yes and D2 = MTA. Add every test named in WP3 and in R2, R3, R9. The owner STOP (equivalence tool on the real corpus, three live pages) becomes checks."
+  },
+  {
+   "wp": "WP4",
+   "phase": 2,
+   "model": "opus",
+   "kind": "auto",
+   "size": "L",
+   "deps": [
+    "WP3"
+   ],
+   "what": "CaptureLoop: the SGT path out of the router",
+   "focus": "Blueprint docs/sgt-never-miss-blueprint.md sections 4.4, 4.7 (foreground-only first), 4.8 and section 9 WP4, with R2 (the scope gate uses the scope worker, so heavy reads keep it fresh), R7 (keep the router's own URL read for the crosshair engines; delete nothing of it) and R10 (FRAME_TICK_SEC default 0.35 until WP0's gate probe is measured; keep 0.2 as the named alternative). Owner answers D4, D5, D7 apply."
+  },
+  {
+   "wp": "WP5",
+   "phase": 2,
+   "model": "opus",
+   "kind": "auto",
+   "size": "L",
+   "deps": [
+    "WP3",
+    "WP4"
+   ],
+   "what": "SGT absorbs by provenance: late results, torn and blind rules, source policy",
+   "focus": "Blueprint docs/sgt-never-miss-blueprint.md sections 5.2, 6.1 to 6.3 and section 9 WP5, with R1 (a URL-torn read is dropped and re-read; the closed ring never absorbs across a logout, a login page or an identity contradiction) and R6 (OCR raises a status only together with an identifier). Replace and add the tests R1 and R6 name. Owner answer D3 accepted. The owner STOP (replay diff on the real corpus) becomes a check."
+  },
+  {
+   "wp": "WP6",
+   "phase": 3,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "L",
+   "deps": [
+    "WP4",
+    "WP5"
+   ],
+   "what": "Simulation harness and the six day profiles",
+   "focus": "Blueprint docs/sgt-never-miss-blueprint.md section 8 and section 9 WP6. Profiles 1 to 6 must pass with zero missed and zero mis-attributed submissions. Add a harness case for R1 (logout then the next client in the same tab during a read) and for R2 (a toast during a 5 s read). The `--real` runs are recorded as a check if they would exceed this session."
+  },
+  {
+   "wp": "WP7",
+   "phase": 3,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "WP6"
+   ],
+   "what": "Change gate v2 tuning and the flash OCR trigger",
+   "focus": "Blueprint docs/sgt-never-miss-blueprint.md sections 4.4, 5.1, 5.3 and section 9 WP7, with R2 (the flash trigger fires during a heavy read because scope stays fresh) and R6. Owner answer D4 applies."
+  },
+  {
+   "wp": "WP8",
+   "phase": 3,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "S",
+   "deps": [
+    "WP5",
+    "WP6"
+   ],
+   "what": "Blind pages on every portal",
+   "focus": "Blueprint docs/sgt-never-miss-blueprint.md section 9 WP8 as written (constraint 7: OCR on GST, add-only)."
+  },
+  {
+   "wp": "WP9",
+   "phase": 3,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "WP5"
+   ],
+   "what": "Identity persistence",
+   "focus": "Blueprint docs/sgt-never-miss-blueprint.md section 6.4 and section 9 WP9, with the owner answer D13: IDLE_END_SEC = 4 h, RESUME_WINDOW_SEC = 12 h, the router's _SESSION_IDLE_TIMEOUT_SEC = 4 h, and the test `test_router_prune_never_precedes_sgt_idle_end`. The STOP (12 h on disk) becomes a check."
+  },
+  {
+   "wp": "WP10",
+   "phase": 3,
+   "model": "opus",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "WP4",
+    "WP6"
+   ],
+   "what": "Visible windows that are not in front",
+   "focus": "Blueprint docs/sgt-never-miss-blueprint.md section 4.7 and section 9 WP10, owner answer D6 = yes, D11 rejected (BROWSER_EXE_NAMES unchanged, no `browsers` key in vsdc_scope.json). R9 applies to background windows too. The STOP (a day with it on: CPU, heartbeat lanes) becomes a check."
+  },
+  {
+   "wp": "WP11",
+   "phase": 3,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "WP5"
+   ],
+   "what": "Recovery: the latest filing on list and status pages",
+   "focus": "Blueprint docs/sgt-never-miss-blueprint.md section 6.5 and section 9 WP11, with R5: `latest_period_only` is NOT changed; a list page gives only its latest filing, which may create a slot marked recovered or upgrade an existing row. Golden sessions expect one row. The owner step (label lines from the corpus) cannot be waited for: ship the two record specs disabled (`\"disabled\": true`) with a note, and record the owner step as a check saying exactly which labels to paste into docs/sgt-recovery-spec-notes.md."
+  },
+  {
+   "wp": "WP12",
+   "phase": 4,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "L",
+   "deps": [
+    "WP1",
+    "WP2"
+   ],
+   "what": "Fleet health view and the mandatory update path",
+   "focus": "Blueprint docs/sgt-never-miss-blueprint.md sections 7.2 to 7.4 and section 9 WP12, with R8: the sharing interval is the app setting `capture_health_sync_min` (Settings -> Tracker, spin box 1-60 minutes, default 15) plus a record at once on every state change; replace the once-a-minute test as R8 says. Owner answers D10 and D12 apply. Never set `mandatory` in version.json yourself: record it as a check for the owner's next release."
+  },
+  {
+   "wp": "WP13",
+   "phase": 4,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "WP7",
+    "WP8",
+    "WP9",
+    "WP10",
+    "WP11",
+    "WP12"
+   ],
+   "what": "Live soak tool and pass/fail",
+   "focus": "Blueprint docs/sgt-never-miss-blueprint.md section 8.2 and section 9 WP13. Build the tool and its fixture tests; the 5 h soaks are owner checks (an office PC with real work, the dev PC with mock pages)."
+  },
+  {
+   "wp": "WP14",
+   "phase": 5,
+   "model": "haiku",
+   "kind": "auto",
+   "size": "S",
+   "deps": [
+    "WP13"
+   ],
+   "what": "Scenario sweep and documentation",
+   "focus": "Blueprint docs/sgt-never-miss-blueprint.md section 9 WP14, section 11 (with R4 and R12 already applied) and section 10a. For each scenario id confirm the named test exists and passes, or mark it. Update the docs WP14 names."
+  },
+  {
+   "wp": "WPR",
+   "phase": 5,
+   "model": "opus",
+   "kind": "review",
+   "size": "M",
+   "deps": [
+    "WP14"
+   ],
+   "what": "Final review",
+   "focus": "Review everything built against docs/sgt-stress-problem-report.md section 2 (constraints 1-12), the blueprint's sections 10 and 10a (owner answers, R1-R13) and section 8.2 (acceptance). Read every commit of this project (`git log --oneline` from the restore-point tag `restore-point/pre-sgt-never-miss`). Run the whole suite with `venv/Scripts/python.exe tools/sgt_never_miss_suite.py` (Bash timeout 600000 ms) and compare with WB's note; run tests/test_sgt_replay.py. Grep the diff since the tag for page text, PAN/GSTIN/ARN shapes and client names. Fix defects. Write a merge-readiness note at the end of the hand-off section: what is done, what failed, every owner check still open, and the release steps (D12 mandatory flag)."
+  }
+ ]
+}

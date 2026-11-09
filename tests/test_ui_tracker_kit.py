@@ -78,7 +78,7 @@ def test_unregistered_client_is_amber_and_has_no_autofill(win):
     row = next(r for r in range(win.table.rowCount()) if win.table.item(r, W.COL_CLIENT).text() == "Delta Clinic")
     assert win.table.item(row, W.COL_CLIENT).foreground().color().name().upper() == T["warn"].upper()
     keys = [a.key for a in win.table.item(row, W.COL_ACTIONS).data(ROLE_ACTIONS)]
-    assert keys == ["view", "create", "more"]
+    assert keys == ["view", "notes", "create", "more"]
 
 
 def test_every_row_action_has_a_tooltip_and_autofill_is_the_emerald_primary(win):

@@ -1,7 +1,8 @@
 """
-SDIS engine package (core/sdis): the pre-dev files keys, align, link_map, memory and tables are
+SDIS engine package (core/sdis): the pre-dev files keys, align, link_map and tables are
 module ALIASES of the core ones, so a setting made on the pre-dev name (keys.VIEW) reaches the
-real module.
+real module. The archived aliases (class_diff/archive/: identity, links, memory, noise, relevance,
+screens) are checked to still resolve to the core modules.
 """
 
 import os
@@ -11,6 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools" / "pre_dev" / "class_diff"))
+sys.path.append(str(ROOT / "tools" / "pre_dev" / "class_diff" / "archive"))
 
 import keys  # noqa: E402
 import tables  # noqa: E402
@@ -48,13 +50,13 @@ def test_compare_still_exposes_the_moved_names():
     assert compare.VARIABLE_ALIGNMENT in compare.STATUSES
 
 
-def test_pre_dev_screens_is_the_core_module():
+def test_archived_screens_alias_is_the_core_module():
     import screens
     import core.sdis.screens
     assert screens is core.sdis.screens
 
 
-def test_pre_dev_identity_is_the_core_module():
+def test_archived_identity_alias_is_the_core_module():
     import identity
     import core.sdis.identity
     assert identity is core.sdis.identity
@@ -67,7 +69,7 @@ def test_link_map_reexports_identity_functions():
 
 
 
-def test_pre_dev_links_is_the_core_module():
+def test_archived_links_alias_is_the_core_module():
     import links
     import core.sdis.links
     assert links is core.sdis.links
@@ -79,13 +81,13 @@ def test_pre_dev_align_is_the_core_module():
     assert align is core.sdis.align
 
 
-def test_pre_dev_noise_is_the_core_module():
+def test_archived_noise_alias_is_the_core_module():
     import noise
     import core.sdis.noise
     assert noise is core.sdis.noise
 
 
-def test_pre_dev_memory_is_the_core_module():
+def test_archived_memory_alias_is_the_core_module():
     import memory
     import core.sdis.memory
     assert memory is core.sdis.memory
@@ -93,7 +95,7 @@ def test_pre_dev_memory_is_the_core_module():
     assert core.sdis.memory.RETIRE_P == 0.01
 
 
-def test_pre_dev_relevance_is_the_core_module():
+def test_archived_relevance_alias_is_the_core_module():
     import relevance
     import core.sdis.relevance
     assert relevance is core.sdis.relevance

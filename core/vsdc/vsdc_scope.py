@@ -26,16 +26,17 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 # Registered domains; the domain itself and any subdomain of it is in scope.
 INCOME_TAX_DOMAIN = "incometax.gov.in"
 GST_DOMAIN = "gst.gov.in"
-IN_SCOPE_DOMAINS = (INCOME_TAX_DOMAIN, GST_DOMAIN)
+TRACES_DOMAINS = ("tdscpc.gov.in", "traces.gov.in")
+IN_SCOPE_DOMAINS = (INCOME_TAX_DOMAIN, GST_DOMAIN, *TRACES_DOMAINS)
 
 # Extra domains an admin can add WITHOUT a rebuild, for the day a portal moves to a new address.
 # An optional JSON file, next to the program (frozen build) or the repo root (development):
-#     {"income_tax": ["newportal.example.gov.in"], "gst": []}
+#     {"income_tax": ["newportal.example.gov.in"], "gst": [], "traces": []}
 # Each entry names a registered domain (subdomains included) and can only ever ADD to the
 # portal it is listed under. The file is read once, when the program starts.
 SCOPE_CONFIG_NAME = "vsdc_scope.json"
 SCOPE_CONFIG_ENV = "VSDC_SCOPE_CONFIG"
-_CONFIG_KEYS = {"income_tax": "Income Tax", "gst": "GST Portal"}
+_CONFIG_KEYS = {"income_tax": "Income Tax", "gst": "GST Portal", "traces": "TRACES"}
 # Never accepted as an entry, whatever the file says: a bare registry suffix would put every
 # site under it in scope.
 _FORBIDDEN_ENTRIES = frozenset({"in", "gov.in", "nic.in", "co.in", "org.in", "net.in", "edu.in", "ac.in", "res.in"})
@@ -117,7 +118,7 @@ def load_extra_domains(path: Optional[Path] = None) -> Dict[str, Tuple[str, ...]
     (a wildcard, a URL, a bare suffix like gov.in, fewer than three labels) is rejected with a
     console line, so a typo can never widen the scope by accident.
     """
-    out: Dict[str, List[str]] = {"Income Tax": [], "GST Portal": []}
+    out: Dict[str, List[str]] = {"Income Tax": [], "GST Portal": [], "TRACES": []}
     p = path or _config_path()
     try:
         if not p.is_file():
@@ -280,6 +281,8 @@ def portal_for_url(url: str) -> Optional[str]:
         return "Income Tax"
     if _in_domain(host, GST_DOMAIN):
         return "GST Portal"
+    if any(_in_domain(host, d) for d in TRACES_DOMAINS):
+        return "TRACES"
     for portal, domains in extra_domains().items():
         if any(_in_domain(host, d) for d in domains):
             return portal

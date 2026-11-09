@@ -10,6 +10,8 @@ import re
 from functools import lru_cache
 from typing import Optional
 
+from sera_db.common import payload_device_name
+
 
 @lru_cache(maxsize=8)
 def _profile_of_json(raw_payload_json: str) -> dict:
@@ -63,15 +65,60 @@ def valid_gstin(text) -> str:
 
 def _light_history(hist: list) -> list:
     """A filing history without the (large) raw payload of each filing."""
-    return [{k: v for k, v in h.items() if k != "raw_payload_json"} for h in hist]
+    from sera_db.common import payload_original_author
+    out = []
+    for h in hist:
+        entry = {k: v for k, v in h.items() if k != "raw_payload_json"}
+        if not entry.get("original_author") and h.get("raw_payload_json"):
+            author = payload_original_author(h["raw_payload_json"])
+            if author:
+                entry["original_author"] = author
+        out.append(entry)
+    return out
 
 
-def _latest_payload_status(hist: list) -> Optional[str]:
+_MONTHS = {m: i + 1 for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"))}
+
+
+def _period_date(label) -> Optional[datetime.date]:
+    """When a period label starts, to order periods: "September (FY 2026-27)", "AY 2026-27", "Jun - 2026".
+    None when the label is not a readable period."""
+    from core.sgt.sgt_toolbox import period_start
+    d = period_start(label)
+    if d:
+        return d
+    text = str(label or "")
+    m = re.search(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b", text, re.I)
+    y = re.search(r"\b(20\d{2})\b", text)
+    return datetime.date(int(y.group(1)), _MONTHS[m.group(1).lower()], 1) if m and y else None
+
+
+def headline_entry(hist: list) -> Optional[dict]:
+    """The filing a container's list row stands for. The latest period captured (by the period itself, the
+    capture order when a label cannot be read); in it, the form that has been submitted - the last captured
+    of them if several - otherwise the form captured last. Its status is the period's status."""
+    from core.vsdc.vsdc_assembler import get_status_rank
+    entries = [h for h in hist if isinstance(h, dict)]
+    if not entries:
+        return None
+    dated = [(_period_date(h.get("period_label")), i, h) for i, h in enumerate(entries)]
+    known = [t for t in dated if t[0] is not None]
+    if known:
+        top = max(t[0] for t in known)
+        group = [t[2] for t in known if t[0] == top]
+    else:
+        group = [entries[-1]]
+    group.sort(key=lambda h: str(h.get("created_at") or ""))
+    submitted = [h for h in group if get_status_rank(h.get("status")) >= 2]
+    return (submitted or group)[-1]
+
+
+def _latest_payload_status(hist: list, entry: Optional[dict] = None) -> Optional[str]:
     """The status the latest filing's payload states itself (what the tracker's status
-    resolver looks for), or None."""
+    resolver looks for), or None. entry: that filing, when it is not the last of the history."""
     if not hist:
         return None
-    raw = hist[-1].get("raw_payload_json")
+    raw = (entry if entry is not None else hist[-1]).get("raw_payload_json")
     try:
         obj = json.loads(raw) if isinstance(raw, str) and raw else raw
     except Exception:
@@ -255,6 +302,8 @@ class SrpfMixin:
         # the registration this filing belongs to (a PAN can hold several GSTINs, each filing its own returns)
         entry_gstin = (valid_gstin(payload_obj.get("gstin") if isinstance(payload_obj, dict) else "")
                        or valid_gstin(new_profile.get("gstin")))
+        from sera_db.common import payload_original_author
+        entry_author = payload_original_author(payload_obj)
 
         if existing:
             # existing schema: (identity_key, client_id, company_name, proprietor_name, pan, gstin, tan, phone, email, dob, user_id, portal_profiles, filing_history, raw_aggregates, total_captures, last_updated)
@@ -308,6 +357,8 @@ class SrpfMixin:
                     hist[matched_idx]["created_at"] = dump_ts
                     if entry_gstin:
                         hist[matched_idx]["gstin"] = entry_gstin
+                    if not hist[matched_idx].get("original_author") and entry_author:
+                        hist[matched_idx]["original_author"] = entry_author
                 else:
                     hist.append({
                         "portal": dump_row.get("portal"),
@@ -318,7 +369,8 @@ class SrpfMixin:
                         "raw_payload_json": payload_str,
                         "captured_by": dump_row.get("captured_by"),
                         "created_at": dump_ts,
-                        "gstin": entry_gstin
+                        "gstin": entry_gstin,
+                        "original_author": entry_author,
                     })
             elif dump_row.get("period_label"):
                 hist.append({
@@ -330,7 +382,8 @@ class SrpfMixin:
                     "raw_payload_json": payload_str,
                     "captured_by": dump_row.get("captured_by"),
                     "created_at": dump_ts,
-                    "gstin": entry_gstin
+                    "gstin": entry_gstin,
+                    "original_author": entry_author,
                 })
 
             hist.sort(key=lambda h: str(h.get("created_at") or ""))
@@ -361,7 +414,8 @@ class SrpfMixin:
                     "raw_payload_json": payload_str,
                     "captured_by": dump_row.get("captured_by"),
                     "created_at": dump_ts,
-                    "gstin": entry_gstin
+                    "gstin": entry_gstin,
+                    "original_author": entry_author,
                 })
             elif dump_row.get("period_label"):
                 hist.append({
@@ -373,7 +427,8 @@ class SrpfMixin:
                     "raw_payload_json": payload_str,
                     "captured_by": dump_row.get("captured_by"),
                     "created_at": dump_ts,
-                    "gstin": entry_gstin
+                    "gstin": entry_gstin,
+                    "original_author": entry_author,
                 })
             r_conn.execute("""
                 INSERT INTO client_raw_containers
@@ -507,6 +562,20 @@ class SrpfMixin:
                 hist = []
             self._write_container_light(r_conn, key, hist, total or 0, last_updated)
 
+        # Also refresh any cached light rows where full filing_history carries original_author but history_light is missing it
+        stale = r_conn.execute(
+            """SELECT c.identity_key, c.filing_history, c.total_captures, c.last_updated
+               FROM client_raw_containers c
+               JOIN client_raw_container_light l ON l.identity_key = c.identity_key
+               WHERE c.filing_history LIKE '%original_author%' AND l.history_light NOT LIKE '%original_author%'"""
+        ).fetchall()
+        for key, raw, total, last_updated in stale:
+            try:
+                hist = json.loads(raw) if raw else []
+            except Exception:
+                hist = []
+            self._write_container_light(r_conn, key, hist, total or 0, last_updated)
+
     def get_srpf_containers(self, limit: int = 200, search_query: str = None, slim: bool = False, identity_key: str = None) -> list[dict]:
         """SRPF Phase 1 Filtration: Returns grouped client containers from rawPayload.db.
         Each distinct client or unregistered entity is aggregated into exactly ONE container row.
@@ -623,6 +692,18 @@ class SrpfMixin:
             latest_payload = filing_hist[-1].get("raw_payload_json", "") if filing_hist else ""
             payload_status = r[17] if len(r) > 17 else None
 
+            # The row shows the latest period captured, with the submitted form's status (see headline_entry).
+            head = headline_entry(filing_hist)
+            if head is not None and head is not filing_hist[-1]:
+                latest_portal = head.get("portal", "Portal")
+                latest_arn = head.get("arn", "N/A")
+                latest_status = head.get("status", "")
+                latest_payload = head.get("raw_payload_json", "")
+                payload_status = None if slim else _latest_payload_status(filing_hist, head)
+            if head is not None:
+                latest_period = head.get("period_label", "") or latest_period
+                latest_portal = head.get("portal", "Portal") or latest_portal
+
             containers.append({
                 "identity_key": identity_key,
                 "client_id": cid,
@@ -641,7 +722,7 @@ class SrpfMixin:
                 "user_id": user_id_val,
                 "portal": latest_portal,
                 "period_summary": period_summary,
-                "latest_period": latest_period,
+                "latest_period": latest_period,         # what the Filings & History column shows
                 "latest_arn": latest_arn,
                 "status": latest_status,
                 "latest_status": latest_status,
@@ -705,9 +786,12 @@ class SrpfMixin:
                 )
         return True
 
-    def _resolve_session_proximity_candidate(self, portal: str, timestamp_str: str, max_seconds: int = 900, session_id: str = None) -> Optional[str]:
-        """Resolves PAN/GSTIN candidate from the immediate most recent session capture (registered or unregistered)."""
-        if not portal or not timestamp_str:
+    def _resolve_session_proximity_candidate(self, portal: str, timestamp_str: str, max_seconds: int = 900, session_id: str = None,
+                                             device: str = None) -> Optional[str]:
+        """Resolves PAN/GSTIN candidate from the immediate most recent session capture (registered or unregistered)
+        made on the same PC (`device`, the payload's device_name). No device = no candidate: the tracker is
+        office-wide, and a row from another PC names whoever was open THERE (2026-10-13)."""
+        if not portal or not timestamp_str or not device:
             return None
             
         base_portal = portal.split(" (")[0].strip().lower()
@@ -727,6 +811,8 @@ class SrpfMixin:
                         (f'%"{session_id}"%',)
                     )
                     for arn_num, unassigned_id, raw_json, c_at, cid in cur.fetchall():
+                        if payload_device_name(raw_json) != device:
+                            continue
                         if unassigned_id and re.match(r"^[A-Z]{5}[0-9]{4}[A-Z]$", str(unassigned_id).strip().upper()):
                             return str(unassigned_id).strip().upper()
                         cands = self._extract_identity_candidates_from_payload(arn_number=arn_num, raw_payload_json=raw_json)
@@ -755,6 +841,8 @@ class SrpfMixin:
                         
                     if p_name.split(" (")[0].strip().lower() != base_portal:
                         continue
+                    if payload_device_name(raw_json) != device:
+                        continue
                         
                     try:
                         tn = datetime.fromisoformat(c_at)
@@ -781,17 +869,94 @@ class SrpfMixin:
 
     def get_srpf_container_media(self, identity_key: str) -> dict:
         with self._connect_raw() as conn:
-            cur = conn.execute("SELECT notes, screenshot_path FROM client_raw_containers WHERE identity_key = ?", (identity_key,))
-            row = cur.fetchone()
-            if row:
-                return {"notes": row[0] or "", "screenshot_path": row[1] or ""}
-            return {"notes": "", "screenshot_path": ""}
+            # 1. Primary read from client_container_notes
+            try:
+                cur = conn.execute("SELECT notes, screenshot_path, screenshot_path_2 FROM client_container_notes WHERE identity_key = ?", (identity_key,))
+                row = cur.fetchone()
+                if row and (row[0] or row[1] or row[2]):
+                    return {"notes": row[0] or "", "screenshot_path": row[1] or "", "screenshot_path_2": row[2] or ""}
+            except Exception:
+                pass
 
-    def save_srpf_container_media(self, identity_key: str, notes: str, screenshot_path: str) -> bool:
+            # 2. Compatibility fallback to client_raw_containers
+            try:
+                cur = conn.execute("SELECT notes, screenshot_path, screenshot_path_2 FROM client_raw_containers WHERE identity_key = ?", (identity_key,))
+                row = cur.fetchone()
+                if row:
+                    return {"notes": row[0] or "", "screenshot_path": row[1] or "", "screenshot_path_2": row[2] or ""}
+            except Exception:
+                pass
+            return {"notes": "", "screenshot_path": "", "screenshot_path_2": ""}
+
+    def save_srpf_container_media(self, identity_key: str, notes: str, screenshot_path: str,
+                                  client_id: int | None = None, screenshot_path_2: str | None = None) -> bool:
+        """Saves notes and up to two screenshots. `screenshot_path_2=None` preserves the existing
+        second screenshot (so older callers cannot wipe it); pass "" to clear it."""
+        from datetime import datetime
+        now_str = datetime.now().isoformat()
+        keep_slot2 = 1 if screenshot_path_2 is None else 0
+        slot2_value = "" if screenshot_path_2 is None else screenshot_path_2
         with self._connect_raw() as conn:
-            cur = conn.execute("UPDATE client_raw_containers SET notes = ?, screenshot_path = ? WHERE identity_key = ?", (notes, screenshot_path, identity_key))
-            conn.execute("UPDATE client_raw_container_light SET notes = ? WHERE identity_key = ?", (notes, identity_key))
-            return cur.rowcount > 0
+            if client_id is None:
+                if str(identity_key or "").startswith("CLI-"):
+                    try:
+                        client_id = int(str(identity_key)[4:])
+                    except ValueError:
+                        pass
+                if client_id is None:
+                    try:
+                        row = conn.execute("SELECT client_id FROM client_raw_containers WHERE identity_key = ?", (identity_key,)).fetchone()
+                        if row and row[0] is not None:
+                            client_id = row[0]
+                    except Exception:
+                        pass
+
+            success = False
+
+            # 1. Primary write to client_container_notes
+            try:
+                conn.execute("""
+                    INSERT INTO client_container_notes (identity_key, client_id, notes, screenshot_path, screenshot_path_2, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(identity_key) DO UPDATE SET
+                        client_id = COALESCE(excluded.client_id, client_container_notes.client_id),
+                        notes = excluded.notes,
+                        screenshot_path = excluded.screenshot_path,
+                        screenshot_path_2 = CASE WHEN ? = 1 THEN client_container_notes.screenshot_path_2 ELSE excluded.screenshot_path_2 END,
+                        updated_at = excluded.updated_at
+                """, (identity_key, client_id, notes, screenshot_path, slot2_value, now_str, keep_slot2))
+                success = True
+            except Exception as e:
+                print(f"[database] Warning: Failed to write client_container_notes: {e}")
+
+            # 2. Compatibility mirror to client_raw_containers, its light cache, and the
+            #    filing_history JSON so notes also travel through sync and DRS.
+            try:
+                row = conn.execute("SELECT filing_history FROM client_raw_containers WHERE identity_key = ?", (identity_key,)).fetchone()
+                hist = None
+                if row and row[0]:
+                    hist = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                if isinstance(hist, list) and hist:
+                    hist[-1]["notes"] = notes
+                    new_hist_json = json.dumps(hist)
+                    cur = conn.execute(
+                        "UPDATE client_raw_containers SET notes = ?, screenshot_path = ?, "
+                        "screenshot_path_2 = CASE WHEN ? = 1 THEN screenshot_path_2 ELSE ? END, "
+                        "filing_history = ? WHERE identity_key = ?",
+                        (notes, screenshot_path, keep_slot2, slot2_value, new_hist_json, identity_key)
+                    )
+                else:
+                    cur = conn.execute(
+                        "UPDATE client_raw_containers SET notes = ?, screenshot_path = ?, "
+                        "screenshot_path_2 = CASE WHEN ? = 1 THEN screenshot_path_2 ELSE ? END "
+                        "WHERE identity_key = ?",
+                        (notes, screenshot_path, keep_slot2, slot2_value, identity_key)
+                    )
+                conn.execute("UPDATE client_raw_container_light SET notes = ? WHERE identity_key = ?", (notes, identity_key))
+                success = success or cur.rowcount > 0
+            except Exception:
+                pass
+            return success
 
     # ---------------- Capture -> MCL mapping (client record enrichment) ----------------
 

@@ -64,6 +64,7 @@ class Sidebar(QFrame):
     action_display_scale = Signal()
     action_manage_clients = Signal()
     action_tracker_dump = Signal()
+    action_open_drs = Signal()
     action_audit_log = Signal()
 
     action_settings = Signal()
@@ -185,6 +186,7 @@ class Sidebar(QFrame):
         self.btn_manage_clients = self._create_admin_nav_button(
             "Manage Clients", self.action_manage_clients, "mdi.pencil-outline")
         self.btn_tracker_dump = self._create_nav_button("Tracker Dump", self.action_tracker_dump, "mdi.radar")
+        self.btn_drs_system = self._create_nav_button("DRS System", self.action_open_drs, "mdi.bell-outline")
         self.btn_audit = self._create_admin_nav_button("Audit Log", self.action_audit_log, "mdi.shield-outline")
         self._set_active_button(self.btn_all_clients)
 

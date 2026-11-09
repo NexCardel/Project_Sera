@@ -56,7 +56,10 @@ def _thread_cpu_seconds(native_id: int) -> float:
 
 
 def _append(text: str) -> None:
-    print(text)
+    try:
+        print(text)
+    except Exception:
+        pass            # no console, or a closed one: the file below is what matters
     path = _log_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists() and path.stat().st_size > LOG_MAX_BYTES:
@@ -80,7 +83,7 @@ def _native_dump() -> str:
         return f"--- py-spy --native failed: {e}"
 
 
-def _dump(stalled_for: float, native: bool = False) -> None:
+def _dump(stalled_for: float, native: bool = False, title: str = "") -> None:
     try:
         native_text = _native_dump() if native else ""     # first: the stall may end any moment
         threads = {t.ident: t for t in threading.enumerate()}
@@ -88,7 +91,8 @@ def _dump(stalled_for: float, native: bool = False) -> None:
         t0 = time.monotonic()
         time.sleep(1.0)
         frames = sys._current_frames()
-        lines = [f"==== {datetime.now():%Y-%m-%d %H:%M:%S}  main thread stalled {stalled_for:.1f} s ===="]
+        what = title or f"main thread stalled {stalled_for:.1f} s"
+        lines = [f"==== {datetime.now():%Y-%m-%d %H:%M:%S}  {what} ===="]
         for ident, frame in frames.items():
             t = threads.get(ident)
             name = t.name if t else f"thread {ident}"
@@ -104,6 +108,12 @@ def _dump(stalled_for: float, native: bool = False) -> None:
         _append("\n".join(lines) + "\n\n")
     except Exception:
         pass
+
+
+def dump_threads(title: str, native: bool = False) -> None:
+    """Every thread's stack to hang.log now, headed by title - for a stuck background thread
+    (core/vsdc/vsdc_diag's capture-worker watch), whose stall the main-thread heartbeat cannot see."""
+    _dump(0.0, native=native, title=title)
 
 
 def start(app) -> None:

@@ -103,6 +103,27 @@ class TestRows:
         rows = r.sgt.drain()
         assert [(x["filing_type"], x["period_label"], x["status"]) for x in rows] == [("ITR-4", "AY 2026-27", "Draft")]
 
+    def test_only_a_complete_filing_gets_an_original_author(self, tmp_path):
+        """An in-progress capture must not claim authorship; the PC that files it does."""
+        with patch("core.sgt.sgt_shadow.device_name", return_value="DESK-PC-1"):
+            draft_rig = Rig(tmp_path / "draft")
+            draft_rig.see(PROFILE_URL, PROFILE_PAGE)
+            draft_rig.see(WIZ_PI, ["Personal Information", "x", "y"])
+            draft = [x for x in draft_rig.sgt.drain() if x["status"] == "Draft"]
+            assert draft and all(x["original_author"] is None for x in draft)
+            assert all(x["raw_payload"]["original_author"] is None for x in draft)
+
+            filed_rig = Rig(tmp_path / "filed")
+            filed_rig.see(PROFILE_URL, PROFILE_PAGE)
+            filed_rig.see(WIZ_PI, ["Personal Information", "x", "y"])
+            filed_rig.see(
+                "https://eportal.incometax.gov.in/iec/foservices/#/foreturns-ay26/fo-itr4-ay2026/fo-submit-success",
+                ["You have successfully submitted your return!", "Acknowledgement Number :",
+                 "123456789150726", "You still need to e-Verify within 30 days"])
+            filed = [x for x in filed_rig.sgt.drain() if x["arn"] == "123456789150726"]
+            assert filed and all(x["original_author"] == "DESK-PC-1" for x in filed)
+            assert all(x["raw_payload"]["original_author"] == "DESK-PC-1" for x in filed)
+
     def test_changing_the_form_moves_the_row_instead_of_leaving_a_stale_one(self, tmp_path):
         r = Rig(tmp_path)
         r.see(PROFILE_URL, PROFILE_PAGE)

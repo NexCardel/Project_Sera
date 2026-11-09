@@ -1,12 +1,12 @@
 """
-Session boundaries: the ONLY things that end an SGT session are a login page, a logout page, 2 hours
+Session boundaries: the ONLY things that end an SGT session are a login page, a logout page, 4 hours
 idle, a closed window and shutdown. Another tab - another portal, another client of the same portal,
 a mail tab - sets the session aside and brings it back; it never ends it. Identifiers are fictional.
 """
 import json
 import random
 
-from core.sgt.sgt_shadow import IDLE_END_SEC, IDLE_REASON, SgtShadow
+from core.sgt.sgt_shadow import IDLE_END_SEC, IDLE_REASON, RESUME_WINDOW_SEC, SgtShadow
 from core.vsdc import vsdc_router
 from test_sgt_shadow import (FILED_URL, GST, ITR, LOGIN_URL, LOGOUT_URL, PROFILE_PAGE, PROFILE_URL, Rig,
                              filed_page, frame)
@@ -130,17 +130,57 @@ class TestOnlyTheListedBoundariesEnd:
         r.see(LOGOUT_URL, ["Logged out"], shade=100)
         assert reasons(r) == ["logout"]
 
-    def test_idle_limit_is_two_hours(self, tmp_path):
-        assert IDLE_END_SEC == 2 * 3600 and IDLE_REASON == "idle 2 hr"
-        assert vsdc_router._SESSION_IDLE_TIMEOUT_SEC == IDLE_END_SEC
+    def test_idle_limit_is_four_hours(self, tmp_path):
+        assert IDLE_END_SEC == 4 * 3600 and IDLE_REASON == "idle 4 hr"
+        assert RESUME_WINDOW_SEC == 12 * 3600
         r = Rig(tmp_path)
         itr_client(r)
         r.see(PROFILE_URL, PROFILE_PAGE, advance=IDLE_END_SEC - 30)
-        assert ends(r) == []                                # 2 hours less 30 s: still the same session
+        assert ends(r) == []                                # 4 hours less 30 s: still the same session
         r.see(PROFILE_URL, PROFILE_PAGE, advance=IDLE_END_SEC + 1)
         assert reasons(r) == [IDLE_REASON]
 
-    def test_a_session_set_aside_also_idles_out_after_two_hours(self, tmp_path):
+    def test_router_prune_never_precedes_sgt_idle_end(self):
+        assert vsdc_router._SESSION_IDLE_TIMEOUT_SEC >= IDLE_END_SEC
+
+    def _router_with(self, r, windows):
+        """A router holding `windows` (hwnd -> seconds since last seen) that feeds the rig's SgtShadow."""
+        import time
+        from unittest.mock import MagicMock
+        from core.vsdc.vsdc_assembler import VisualSessionAssembler
+        router = vsdc_router.VSDCRouter(ocr_engine=MagicMock(), assembler=VisualSessionAssembler(),
+                                        on_activity=lambda *a: None)
+        router._sgt = r.sgt
+        for hwnd, ago in windows.items():
+            router._window_sessions[hwnd] = vsdc_router._WindowSession()
+            router._window_sessions[hwnd].last_seen = time.time() - ago
+        return router
+
+    def test_the_router_prune_parks_instead_of_ending_when_the_window_still_exists(self, tmp_path):
+        from unittest.mock import patch
+        r = Rig(tmp_path)
+        itr_client(r, hwnd=1)
+        gst_client(r, hwnd=1)                               # the ITR session is set aside
+        router = self._router_with(r, {1: vsdc_router._SESSION_IDLE_TIMEOUT_SEC + 60, 9: 0})
+        r.clock[0] += 60
+        with patch("core.vsdc.vsdc_router.user32.IsWindow", return_value=True):
+            router._prune_stale_sessions(current_hwnd=9)
+        assert 1 not in router._window_sessions and 9 in router._window_sessions
+        assert reasons(r) == [IDLE_REASON] * 2              # ended ...
+        assert 1 not in r.sgt._sessions and 1 not in r.sgt._shelf
+        assert len(r.sgt._parked[1]) == 2                   # ... and both clients are kept, resumable
+
+    def test_a_closed_window_ends_without_parking(self, tmp_path):
+        from unittest.mock import patch
+        r = Rig(tmp_path)
+        itr_client(r, hwnd=1)
+        router = self._router_with(r, {1: 5, 9: 0})
+        with patch("core.vsdc.vsdc_router.user32.IsWindow", return_value=False):
+            router._prune_stale_sessions(current_hwnd=9)
+        assert reasons(r) == ["window closed"]
+        assert r.sgt._parked == {}
+
+    def test_a_session_set_aside_also_idles_out_after_four_hours(self, tmp_path):
         r = Rig(tmp_path)
         itr_client(r)
         gst_client(r)                                       # ITR is set aside

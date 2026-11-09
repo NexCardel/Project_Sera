@@ -15,6 +15,6 @@ ID,Local Time (IST),Timestamp (UTC),Workstation,Actor,Action,Client Token,Client
 6,<local>,2026-03-02T10:06:00,local,Bhanu,update,CLI-00003,Charlie Foods,,detail for update
 5,<local>,2026-03-02T10:05:00,local,Asha,create,CLI-00001,Alpha Traders Pvt Ltd,,detail for create
 4,<local>,2026-03-02T10:04:00,local,Bhanu,manual_copy,CLI-00003,Charlie Foods,,detail for manual_copy
-3,<local>,2026-03-02T10:03:00,local,Asha,autofill,CLI-00001,Alpha Traders Pvt Ltd,1,detail for autofill
-2,<local>,2026-03-02T10:02:00,local,Bhanu,manual_assist,CLI-00003,Charlie Foods,1,detail for manual_assist
+3,<local>,2026-03-02T10:03:00,local,Asha,autofill,CLI-00001,Alpha Traders Pvt Ltd,GST,detail for autofill
+2,<local>,2026-03-02T10:02:00,local,Bhanu,manual_assist,CLI-00003,Charlie Foods,GST,detail for manual_assist
 1,<local>,2026-03-02T10:01:00,local,Asha,view,CLI-00001,Alpha Traders Pvt Ltd,,detail for view

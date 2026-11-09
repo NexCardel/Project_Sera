@@ -1,3 +1,4 @@
+from .vsdc_alerts import device_name
 """
 core/vsdc/vsdc_assembler.py — Boundary-Driven Visual Session Assembler
 ======================================================================
@@ -987,6 +988,10 @@ class VisualSessionAssembler:
     # ── Unified Single-Point Payload Dispatch Engine ──────────────────────────
     def _build_payload(self, record: FilingRecord, crosshair_id: str) -> Dict[str, Any]:
         """Builds the canonical master payload envelope expected by database.py."""
+        cm = record.capture_method or f"VSDC_{crosshair_id}"
+        arn_val = record.arn or record.ack_number
+        has_arn = bool(arn_val and str(arn_val).strip().upper() not in ("N/A", "NA", "", "UNKNOWN"))
+        orig_author = device_name() if has_arn else None
         return {
             "source": "vsdc_optical",
             "session_id": self.session_id,
@@ -1009,6 +1014,7 @@ class VisualSessionAssembler:
             "status": record.status,
             "raw_text": record.raw_text,
             "capture_method": record.capture_method or f"VSDC_{crosshair_id}",
+            "original_author": orig_author,
             "raw_payload": {
                 "source": {
                     "protocol": record.portal,
@@ -1022,6 +1028,7 @@ class VisualSessionAssembler:
                 "trade_name": record.trade_name,
                 "assembler_captures": [record.to_dict()],
                 "timeline": list(self.session.steps),
+                "original_author": orig_author,
             },
         }
 
@@ -1141,6 +1148,8 @@ class VisualSessionAssembler:
 
         self._flushed = True
         primary = valid_records[0]
+        has_arn = bool(primary.arn and str(primary.arn).strip().upper() not in ("N/A", "NA", "", "UNKNOWN"))
+        orig_author = device_name() if has_arn else None
 
         master_payload = {
             "source": "vsdc_optical",
@@ -1162,6 +1171,7 @@ class VisualSessionAssembler:
             "status": primary.status,
             "raw_text": primary.raw_text,
             "capture_method": primary.capture_method,
+            "original_author": orig_author,
             "raw_payload": {
                 "source": {
                     "protocol": primary.portal,
@@ -1175,6 +1185,7 @@ class VisualSessionAssembler:
                 "trade_name": primary.trade_name,
                 "assembler_captures": [r.to_dict() for r in valid_records],
                 "timeline": list(self.session.steps),
+                "original_author": orig_author,
             },
         }
 

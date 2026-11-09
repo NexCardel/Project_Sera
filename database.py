@@ -34,6 +34,13 @@ from sera_db.sdis import SdisMixin
 _WRITE_GENERATION: dict = {}
 _WRITE_GENERATION_LOCK = threading.Lock()
 
+# How long a connection waits for another writer (the capture worker, SGT's outbox, a
+# sync sealer) before sqlite3 raises "database is locked". sqlite's own default is 5 s:
+# on a slow office disk a WAL checkpoint or a notes save can hold the lock longer, and
+# the capture outbox then retries the whole row for ~15 s. Explicit, so it is tunable
+# and the same for both databases.
+_SQLITE_TIMEOUT_SEC = 10.0
+
 
 class SeraDatabase(SchemaMixin, SettingsMixin, MclServicesMixin, ClientsMixin, AuditBackupMixin, SrpfMixin, TrackerDumpMixin, MaintenanceMixin, SdisMixin):
     def __init__(self, db_path: str, hex_key: str, raw_db_path: str = None, defer_startup_maintenance: bool = False, key_mode: str = None):
@@ -119,7 +126,7 @@ class SeraDatabase(SchemaMixin, SettingsMixin, MclServicesMixin, ClientsMixin, A
 
     @contextmanager
     def _connect(self):
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=_SQLITE_TIMEOUT_SEC)
         depth = self._enter_connection()
         try:
             conn.execute(f"PRAGMA key = \"x'{self.hex_key}'\";")
@@ -186,7 +193,7 @@ class SeraDatabase(SchemaMixin, SettingsMixin, MclServicesMixin, ClientsMixin, A
     @contextmanager
     def _connect_raw(self):
         """Dedicated connection for rawPayload.db."""
-        conn = sqlite3.connect(self.raw_db_path)
+        conn = sqlite3.connect(self.raw_db_path, timeout=_SQLITE_TIMEOUT_SEC)
         depth = self._enter_connection()
         try:
             conn.execute(f"PRAGMA key = \"x'{self.hex_key}'\";")

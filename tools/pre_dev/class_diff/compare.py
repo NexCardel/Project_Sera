@@ -68,7 +68,7 @@ import os
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 HERE = Path(__file__).resolve().parent
 OUT_DIR = HERE / "output"
@@ -90,6 +90,8 @@ from core.sdis.labels import (CT_HYPERLINK, CT_IMAGE, CT_TABLE, FIXABLE_TYPES, L
                               _children, _container, _end, _first_label, _label, _same_column,
                               _table_label, composites, element_type, is_period, value_type)
 from core.sdis.paths import write_csv                            # noqa: E402
+import cards                                                     # noqa: E402
+import arrange as arr                                            # noqa: E402
 
 FIXED, SEMI_VARIABLE, VARIABLE, ONLY_LATEST, ONLY_PREVIOUS, VARIABLE_ALIGNMENT = (
     "fixed", "semi-variable", "variable", "only latest", "only previous", "variable_alignment")
@@ -237,6 +239,347 @@ FIELDS = ["page", "status", "key_matched", "check", "label", "example_value", "p
 
 MEMORY_FIELDS = ["status", "label", "value_type", "clients", "example_value", "key"]
 
+# --comp --cards (plan 7): the card columns come after the ordinary ones.
+CARD_FIELDS = ["group", "group_kind", "member", "card_name", "slot", "slot_role", "pairing"]
+CARDS_CSV_FIELDS = FIELDS + CARD_FIELDS
+
+
+def _texts_of(member: Dict[str, Any]) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for it in member["items"]:
+        out.setdefault(it["slot"], it["text"])
+    return out
+
+
+def _group_rows(gi: int, g: Dict[str, Any], h: Dict[str, Any], out: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Plan 6.2-6.3: the rows of one paired group. Cards: one row per slot of each pair (fixed / variable /
+    only latest / only previous). list, table or unknown: the template, one row per slot with its values
+    from both pages (first few and the count) and a row-count row."""
+    rows: List[Dict[str, Any]] = []
+    roles_l, roles_p = cards.roles(g), cards.roles(h)
+    base = {"group": gi, "group_kind": g["kind"]}
+    if out["mode"] == "cards":
+        name = g.get("name_slot")
+        for pr in out["pairs"]:
+            ma = g["members"][pr["a"]] if pr["a"] is not None else None
+            mb = h["members"][pr["b"]] if pr["b"] is not None else None
+            ta, tb = (_texts_of(ma) if ma else {}), (_texts_of(mb) if mb else {})
+            card = (ta.get(name) if ma else None) or (tb.get(h.get("name_slot")) if mb else None) or ""
+            for slot in out["slots"]:
+                if slot not in ta and slot not in tb:
+                    continue
+                if slot not in tb:
+                    st = ONLY_LATEST
+                elif slot not in ta:
+                    st = ONLY_PREVIOUS
+                else:
+                    st = FIXED if ta[slot] == tb[slot] else VARIABLE
+                role = (roles_l.get(slot) or roles_p.get(slot) or {}).get("role", "")
+                rows.append(dict(base, member=(pr["a"] if pr["a"] is not None else f"p{pr['b']}"), card_name=card,
+                                 slot=slot, slot_role=role, pairing=pr["pairing"], status=st,
+                                 example_value=ta.get(slot, ""), previous_example=tb.get(slot, "")))
+        return rows
+    na, nb = out["rows"]
+    for slot in out["slots"]:
+        ta = [it["text"] for m in g["members"] for it in m["items"] if it["slot"] == slot]
+        tb = [it["text"] for m in h["members"] for it in m["items"] if it["slot"] == slot]
+        rows.append(dict(base, member="", card_name="", slot=slot,
+                         slot_role=(roles_l.get(slot) or roles_p.get(slot) or {}).get("role", ""),
+                         pairing="template", status="template",
+                         example_value=" | ".join(ta[:3]) + (f" (+{len(ta) - 3})" if len(ta) > 3 else ""),
+                         previous_example=" | ".join(tb[:3]) + (f" (+{len(tb) - 3})" if len(tb) > 3 else "")))
+    rows.append(dict(base, member="", card_name="", slot="", slot_role="", pairing="rows",
+                     status="row counts", example_value=f"latest {na} rows", previous_example=f"previous {nb} rows"))
+    return rows
+
+
+def cards_rows(lrec: Dict[str, Any], prec: Dict[str, Any], page: str, lclient: Any = "latest",
+               pclient: Any = "previous") -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+    """--comp --cards for one page link: the groups of both comp pages (classified across the two clients),
+    paired by identity, then the rest of each page compared with the group members taken out (plan 6.4).
+    Returns (rows, counts). Counts only, for the console."""
+    lfl, pfl = flat_of(lrec), flat_of(prec)
+    lg = cards.find_groups(lfl, cards.docs_for(lrec, lfl))
+    pg = cards.find_groups(pfl, cards.docs_for(prec, pfl))
+    counts: Counter = Counter()
+    if cards.RHO is None:
+        # plan 8: until RHO is measured no group is a card; every group is compared as its template
+        counts["rho not measured: templates"] = 1
+    else:
+        cards.classify([(page, lfl, lg, lclient), (page, pfl, pg, pclient)])
+    rows: List[Dict[str, Any]] = []
+    used: Set[int] = set()
+    for gi, g in enumerate(lg):
+        j = cards.match_group(g, lfl, pg, pfl, used)
+        if j is None:
+            counts["group only latest"] += 1
+            rows.append(dict(group=gi, group_kind=g["kind"], pairing="page", status=ONLY_LATEST,
+                             example_value=f"{len(g['members'])} members", slot="", member="", card_name=""))
+            continue
+        used.add(j)
+        h = pg[j]
+        counts["group paired"] += 1
+        rows += _group_rows(gi, g, h, cards.compare_groups(g, h))
+    for j, h in enumerate(pg):
+        if j not in used:
+            counts["group only previous"] += 1
+            rows.append(dict(group=j, group_kind=h["kind"], pairing="page", status=ONLY_PREVIOUS,
+                             example_value="", previous_example=f"{len(h['members'])} members", slot="", member="", card_name=""))
+    outside = compare_flat(cards.outside_flat(lfl, lg), cards.outside_flat(pfl, pg))
+    counts["rows outside groups"] = len(outside)
+    rows += outside
+    for r in rows:
+        r.setdefault("page", page)
+        for f in CARD_FIELDS:
+            r.setdefault(f, "")
+        for f in FIELDS:
+            r.setdefault(f, "")
+    return rows, dict(counts)
+
+
+
+# --comp --arrange (WP4, design 3.6): the arrangement of each page (arrange.py) pairs its groups. Top-level
+# groups pair by period and seed likeness; members pair by the name slot when one is known (corpus R at or
+# above the cut-off, arrange.NAME_CUT), else by place; nested groups pair only inside a pair of members (bug
+# 10). Every leaf is reported once: the rest of the page goes through compare_flat() with the group leaves
+# taken out, so group text never anchors anything outside its group.
+ARRANGE_FIELDS = ["group", "group_kind", "member", "card_name", "slot", "slot_role", "label_dir", "ticking", "pairing"]
+ARRANGE_CSV_FIELDS = FIELDS + ARRANGE_FIELDS
+
+
+def _without(fl: List[Dict[str, Any]], drop: Set[int]) -> List[Dict[str, Any]]:
+    """The page without the given node indices (leaves only), parents re-indexed through removed ancestors."""
+    keep = [i for i in range(len(fl)) if i not in drop]
+    new_index = {old: new for new, old in enumerate(keep)}
+    out = []
+    for old in keep:
+        e = dict(fl[old])
+        p = e["parent"]
+        while p >= 0 and p in drop:
+            p = fl[p]["parent"]
+        e["parent"] = new_index[p] if p >= 0 and p in new_index else -1
+        out.append(e)
+    return out
+
+
+def _pair_by_seed(gl_idx: List[int], gp_idx: List[int], la: Any, pa: Any) -> Dict[int, int]:
+    """Greedy pairing of groups by the likeness of their seed periods: cheapest first, each group once,
+    never above EDITS_PER_TOKEN per token. Ties go to page order."""
+    cands = []
+    for i in gl_idx:
+        g = la.groups[i]
+        tl = la.tokens[g.seed:g.seed + g.period]
+        for j in gp_idx:
+            h = pa.groups[j]
+            if h.period != g.period:
+                continue
+            cost = arr.edits(tl, pa.tokens[h.seed:h.seed + h.period]) / g.period
+            if cost <= arr.EDITS_PER_TOKEN:
+                cands.append((cost, i, j))
+    out: Dict[int, int] = {}
+    used: Set[int] = set()
+    for _, i, j in sorted(cands):
+        if i not in out and j not in used:
+            out[i] = j
+            used.add(j)
+    return out
+
+
+def _family_r(gl: Any, la: Any, gp: Any, pa: Any, lclient: str, pclient: str) -> Dict[Any, Optional[float]]:
+    """Corpus R per slot over the two captures of this group (the two clients of one link)."""
+    def texts(g: Any, a: Any) -> Dict[Any, List[str]]:
+        return {k: [a.leaves[i].text for i in v if i is not None] for k, v in g.slots.items()}
+    fam = [(lclient, len(gl.members), texts(gl, la)), (pclient, len(gp.members), texts(gp, pa))]
+    return {k: arr.recurrence(fam, k) for k in gl.slots}
+
+
+def _member_pairs(gl: Any, la: Any, gp: Any, pa: Any,
+                  R: Dict[Any, Optional[float]]) -> Tuple[List[Tuple[Optional[int], Optional[int]]], str]:
+    """(latest member, previous member) pairs and how they paired: by the name text when both pages show a
+    name at the same slot, else by place (member 1 with member 1). Unpaired members have None on one side."""
+    name = arr.name_slot(gl, R, arr.NAME_CUT)
+    if name is not None and name == arr.name_slot(gp, R, arr.NAME_CUT):
+        keyed: Dict[str, int] = {}
+        for b, idx in enumerate(gp.slots[name]):
+            if idx is not None:
+                keyed.setdefault(pa.leaves[idx].text, b)
+        pairs: List[Tuple[Optional[int], Optional[int]]] = []
+        used: Set[int] = set()
+        for a, idx in enumerate(gl.slots[name]):
+            b = keyed.get(la.leaves[idx].text) if idx is not None else None
+            if b is not None and b not in used:
+                used.add(b)
+                pairs.append((a, b))
+            else:
+                pairs.append((a, None))
+        pairs += [(None, b) for b in range(len(gp.members)) if b not in used]
+        return pairs, "name"
+    n = min(len(gl.members), len(gp.members))
+    pairs = [(a, a) for a in range(n)] + [(a, None) for a in range(n, len(gl.members))]
+    pairs += [(None, b) for b in range(n, len(gp.members))]
+    return pairs, "place"
+
+
+def _label_dir(lv: Any, g: Any, member: int, slot: Any) -> str:
+    """The step from the nearest label slot before this value (same member) to the value: R or D."""
+    if not isinstance(slot, int):
+        return ""
+    val = g.slots[slot][member]
+    if val is None:
+        return ""
+    for q in range(slot - 1, -1, -1):
+        if g.roles.get(q) == "label":
+            lab = g.slots[q][member] if q in g.slots else None
+            return arr.step(lv.leaves[lab].box, lv.leaves[val].box) if lab is not None else ""
+    return ""
+
+
+def _template_rows(gl: Any, gp: Any, la: Any, pa: Any, group_no: int,
+                   covered_l: Set[int], covered_p: Set[int]) -> List[Dict[str, Any]]:
+    """A list compared by template: one row per slot with its first values and count from each page, and
+    one row with the member counts. Every leaf of the group is covered by these rows."""
+    base = {"group": group_no, "group_kind": gl.kind}
+    rows: List[Dict[str, Any]] = []
+    for slot in sorted(set(gl.slots) | set(gp.slots), key=arr._slot_order):
+        ia = [i for i in gl.slots.get(slot, []) if i is not None]
+        ib = [i for i in gp.slots.get(slot, []) if i is not None]
+        covered_l.update(la.leaves[i].node for i in ia)
+        covered_p.update(pa.leaves[i].node for i in ib)
+        ta = [la.leaves[i].text for i in ia]
+        tb = [pa.leaves[i].text for i in ib]
+        rows.append(dict(base, member="", card_name="", slot=str(slot), slot_role=gl.roles.get(slot) or gp.roles.get(slot, ""),
+                         label_dir="", ticking="", pairing="template", status="template",
+                         example_value=" | ".join(ta[:3]) + (f" (+{len(ta) - 3})" if len(ta) > 3 else ""),
+                         previous_example=" | ".join(tb[:3]) + (f" (+{len(tb) - 3})" if len(tb) > 3 else "")))
+    rows.append(dict(base, member="", card_name="", slot="", slot_role="", label_dir="", ticking="",
+                     pairing="rows", status="row counts", example_value=f"latest {len(gl.members)} members",
+                     previous_example=f"previous {len(gp.members)} members"))
+    return rows
+
+
+def _pair_rows(li: int, pi: int, la: Any, pa: Any, lc: str, pc: str, group_no: int,
+               covered_l: Set[int], covered_p: Set[int], counts: Counter) -> List[Dict[str, Any]]:
+    """Rows of one paired group: its member pairs slot by slot, then its nested groups inside each pair."""
+    gl, gp = la.groups[li], pa.groups[pi]
+    rows: List[Dict[str, Any]] = []
+    R = _family_r(gl, la, gp, pa, lc, pc)
+    name_l = arr.name_slot(gl, R, arr.NAME_CUT)
+    if name_l is None or name_l != arr.name_slot(gp, R, arr.NAME_CUT):
+        distinct = "distinct" in gl.roles.values() or "distinct" in gp.roles.values()
+        if len(gl.members) != len(gp.members) or distinct:
+            # design 3.5: a count that differs across the captures makes a list; lists are never paired row
+            # by row, they are compared by template (slot, example values, counts). A distinct slot may be
+            # a name whose R is not measured yet (design 3.5.1: then the group is a list too): pairing its
+            # members by place would join IFF with GSTR-1 when both pages show the same number of tiles.
+            counts["group compared by template"] += 1
+            return _template_rows(gl, gp, la, pa, group_no, covered_l, covered_p)
+    pairs, how = _member_pairs(gl, la, gp, pa, R)
+    counts[f"group paired by {how}"] += 1
+    name = name_l if how == "name" else None
+    base = {"group": group_no, "group_kind": gl.kind}
+    for a, b in pairs:
+        if a is None or b is None:
+            # one side only: every leaf of that member is reported as only latest / only previous
+            latest = a is not None
+            lv, g, m, cov = (la, gl, a, covered_l) if latest else (pa, gp, b, covered_p)
+            name_idx = g.slots[name][m] if name is not None else None
+            card = lv.leaves[name_idx].text if name_idx is not None else ""
+            for slot, idx in g.slots.items():
+                if idx[m] is None:
+                    continue
+                leaf = lv.leaves[idx[m]]
+                cov.add(leaf.node)
+                rows.append(dict(base, member=m if latest else f"p{m}", card_name=card, slot=str(slot),
+                                 slot_role=g.roles.get(slot, ""), label_dir="",
+                                 ticking="yes" if leaf.ticking else "no", pairing=how,
+                                 status=ONLY_LATEST if latest else ONLY_PREVIOUS,
+                                 example_value=leaf.text if latest else "",
+                                 previous_example="" if latest else leaf.text))
+            continue
+        card = la.leaves[gl.slots[name][a]].text if name is not None and gl.slots[name][a] is not None else ""
+        for slot in sorted(set(gl.slots) | set(gp.slots), key=arr._slot_order):
+            ia = gl.slots[slot][a] if slot in gl.slots else None
+            ib = gp.slots[slot][b] if slot in gp.slots else None
+            if ia is None and ib is None:
+                continue
+            if ia is not None:
+                covered_l.add(la.leaves[ia].node)
+            if ib is not None:
+                covered_p.add(pa.leaves[ib].node)
+            ta = la.leaves[ia].text if ia is not None else ""
+            tb = pa.leaves[ib].text if ib is not None else ""
+            if ia is None:
+                st = ONLY_PREVIOUS
+            elif ib is None:
+                st = ONLY_LATEST
+            else:
+                st = FIXED if ta == tb else VARIABLE
+            ticking = (la.leaves[ia].ticking if ia is not None else pa.leaves[ib].ticking)
+            rows.append(dict(base, member=a, card_name=card, slot=str(slot),
+                             slot_role=gl.roles.get(slot) or gp.roles.get(slot, ""),
+                             label_dir=_label_dir(la, gl, a, slot) if ia is not None else "",
+                             ticking="yes" if ticking else "no", pairing=how, status=st,
+                             example_value=ta, previous_example=tb))
+    # Nested groups produce no rows of their own (design 3.6.7): their leaves are slots of this group's
+    # members, so the card rows carry them, and they pair only inside a pair of members (bug 10), because
+    # every slot is compared with the slot at the same place in the paired member.
+    return rows
+
+
+def arrange_rows(lrec: Dict[str, Any], prec: Dict[str, Any], page: str, lclient: str = "latest",
+                 pclient: str = "previous") -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+    """--comp --arrange for one page link: each page's arrangement, its groups paired, then the rest of each
+    page through compare_flat() with the group leaves removed. Returns (rows, counts), counts only."""
+    lfl, pfl = flat_of(lrec), flat_of(prec)
+    la, pa = arr.arrange(lfl), arr.arrange(pfl)
+    counts: Counter = Counter()
+    top_l = [i for i, g in enumerate(la.groups) if g.parent is None]
+    top_p = [j for j, h in enumerate(pa.groups) if h.parent is None]
+    pairs = _pair_by_seed(top_l, top_p, la, pa)
+    rows: List[Dict[str, Any]] = []
+    covered_l: Set[int] = set()
+    covered_p: Set[int] = set()
+    for i in top_l:
+        if i in pairs:
+            counts["group paired"] += 1
+            rows += _pair_rows(i, pairs[i], la, pa, lclient, pclient, i, covered_l, covered_p, counts)
+        else:
+            counts["group only latest"] += 1
+            g = la.groups[i]
+            for m, (a, b) in enumerate(g.members):
+                for x in range(a, b):
+                    covered_l.add(la.leaves[x].node)
+                    rows.append(dict(group=i, group_kind=g.kind, member=m, card_name="", slot="", slot_role="",
+                                     label_dir="", ticking="", pairing="page", status=ONLY_LATEST,
+                                     example_value=la.leaves[x].text, previous_example=""))
+    paired_p = set(pairs.values())
+    for j in top_p:
+        if j not in paired_p:
+            counts["group only previous"] += 1
+            h = pa.groups[j]
+            for m, (a, b) in enumerate(h.members):
+                for x in range(a, b):
+                    covered_p.add(pa.leaves[x].node)
+                    rows.append(dict(group=j, group_kind=h.kind, member=f"p{m}", card_name="", slot="", slot_role="",
+                                     label_dir="", ticking="", pairing="page", status=ONLY_PREVIOUS,
+                                     example_value="", previous_example=pa.leaves[x].text))
+    for g in la.groups:
+        for a, b in g.members:
+            covered_l.update(la.leaves[x].node for x in range(a, b))
+    for g in pa.groups:
+        for a, b in g.members:
+            covered_p.update(pa.leaves[x].node for x in range(a, b))
+    outside = compare_flat(_without(lfl, covered_l), _without(pfl, covered_p))
+    counts["rows outside groups"] = len(outside)
+    rows += outside
+    for r in rows:
+        r.setdefault("page", page)
+        for f in ARRANGE_FIELDS:
+            r.setdefault(f, "")
+        for f in FIELDS:
+            r.setdefault(f, "")
+    return rows, dict(counts)
+
 
 def memory_rows(m: Any) -> List[Dict[str, Any]]:
     """One row per memory node with a text: example_value is the latest client's, from its own view."""
@@ -284,7 +627,7 @@ class _Comp:
         return self.rec["nodes"]
 
 
-def main_comp(stamp_out: bool = True) -> int:
+def main_comp(stamp_out: bool = True, cards_mode: bool = False, arrange_mode: bool = False) -> int:
     """Experiment 1: for every page link, the LATEST comp page vs the latest comp page of the same
     link from another client (another session whose PAN / GSTIN differ; a session with none is
     compared anyway, with a warning)."""
@@ -313,6 +656,31 @@ def main_comp(stamp_out: bool = True) -> int:
         print(f"Previous : {pp.name}  [{masked(pids)}]  {len(prec['nodes'])} nodes")
         if not (lids and pids):
             print("  WARNING: no PAN / GSTIN on one side - it may be the same client")
+        if arrange_mode:
+            arr_rows, arr_counts = arrange_rows(lrec, prec, page, "|".join(sorted(lids)) or "latest",
+                                                "|".join(sorted(pids)) or "previous")
+            for msg, k in arr_counts.items():
+                print(f"  {msg:22s} {k:5d}")
+            out = write_csv(OUT_DIR / f"compare_arrange_{lrec.get('session', '')}__{page_slug(page)}.csv",
+                            ARRANGE_CSV_FIELDS, arr_rows)
+            print(f"CSV      : {out.name}")
+            print()
+            done += 1
+            continue
+        if cards_mode:
+            try:
+                card_rows, card_counts = cards_rows(lrec, prec, page,
+                                                   "|".join(sorted(lids)) or "latest", "|".join(sorted(pids)) or "previous")
+            except ValueError as e:
+                raise SystemExit(str(e))
+            for msg, k in card_counts.items():
+                print(f"  {msg:22s} {k:5d}")
+            out = write_csv(OUT_DIR / f"compare_cards_{lrec.get('session', '')}__{page_slug(page)}.csv",
+                            CARDS_CSV_FIELDS, card_rows)
+            print(f"CSV      : {out.name}")
+            print()
+            done += 1
+            continue
         page_rows = compare(lrec, prec)
         counts = Counter(r["status"] for r in page_rows)
         for st in STATUSES:
@@ -339,6 +707,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--two", action="store_true", help="the old mode: the latest client vs the previous one")
     ap.add_argument("--comp", action="store_true",
                     help="experiment 1: each link's latest comp page (snapshot_diff.py) vs another client's")
+    ap.add_argument("--rho", type=float, default=None,
+                    help="with --cards: try a recurrence cut-off before it is measured (an experiment knob; "
+                         "the measured value goes in cards.RHO, plan docs/cards_rows/plan.md section 9)")
+    ap.add_argument("--cards", action="store_true",
+                    help="with --comp: compare the cards and rows of each page (plan docs/cards_rows/plan.md section 6)")
+    ap.add_argument("--arrange", action="store_true",
+                    help="with --comp: compare the arrangement of each page (arrange.py, design cards-solution.md section 3.6)")
     ap.add_argument("--latest", help="a key_probe_*.json - compare two single reads instead of client maps")
     ap.add_argument("--previous", help="a key_probe_*.json (default with --latest: the newest earlier read of that page)")
     ap.add_argument("--view", choices=("raw", "sgt"), default="raw",
@@ -352,7 +727,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ALIGN = args.align == "on"
     print(f"View     : {args.view}    Align: {args.align}")
     if args.comp:
-        return main_comp()
+        if args.rho is not None:
+            cards.RHO = args.rho
+            print(f"Rho      : {args.rho:g} (given on the command line, not measured)")
+        return main_comp(cards_mode=args.cards, arrange_mode=args.arrange)
     if not (args.two or args.latest or args.previous):
         return main_memory()
 

@@ -11,6 +11,7 @@ import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from PIL import Image
@@ -55,6 +56,12 @@ class Harness:
         )
         self.router.get_foreground_info = MagicMock(return_value=(4242, title, "chrome.exe"))
         self.router.extract_browser_url = MagicMock(return_value=url)
+        # SGT's capture loop (core/vsdc/vsdc_capture) never looks at the real screen in a test: no
+        # window is in front unless a test attaches its own fake (tests/test_vsdc_capture).
+        self.router.capture_platform = MagicMock()
+        self.router.capture_platform.foreground.return_value = 0
+        self.router.capture_platform.windows.return_value = []
+        self.router.capture_backend = MagicMock()
         # Starts at the real time: patching time.time also moves date.today(), and an ack is
         # judged against today's date, so a clock stuck in 1970 would call every ack "old".
         self.clock = [datetime.now().timestamp()]
@@ -96,6 +103,63 @@ class TestRunsOnPagesWithNoCrosshair(unittest.TestCase):
         self.assertEqual(p["capture_method"], "VSDC247_itr_ack")
         self.assertEqual(p["raw_payload"]["source"]["engine"], "VSDC247")
         self.assertEqual(p["raw_text"], "")
+
+    def test_a_certain_capture_carries_the_frame_it_read_as_evidence(self):
+        h = Harness()
+        h.screen(["Dashboard"], shade=245)
+        h.tick()
+        h.screen(ITR_CONFIRMATION)
+        p = h.run()[0]
+        path = p.get("_evidence_screenshot")
+        try:
+            self.assertTrue(path, "the frame used for the read must be kept")
+            self.assertTrue(os.path.exists(path))
+            with Image.open(path) as frame:
+                self.assertEqual(frame.size, (1366, 768))
+        finally:
+            if path and os.path.exists(path):
+                os.remove(path)
+
+    def test_a_prompt_only_candidate_keeps_no_evidence_frame(self):
+        lines = ["Your return has been filed successfully", f"ARN : {GST_ARN}"]
+        h = Harness(url=PORTAL_GST, title=TITLE_GST)
+        h.screen(["x"], shade=245)
+        h.tick()
+        h.screen(lines)
+        with patch.object(h.router, "_save_247_evidence", return_value="") as save:
+            h.run(1)
+        self.assertEqual(h.events[-1][0], "prompt")
+        save.assert_not_called()
+
+    def test_evidence_is_the_frame_already_read_not_a_second_screenshot(self):
+        h = Harness()
+        h.screen(["Dashboard"], shade=245)
+        h.tick()
+        h.screen(ITR_CONFIRMATION)
+        p = h.run()[0]
+        path = p.get("_evidence_screenshot")
+        try:
+            self.assertTrue(path and os.path.exists(path))
+            h.ocr.capture_window_full.assert_not_called()
+        finally:
+            if path and os.path.exists(path):
+                os.remove(path)
+
+    def test_a_submission_behind_a_non_browser_window_is_still_captured(self):
+        """Our own Notes & Media dialog (modal) is foreground: VSDC247 must watch the
+        browser windows still on screen, exactly like SGT does from its own loop."""
+        h = Harness()
+        h.router.get_foreground_info = MagicMock(
+            return_value=(9999, "Notes & Media — Client", "python.exe"))
+        h.router._timed_capture = lambda hwnd: h.router.ocr.capture_window_image(hwnd)
+        h.screen(["Dashboard"], shade=245)
+        with patch("core.vsdc.vsdc_windows.browser_windows",
+                   return_value=[SimpleNamespace(hwnd=4242, title=TITLE_ITR, proc_name="chrome.exe")]):
+            h.tick()
+            h.screen(ITR_CONFIRMATION)
+            got = [r for r in (h.tick(advance=1.1) for _ in range(3)) if r]
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["arn"], TODAY_ACK)
 
     def test_the_same_filing_is_never_sent_twice(self):
         h = Harness()

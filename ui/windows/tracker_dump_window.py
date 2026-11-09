@@ -12,8 +12,8 @@ import os
 import shutil
 import time
 from datetime import datetime, timezone
-from PySide6.QtCore import Qt, Signal, QTimer, QThread, QSettings
-from PySide6.QtGui import QColor, QCursor, QFont,QFontMetrics, QGuiApplication, QPixmap, QKeySequence, QShortcut
+from PySide6.QtCore import Qt, Signal, QTimer, QSize, QThread, QSettings
+from PySide6.QtGui import QBrush, QColor, QCursor, QFont, QFontMetrics, QGuiApplication, QPixmap, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QTableWidget, QTableWidgetItem, QHeaderView,
@@ -26,7 +26,7 @@ from ui.utils.profile_parser import extract_profile_from_payload, map_profile_to
 from ui.utils.responsive import WidthMode, mode_for
 from ui.components.kit import (
     MessageBox,
-    Banner, CellAction, Card, Chip, ChipBar, Checkbox, DarkListTable, DataGrid, DialogFrame, GridFooter,
+    Banner, Caption, CellAction, Card, Chip, ChipBar, Checkbox, DarkListTable, DataGrid, DialogFrame, GridFooter,
     GridFrame, Pill, TextArea, set_page_margins,
     IconButton, Input, LabelledAction, PageHeader, Segmented, Select, SettingRow, Tile, ROLE_ACTIONS,
     ROLE_PILL, ROLE_SUB, show_message,
@@ -82,6 +82,19 @@ def _parse_record_datetime(ts_str: str) -> datetime | None:
         return dt.astimezone()
     except Exception:
         return None
+
+
+def _first_seen_note(raw_json) -> str:
+    """'First seen: list page (recovered)' for a row SGT first read as a card on a list page; '' otherwise."""
+    try:
+        obj = json.loads(raw_json) if isinstance(raw_json, str) else raw_json
+        raw = obj.get("raw_payload") if isinstance(obj, dict) else None
+        src = raw.get("source") if isinstance(raw, dict) else None
+        if isinstance(src, dict) and src.get("first_seen_as") == "recovered":
+            return "First seen: list page (recovered)"
+    except Exception:
+        pass
+    return ""
 
 
 def _resolve_ltt_submission_status(record: dict) -> tuple[str, dict]:
@@ -659,6 +672,494 @@ class AddClientFromCaptureDialog(QDialog):
             show_message(self, "Client Creation Failed", f"Could not create client: {e}", "critical")
 
 
+class NotesAndMediaDialog(QDialog):
+    """
+    Dedicated modal dialog for viewing, editing, and managing
+    client/filing notes and attached media screenshots.
+    """
+    def __init__(self, item_data: dict, db=None, is_container: bool = False, parent=None):
+        super().__init__(parent)
+        self.db = db
+        self.item_data = item_data
+        self.is_container = is_container or bool(item_data.get("filing_history"))
+
+        client_name = (
+            item_data.get("display_name")
+            or item_data.get("client_name")
+            or item_data.get("company_name")
+            or item_data.get("proprietor_name")
+            or "Client"
+        )
+        entity_key = item_data.get("identity_key") or item_data.get("pan") or item_data.get("arn_number") or ""
+        self.setWindowTitle(f"Notes & Media — {client_name}")
+        self.resize(880, 580)
+        self.setMinimumSize(720, 480)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        sub_parts = []
+        if entity_key: sub_parts.append(f"Key: {entity_key}")
+        portal = item_data.get("portal") or item_data.get("service_name")
+        if portal: sub_parts.append(portal)
+        period = item_data.get("period_label") or item_data.get("latest_period")
+        if period: sub_parts.append(period)
+        arn = item_data.get("arn_number") or item_data.get("latest_arn")
+        if arn and arn != "N/A": sub_parts.append(f"ARN: {arn}")
+
+        frame = DialogFrame(client_name, " • ".join(sub_parts), self,
+                            icon="mdi.note-text-outline", full=True)
+        outer.addWidget(frame)
+        frame.closeRequested.connect(self.accept)
+
+        self.lbl_save_status = Pill("", "neutral")
+        self.lbl_save_status.setVisible(False)
+        frame.add_header_widget(self.lbl_save_status)
+
+        # Two panes: the notes editor, and the attached screenshots
+        content_layout = QHBoxLayout()
+        content_layout.setSpacing(T["s_4"])
+
+        left = Card("Client notes & remarks")
+        notes_box = QWidget()
+        left_layout = QVBoxLayout(notes_box)
+        left_layout.setContentsMargins(T["s_4"], T["s_3"], T["s_4"], T["s_3"])
+        left_layout.setSpacing(T["s_2"])
+        self.txt_notes = TextArea(placeholder="Write client notes, audit observations, or filing remarks here...\n(Changes are automatically saved)")
+        left_layout.addWidget(self.txt_notes, stretch=1)
+        left_layout.addWidget(Caption("Changes auto-saved • WinRT OCR scans directly here"))
+        left.add_row(notes_box)
+        content_layout.addWidget(left, stretch=5)
+
+        right = Card("Attached screenshots / media")
+        media_box = QWidget()
+        right_layout = QVBoxLayout(media_box)
+        right_layout.setContentsMargins(T["s_4"], T["s_3"], T["s_4"], T["s_3"])
+        right_layout.setSpacing(T["s_2"])
+
+        self.media_tabs = Segmented(["Screenshot 1", "Screenshot 2"])
+        self._media_stack = QStackedWidget()
+        self.media_tabs.currentChanged.connect(self._media_stack.setCurrentIndex)
+        right_layout.addWidget(self.media_tabs)
+        self._slot_buttons = []
+        self._slot_previews = []
+        self.current_screenshot_paths = ["", ""]
+        self._saved_screenshot_raws = ["", ""]
+        self._image_cleareds = [False, False]
+        # Slots the user attached/pasted/cleared in this dialog are theirs: an evidence
+        # frame that arrives afterwards must not replace them, and a stale autosave must
+        # not write over it either.
+        self._slot_dirty = [False, False]
+        self._ocr_workers = set()
+        self._media_slot_pages = []
+        for slot_index, slot_title in enumerate(("Screenshot 1", "Screenshot 2")):
+            page = self._build_media_slot(slot_index, slot_title)
+            self._media_slot_pages.append(page)
+            self._media_stack.addWidget(page)
+        right_layout.addWidget(self._media_stack, stretch=1)
+        right.add_row(media_box)
+
+        # Backwards-compatible aliases for the first slot.
+        self.lbl_image_preview = self._slot_previews[0]
+        self.btn_attach_img = self._slot_buttons[0]["attach"]
+        self.btn_paste_img = self._slot_buttons[0]["paste"]
+        self.btn_ocr_img = self._slot_buttons[0]["ocr"]
+        self.btn_expand_img = self._slot_buttons[0]["expand"]
+        self.btn_clear_img = self._slot_buttons[0]["clear"]
+
+        content_layout.addWidget(right, stretch=5)
+        content = QWidget()
+        content.setLayout(content_layout)
+        frame.add_widget(content, 1)
+        frame.add_widget(Caption("Tip: Ctrl+V pastes into the selected screenshot tab"))
+        btn_close = frame.add_action("Done", variant="primary", icon="mdi.check")
+        btn_close.clicked.connect(self.accept)
+
+        # Connect signals
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(1000)
+        self._save_timer.timeout.connect(self._save_notes)
+        self.txt_notes.textChanged.connect(self._on_notes_changed)
+
+        QTimer.singleShot(0, self._load_notes_and_media)
+
+    def _set_save_status(self, text, tone="neutral"):
+        self.lbl_save_status.set_text(text)
+        self.lbl_save_status.set_tone(tone)
+        self.lbl_save_status.setVisible(bool(text))
+
+    def _build_media_slot(self, index: int, title: str) -> QWidget:
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, T["s_2"], 0, 0)
+        page_layout.setSpacing(T["s_2"])
+
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(T["s_2"])
+
+        btn_attach = LabelledAction("Attach", variant="secondary", icon="mdi.paperclip", sm=True,
+                                    tooltip=f"Select an image file for {title.lower()}")
+        btn_paste = LabelledAction("Paste", variant="secondary", icon="mdi.content-paste", sm=True,
+                                   tooltip=f"Paste a screenshot into {title.lower()} (Ctrl+V)")
+        btn_ocr = LabelledAction("OCR", variant="secondary", icon="mdi.text-recognition", sm=True,
+                                 tooltip=f"Scan text from {title.lower()} into notes")
+        btn_expand = IconButton("mdi.fullscreen", "View full resolution image", variant="bordered", sm=True)
+        btn_clear = IconButton("mdi.close-circle-outline", f"Remove {title.lower()}", variant="bordered", sm=True)
+
+        toolbar.addWidget(btn_attach)
+        toolbar.addWidget(btn_paste)
+        toolbar.addWidget(btn_ocr)
+        toolbar.addStretch()
+        toolbar.addWidget(btn_expand)
+        toolbar.addWidget(btn_clear)
+        page_layout.addLayout(toolbar)
+
+        preview = QLabel()
+        preview.setObjectName("KitPreview")
+        preview.setAlignment(Qt.AlignCenter)
+        preview.setMinimumHeight(220)
+        page_layout.addWidget(preview, stretch=1)
+
+        self._slot_previews.append(preview)
+        self._slot_buttons.append({
+            "attach": btn_attach, "paste": btn_paste, "ocr": btn_ocr,
+            "expand": btn_expand, "clear": btn_clear,
+        })
+        self._set_slot_empty(index)
+
+        btn_attach.clicked.connect(lambda _=False, i=index: self._attach_image(i))
+        btn_paste.clicked.connect(lambda _=False, i=index: self._paste_image(i))
+        btn_ocr.clicked.connect(lambda _=False, i=index: self._trigger_ocr_manually(i))
+        btn_expand.clicked.connect(lambda _=False, i=index: self._expand_image(i))
+        btn_clear.clicked.connect(lambda _=False, i=index: self._clear_image(i))
+        return page
+
+    def _default_slot_text(self, index: int) -> str:
+        if index == 1:
+            return ("Screenshot 2\n\nLogin evidence\n\n"
+                    "Attach or press Ctrl+V to paste from clipboard")
+        return ("Screenshot 1\n\nFiling / submission evidence\n\n"
+                "Attach or press Ctrl+V to paste from clipboard")
+
+    def _set_slot_empty(self, index: int, text: str = ""):
+        label = self._slot_previews[index]
+        label.setPixmap(QPixmap())
+        label.setText(text or self._default_slot_text(index))
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_V and (event.modifiers() & Qt.ControlModifier):
+            clipboard = QGuiApplication.clipboard()
+            if clipboard.mimeData().hasImage():
+                index = self.media_tabs.current_index()
+                self._paste_image(index if index >= 0 else 0)
+                return
+        super().keyPressEvent(event)
+
+    def _get_media_dir(self) -> str:
+        db_path = getattr(self.db, "raw_db_path", None) or getattr(self.db, "db_path", None)
+        if db_path:
+            base_dir = os.path.dirname(os.path.abspath(db_path))
+        else:
+            base_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data"))
+        media_dir = os.path.join(base_dir, "media")
+        os.makedirs(media_dir, exist_ok=True)
+        return media_dir
+
+    def _resolve_media_path(self, raw_path: str) -> str:
+        if not raw_path:
+            return ""
+        if os.path.isabs(raw_path):
+            if os.path.exists(raw_path):
+                return os.path.abspath(raw_path)
+            candidate = os.path.join(self._get_media_dir(), os.path.basename(raw_path))
+            if os.path.exists(candidate):
+                return candidate
+            return raw_path
+
+        media_dir = self._get_media_dir()
+        user_data_dir = os.path.dirname(media_dir)
+        p1 = os.path.join(user_data_dir, raw_path)
+        if os.path.exists(p1):
+            return os.path.abspath(p1)
+        p2 = os.path.join(media_dir, os.path.basename(raw_path))
+        if os.path.exists(p2):
+            return os.path.abspath(p2)
+        legacy_media_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "media"))
+        p3 = os.path.join(legacy_media_dir, os.path.basename(raw_path))
+        if os.path.exists(p3):
+            return os.path.abspath(p3)
+        return os.path.abspath(p1)
+
+    def _write_media_to_db(self, notes: str, final_path: str, final_path_2: str):
+        if self.is_container:
+            ikey = self.item_data.get('identity_key')
+            cid = self.item_data.get('client_id')
+            if ikey and hasattr(self.db, 'save_srpf_container_media'):
+                self.db.save_srpf_container_media(
+                    ikey, notes, final_path, client_id=cid, screenshot_path_2=final_path_2
+                )
+        else:
+            uid = self.item_data.get('id')
+            if uid and hasattr(self.db, 'save_tracker_dump_media'):
+                self.db.save_tracker_dump_media(
+                    uid, notes, final_path, screenshot_path_2=final_path_2
+                )
+
+    def _read_media_from_db(self):
+        """The (notes, [slot1, slot2]) currently stored for this row/container."""
+        notes = ""
+        raw_paths = ["", ""]
+        if not self.db:
+            return notes, raw_paths
+        if self.is_container:
+            ikey = self.item_data.get('identity_key')
+            if ikey and hasattr(self.db, 'get_srpf_container_media'):
+                media_data = self.db.get_srpf_container_media(ikey)
+                notes = media_data.get("notes", "") or ""
+                raw_paths = [media_data.get("screenshot_path", "") or "",
+                             media_data.get("screenshot_path_2", "") or ""]
+        else:
+            uid = self.item_data.get('id')
+            if uid and hasattr(self.db, 'get_tracker_dump_media'):
+                media_data = self.db.get_tracker_dump_media(uid)
+                notes = media_data.get("notes", "") or ""
+                raw_paths = [media_data.get("screenshot_path", "") or "",
+                             media_data.get("screenshot_path_2", "") or ""]
+        return notes, raw_paths
+
+    def _adopt_external_slot_paths(self):
+        """Picks up screenshots attached after this dialog opened.
+
+        VSDC247 writes its evidence frame / login frame straight into the row while the
+        dialog is open. The dialog's autosave would otherwise write the stale (usually
+        empty) path it loaded at open time over that fresh frame. Only slots the user has
+        not touched here are adopted.
+        """
+        try:
+            _notes, raw_paths = self._read_media_from_db()
+        except Exception:
+            return
+        dirty = getattr(self, "_slot_dirty", [False, False])
+        for index in range(2):
+            if dirty[index]:
+                continue
+            raw = raw_paths[index] or ""
+            if raw == (self._saved_screenshot_raws[index] or ""):
+                continue
+            if not raw:
+                self.current_screenshot_paths[index] = ""
+                self._saved_screenshot_raws[index] = ""
+                self._image_cleareds[index] = False
+                self._set_slot_empty(index)
+                continue
+            resolved = self._resolve_media_path(raw)
+            if resolved and os.path.exists(resolved):
+                self.current_screenshot_paths[index] = resolved
+                self._saved_screenshot_raws[index] = raw
+                self._image_cleareds[index] = False
+                self._show_preview(index, resolved)
+
+    def _load_notes_and_media(self):
+        if not self.db: return
+        try:
+            self._image_cleareds = [False, False]
+            self._slot_dirty = [False, False]
+            notes, raw_paths = self._read_media_from_db()
+
+            self._saved_screenshot_raws = list(raw_paths)
+            if notes:
+                self.txt_notes.setPlainText(notes)
+
+            migrated = False
+            for index, spath in enumerate(raw_paths):
+                if spath:
+                    resolved = self._resolve_media_path(spath)
+                    self.current_screenshot_paths[index] = resolved
+                    if resolved and os.path.exists(resolved):
+                        self._show_preview(index, resolved)
+                        media_dir = self._get_media_dir()
+                        if os.path.isabs(spath) and not os.path.abspath(resolved).startswith(media_dir):
+                            try:
+                                fname = os.path.basename(resolved)
+                                dest_file = os.path.join(media_dir, fname)
+                                if not os.path.exists(dest_file):
+                                    shutil.copy2(resolved, dest_file)
+                                rel_path = f"media/{fname}"
+                                self.current_screenshot_paths[index] = dest_file
+                                self._saved_screenshot_raws[index] = rel_path
+                                migrated = True
+                            except Exception as ex:
+                                print(f"[media] Migration of legacy media file failed: {ex}")
+                    else:
+                        self.current_screenshot_paths[index] = ""
+                        self._set_slot_empty(index, f"Image file not found:\n{spath}")
+                        print(f"[media] Screenshot path stored in DB ({spath}) but file not found on disk.")
+                else:
+                    self.current_screenshot_paths[index] = ""
+                    self._set_slot_empty(index)
+            if migrated:
+                self._write_media_to_db(
+                    notes, self._saved_screenshot_raws[0], self._saved_screenshot_raws[1]
+                )
+        except Exception as e:
+            print(f"Error loading media: {e}")
+
+    def _show_preview(self, index: int, path):
+        pixmap = QPixmap(path)
+        label = self._slot_previews[index]
+        if not pixmap.isNull():
+            scaled_pixmap = pixmap.scaled(400, 260, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            label.setPixmap(scaled_pixmap)
+            label.setText("")
+        else:
+            label.setText("Failed to load image")
+
+    def _on_notes_changed(self):
+        self._set_save_status("Saving...", "amber")
+        self._save_timer.start()
+
+    def _clear_image(self, index: int = 0):
+        self._image_cleareds[index] = True
+        self._slot_dirty[index] = True
+        self.current_screenshot_paths[index] = ""
+        self._saved_screenshot_raws[index] = ""
+        self._set_slot_empty(index)
+        self._save_notes()
+
+    def _expand_image(self, index: int = 0):
+        path = self.current_screenshot_paths[index]
+        if path and os.path.exists(path):
+            try:
+                os.startfile(path)
+            except Exception as e:
+                MessageBox.warning(self, "Error", f"Could not open image: {e}")
+
+    def _attach_image(self, index: int = 0):
+        file_path, _ = QFileDialog.getOpenFileName(self, "Select Image", "", "Images (*.png *.jpg *.jpeg *.bmp)")
+        if file_path:
+            self._image_cleareds[index] = False
+            self._slot_dirty[index] = True
+            self.current_screenshot_paths[index] = file_path
+            self._show_preview(index, file_path)
+            self._save_notes()
+            self._run_ocr(file_path)
+
+    def _paste_image(self, index: int = 0):
+        clipboard = QGuiApplication.clipboard()
+        mime_data = clipboard.mimeData()
+        if mime_data.hasImage():
+            image = clipboard.image()
+            if not image.isNull():
+                self._image_cleareds[index] = False
+                self._slot_dirty[index] = True
+                temp_path = os.path.join(
+                    os.path.expanduser("~"),
+                    f"temp_sera_paste_{index}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png"
+                )
+                image.save(temp_path, "PNG")
+                self.current_screenshot_paths[index] = temp_path
+                self._show_preview(index, temp_path)
+                self._save_notes()
+                self._run_ocr(temp_path)
+        else:
+            MessageBox.information(self, "No Image", "No image found in clipboard.")
+
+    def _trigger_ocr_manually(self, index: int = 0):
+        path = self.current_screenshot_paths[index]
+        if path and os.path.exists(path):
+            self._run_ocr(path)
+        else:
+            MessageBox.information(self, "No Image", "Please attach or paste an image first to scan text.")
+
+    def _run_ocr(self, img_path):
+        from ui.utils.ocr_worker import OCRWorker
+        self._set_save_status("Scanning OCR...", "blue")
+        worker = OCRWorker(img_path)          # no parent: the module registry keeps it alive
+        self._ocr_workers.add(worker)
+        worker.ocr_finished.connect(self._on_ocr_finished)
+        worker.finished.connect(lambda w=worker: self._ocr_workers.discard(w))
+        self.ocr_thread = worker              # backwards-compatible alias
+        worker.start()
+
+    def _wait_for_ocr_workers(self, timeout_ms: int = 2000):
+        for worker in list(getattr(self, "_ocr_workers", ())):
+            if worker.isRunning():
+                worker.wait(timeout_ms)
+        self._ocr_workers.clear()
+
+    def closeEvent(self, event):
+        # Autosave is single-shot: a keystroke less than a second old would otherwise be
+        # lost when the dialog closes.
+        if self._save_timer.isActive():
+            self._save_timer.stop()
+            try:
+                self._save_notes()
+            except Exception:
+                pass
+        self._save_timer.stop()
+        self._wait_for_ocr_workers()
+        super().closeEvent(event)
+
+    def _on_ocr_finished(self, text):
+        if text and not text.startswith("OCR Error") and not text.startswith("OCR Failed") and not text.startswith("OCR Engine"):
+            current_text = self.txt_notes.toPlainText()
+            if text.strip() not in current_text:
+                new_text = f"{current_text}\n\n--- OCR Extracted Text ---\n{text}".strip()
+                self.txt_notes.setPlainText(new_text)
+                self._save_notes()
+        else:
+            self._set_save_status("OCR Failed", "red")
+            QTimer.singleShot(2500, lambda: self._set_save_status(""))
+
+    def _finalize_slot_path(self, index: int) -> str:
+        if self._image_cleareds[index]:
+            return ""
+        current = self.current_screenshot_paths[index]
+        saved_raw = self._saved_screenshot_raws[index]
+        if not current:
+            return saved_raw or ""
+        if not os.path.exists(current):
+            # Guard against deleting stored pointer when file is missing
+            return saved_raw or ""
+
+        media_dir = self._get_media_dir()
+        resolved_abs = os.path.abspath(current)
+        if not resolved_abs.startswith(media_dir):
+            ext = os.path.splitext(current)[1]
+            if not ext:
+                ext = ".png"
+            prefix = "screenshot" if index == 0 else "screenshot_2"
+            filename = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}{ext}"
+            dest_file = os.path.join(media_dir, filename)
+            shutil.copy2(current, dest_file)
+            self.current_screenshot_paths[index] = dest_file
+            final_path = f"media/{filename}"
+        else:
+            final_path = f"media/{os.path.basename(current)}"
+        self._saved_screenshot_raws[index] = final_path
+        return final_path
+
+    def _save_notes(self):
+        if not self.db: return
+        # A frame VSDC247 attached while this dialog was open is newer than what this
+        # dialog loaded; without this the autosave writes the stale empty slot over it.
+        self._adopt_external_slot_paths()
+        notes = self.txt_notes.toPlainText()
+        try:
+            final_paths = [self._finalize_slot_path(0), self._finalize_slot_path(1)]
+        except Exception as e:
+            self._set_save_status("Failed to save image", "red")
+            return
+
+        try:
+            self._write_media_to_db(notes, final_paths[0], final_paths[1])
+            self._set_save_status("✓ Saved!", "emerald")
+            QTimer.singleShot(2500, lambda: self._set_save_status(""))
+        except Exception as e:
+            self._set_save_status("Failed to save to database", "red")
+
+
 class PayloadInspectorDialog(QDialog):
     """Modal dialog displaying formatted profile details, filing history, and raw technical JSON."""
     def __init__(self, item_data: dict, db=None, is_container: bool = False, parent=None):
@@ -667,6 +1168,7 @@ class PayloadInspectorDialog(QDialog):
         self.item_data = item_data
         self.is_container = is_container or bool(item_data.get("filing_history"))
         self.current_screenshot_path = ""
+        self._ocr_workers = set()
         title_tag = item_data.get('identity_key') or item_data.get('arn_number') or 'Capture'
         self.setWindowTitle(f"SRPF Container Inspector — {title_tag}")
         self.resize(1000, 700)
@@ -716,6 +1218,7 @@ class PayloadInspectorDialog(QDialog):
             str(item_data.get('portal') or "Government Portal"),
             f"{captures} capture{'s' if captures != 1 else ''}",
             f"Updated {_format_to_local_time(item_data.get('last_updated') or item_data.get('created_at'))}",
+            _first_seen_note(raw_json),
         ) if p)
 
         frame = DialogFrame(_strip_pan_suffix(client_name, pan_val), meta_text, self,
@@ -732,7 +1235,18 @@ class PayloadInspectorDialog(QDialog):
         status_pill.setToolTip("Latest submission status")
         frame.add_header_widget(status_pill)
 
-        tabs = Segmented(["Overview", "Raw JSON", "Notes && Media"])
+        vsdc_v_info = {}
+        try:
+            pj_v = json.loads(raw_json) if isinstance(raw_json, str) else (raw_json or {})
+            vsdc_v_info = pj_v.get("vsdc247-v") or pj_v.get("raw_payload", {}).get("vsdc247-v") or pj_v.get("vsdc247") or {}
+        except Exception:
+            pass
+        if isinstance(vsdc_v_info, dict) and vsdc_v_info.get("verified"):
+            vb = Pill("✓ VSDC247-V Verified", "purple")
+            vb.setToolTip(f"Verified by VSDC247-V OCR Verifier\nARN: {vsdc_v_info.get('arn', 'N/A')}\nSeen at: {vsdc_v_info.get('seen_at', 'N/A')}")
+            frame.add_header_widget(vb)
+
+        tabs = Segmented(["Overview", "Raw JSON"])
         pages = QStackedWidget()
         tabs.currentChanged.connect(pages.setCurrentIndex)
         frame.add_widget(tabs)
@@ -899,64 +1413,6 @@ class PayloadInspectorDialog(QDialog):
         json_layout.addWidget(self.txt_json, 1)
         pages.addWidget(tab_json)
 
-        # Tab 3: Notes & Media
-        tab_notes = QWidget()
-        notes_layout = QVBoxLayout(tab_notes)
-        notes_layout.setContentsMargins(0, 0, 0, 0)
-        notes_layout.setSpacing(T["s_3"])
-
-        self.txt_notes = TextArea(placeholder="Write notes here...")
-
-        media_toolbar = QHBoxLayout()
-        media_toolbar.setSpacing(T["s_2"])
-
-        self.btn_attach_img = IconButton("mdi.paperclip", "Attach Image", tab_notes, variant="bordered")
-        self.btn_paste_img = IconButton("mdi.content-paste", "Paste Image", tab_notes, variant="bordered")
-        self.btn_ocr_img = IconButton("mdi.text-recognition", "Scan Text (OCR)", tab_notes, variant="bordered")
-        self.btn_clear_img = IconButton("mdi.close-circle-outline", "Clear Image", tab_notes, variant="bordered")
-
-        media_toolbar.addWidget(self.btn_attach_img)
-        media_toolbar.addWidget(self.btn_paste_img)
-        media_toolbar.addWidget(self.btn_ocr_img)
-        media_toolbar.addWidget(self.btn_clear_img)
-        media_toolbar.addStretch()
-
-        self.lbl_save_status = Pill("", "neutral")
-        self.lbl_save_status.setVisible(False)
-        media_toolbar.addWidget(self.lbl_save_status)
-
-        self.btn_expand_img = IconButton("mdi.fullscreen", "View Full Image", tab_notes, variant="bordered")
-        media_toolbar.addWidget(self.btn_expand_img)
-
-        self.lbl_image_preview = QLabel("No image attached")
-        self.lbl_image_preview.setObjectName("KitPreview")
-        self.lbl_image_preview.setAlignment(Qt.AlignCenter)
-        self.lbl_image_preview.setMinimumHeight(200)
-
-        notes_layout.addWidget(self.txt_notes, stretch=1)
-        notes_layout.addLayout(media_toolbar)
-        notes_layout.addWidget(self.lbl_image_preview)
-
-        pages.addWidget(tab_notes)
-
-        # Connect signals
-        self.btn_attach_img.clicked.connect(self._attach_image)
-        self.btn_paste_img.clicked.connect(self._paste_image)
-        self.btn_ocr_img.clicked.connect(self._trigger_ocr_manually)
-        self.btn_clear_img.clicked.connect(self._clear_image)
-        self.btn_expand_img.clicked.connect(self._expand_image)
-
-        # Auto-save setup
-        self._save_timer = QTimer(self)
-        self._save_timer.setSingleShot(True)
-        self._save_timer.setInterval(1000)
-        self._save_timer.timeout.connect(self._save_notes)
-        self.txt_notes.textChanged.connect(self._on_notes_changed)
-
-        # Load existing data
-        QTimer.singleShot(0, self._load_notes_and_media)
-
-        # Actions
         if is_unreg and self.db:
             btn_create = frame.add_action("Create client from this container", variant="primary",
                                           icon="mdi.account-plus")
@@ -965,8 +1421,10 @@ class PayloadInspectorDialog(QDialog):
 
         btn_copy = frame.add_action("Copy Container Summary", variant="secondary")
 
+        btn_notes = frame.add_action("Notes & Media", variant="secondary", icon="mdi.note-text-outline")
+        btn_notes.clicked.connect(self._open_notes_dialog)
+
         def _on_tab_changed(idx):
-            btn_copy.setVisible(idx != 2)
             if idx == 0:
                 btn_copy.setText("Copy Container Summary")
             elif idx == 1:
@@ -975,7 +1433,7 @@ class PayloadInspectorDialog(QDialog):
         tabs.currentChanged.connect(_on_tab_changed)
 
         def _handle_bottom_copy():
-            curr_tab = tabs.currentIndex()
+            curr_tab = tabs.current_index()
             if curr_tab == 0:
                 summary_lines = [
                     f"Client: {client_name} | Identity Key: {item_data.get('pan') or item_data.get('identity_key') or 'N/A'}",
@@ -1007,13 +1465,64 @@ class PayloadInspectorDialog(QDialog):
         btn_close.clicked.connect(self.accept)
 
     def _set_save_status(self, text, tone="neutral"):
-        self.lbl_save_status.set_text(text)
-        self.lbl_save_status.set_tone(tone)
-        self.lbl_save_status.setVisible(bool(text))
+        # The inspector has no status pill since Notes & Media moved to its own dialog; these legacy
+        # methods stay for callers that still save through the inspector.
+        lbl = getattr(self, "lbl_save_status", None)
+        if lbl is not None:
+            lbl.set_text(text)
+            lbl.set_tone(tone)
+            lbl.setVisible(bool(text))
+
+    def _get_media_dir(self) -> str:
+        db_path = getattr(self.db, "raw_db_path", None) or getattr(self.db, "db_path", None)
+        if db_path:
+            base_dir = os.path.dirname(os.path.abspath(db_path))
+        else:
+            base_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data"))
+        media_dir = os.path.join(base_dir, "media")
+        os.makedirs(media_dir, exist_ok=True)
+        return media_dir
+
+    def _resolve_media_path(self, raw_path: str) -> str:
+        if not raw_path:
+            return ""
+        if os.path.isabs(raw_path):
+            if os.path.exists(raw_path):
+                return os.path.abspath(raw_path)
+            candidate = os.path.join(self._get_media_dir(), os.path.basename(raw_path))
+            if os.path.exists(candidate):
+                return candidate
+            return raw_path
+
+        media_dir = self._get_media_dir()
+        user_data_dir = os.path.dirname(media_dir)
+        p1 = os.path.join(user_data_dir, raw_path)
+        if os.path.exists(p1):
+            return os.path.abspath(p1)
+        p2 = os.path.join(media_dir, os.path.basename(raw_path))
+        if os.path.exists(p2):
+            return os.path.abspath(p2)
+        legacy_media_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "media"))
+        p3 = os.path.join(legacy_media_dir, os.path.basename(raw_path))
+        if os.path.exists(p3):
+            return os.path.abspath(p3)
+        return os.path.abspath(p1)
+
+    def _write_media_to_db(self, notes: str, final_path: str):
+        if self.is_container:
+            ikey = self.item_data.get('identity_key')
+            cid = self.item_data.get('client_id')
+            if ikey and hasattr(self.db, 'save_srpf_container_media'):
+                self.db.save_srpf_container_media(ikey, notes, final_path, client_id=cid)
+        else:
+            uid = self.item_data.get('id')
+            if uid and hasattr(self.db, 'save_tracker_dump_media'):
+                self.db.save_tracker_dump_media(uid, notes, final_path)
 
     def _load_notes_and_media(self):
         if not self.db: return
         try:
+            self._image_cleared = False
             notes = ""
             spath = ""
             if self.is_container:
@@ -1028,12 +1537,36 @@ class PayloadInspectorDialog(QDialog):
                     media_data = self.db.get_tracker_dump_media(uid)
                     notes = media_data.get("notes", "")
                     spath = media_data.get("screenshot_path", "")
-
+            
+            self._saved_screenshot_raw = spath or ""
             if notes:
                 self.txt_notes.setPlainText(notes)
-            if spath and os.path.exists(spath):
-                self.current_screenshot_path = spath
-                self._show_preview(spath)
+            if spath:
+                resolved = self._resolve_media_path(spath)
+                self.current_screenshot_path = resolved
+                if resolved and os.path.exists(resolved):
+                    self._show_preview(resolved)
+                    media_dir = self._get_media_dir()
+                    if os.path.isabs(spath) and not os.path.abspath(resolved).startswith(media_dir):
+                        try:
+                            fname = os.path.basename(resolved)
+                            dest_file = os.path.join(media_dir, fname)
+                            if not os.path.exists(dest_file):
+                                shutil.copy2(resolved, dest_file)
+                            rel_path = f"media/{fname}"
+                            self.current_screenshot_path = dest_file
+                            self._saved_screenshot_raw = rel_path
+                            self._write_media_to_db(notes, rel_path)
+                        except Exception as ex:
+                            print(f"[media] Migration of legacy media file failed: {ex}")
+                else:
+                    self.lbl_image_preview.setPixmap(QPixmap())
+                    self.lbl_image_preview.setText(f"Image file not found:\n{spath}")
+                    print(f"[media] Screenshot path stored in DB ({spath}) but file not found on disk.")
+            else:
+                self.current_screenshot_path = ""
+                self.lbl_image_preview.setPixmap(QPixmap())
+                self.lbl_image_preview.setText("No image attached")
         except Exception as e:
             print(f"Error loading media: {e}")
 
@@ -1069,7 +1602,9 @@ class PayloadInspectorDialog(QDialog):
         self._save_timer.start()
 
     def _clear_image(self):
+        self._image_cleared = True
         self.current_screenshot_path = ""
+        self._saved_screenshot_raw = ""
         self.lbl_image_preview.setPixmap(QPixmap())
         self.lbl_image_preview.setText("No image attached")
         self._save_notes()
@@ -1084,6 +1619,7 @@ class PayloadInspectorDialog(QDialog):
     def _attach_image(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Select Image", "", "Images (*.png *.jpg *.jpeg *.bmp)")
         if file_path:
+            self._image_cleared = False
             self.current_screenshot_path = file_path
             self._show_preview(file_path)
             self._save_notes()
@@ -1095,6 +1631,7 @@ class PayloadInspectorDialog(QDialog):
         if mime_data.hasImage():
             image = clipboard.image()
             if not image.isNull():
+                self._image_cleared = False
                 temp_path = os.path.join(os.path.expanduser("~"), "temp_sera_paste.png")
                 image.save(temp_path, "PNG")
                 self.current_screenshot_path = temp_path
@@ -1113,9 +1650,22 @@ class PayloadInspectorDialog(QDialog):
     def _run_ocr(self, img_path):
         from ui.utils.ocr_worker import OCRWorker
         self._set_save_status("Scanning OCR...", "blue")
-        self.ocr_thread = OCRWorker(img_path)
-        self.ocr_thread.finished.connect(self._on_ocr_finished)
-        self.ocr_thread.start()
+        worker = OCRWorker(img_path)          # no parent: the module registry keeps it alive
+        self._ocr_workers.add(worker)
+        worker.ocr_finished.connect(self._on_ocr_finished)
+        worker.finished.connect(lambda w=worker: self._ocr_workers.discard(w))
+        self.ocr_thread = worker              # backwards-compatible alias
+        worker.start()
+
+    def _wait_for_ocr_workers(self, timeout_ms: int = 2000):
+        for worker in list(getattr(self, "_ocr_workers", ())):
+            if worker.isRunning():
+                worker.wait(timeout_ms)
+        self._ocr_workers.clear()
+
+    def closeEvent(self, event):
+        self._wait_for_ocr_workers()
+        super().closeEvent(event)
 
     def _on_ocr_finished(self, text):
         if text and not text.startswith("OCR Error") and not text.startswith("OCR Failed") and not text.startswith("OCR Engine"):
@@ -1132,36 +1682,39 @@ class PayloadInspectorDialog(QDialog):
         if not self.db: return
         notes = self.txt_notes.toPlainText()
         final_path = ""
+        
+        image_cleared = getattr(self, "_image_cleared", False)
+        saved_raw = getattr(self, "_saved_screenshot_raw", "")
 
-        if self.current_screenshot_path and os.path.exists(self.current_screenshot_path):
+        if image_cleared:
+            final_path = ""
+        elif not self.current_screenshot_path:
+            final_path = saved_raw or ""
+        elif not os.path.exists(self.current_screenshot_path):
+            # Guard against deleting stored pointer when file is missing
+            final_path = saved_raw or ""
+        else:
             try:
-                media_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "media"))
-                os.makedirs(media_dir, exist_ok=True)
-
-                # Copy file if it's not already in the media directory
-                if not self.current_screenshot_path.startswith(media_dir):
+                media_dir = self._get_media_dir()
+                resolved_abs = os.path.abspath(self.current_screenshot_path)
+                if not resolved_abs.startswith(media_dir):
                     ext = os.path.splitext(self.current_screenshot_path)[1]
                     if not ext: ext = ".png"
                     filename = f"screenshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
-                    final_path = os.path.join(media_dir, filename)
-                    shutil.copy2(self.current_screenshot_path, final_path)
-                    self.current_screenshot_path = final_path
+                    dest_file = os.path.join(media_dir, filename)
+                    shutil.copy2(self.current_screenshot_path, dest_file)
+                    self.current_screenshot_path = dest_file
+                    final_path = f"media/{filename}"
                 else:
-                    final_path = self.current_screenshot_path
+                    filename = os.path.basename(self.current_screenshot_path)
+                    final_path = f"media/{filename}"
+                self._saved_screenshot_raw = final_path
             except Exception as e:
                 self._set_save_status("Failed to save image", "red")
                 return
 
         try:
-            if self.is_container:
-                ikey = self.item_data.get('identity_key')
-                if ikey and hasattr(self.db, 'save_srpf_container_media'):
-                    self.db.save_srpf_container_media(ikey, notes, final_path)
-            else:
-                uid = self.item_data.get('id')
-                if uid and hasattr(self.db, 'save_tracker_dump_media'):
-                    self.db.save_tracker_dump_media(uid, notes, final_path)
-
+            self._write_media_to_db(notes, final_path)
             self._set_save_status("✓ Saved!", "emerald")
             QTimer.singleShot(2500, lambda: self._set_save_status(""))
         except Exception as e:
@@ -1173,6 +1726,14 @@ class PayloadInspectorDialog(QDialog):
         dlg = AddClientFromCaptureDialog(self.db, self.item_data, self)
         if dlg.exec() == QDialog.Accepted:
             self.accept()
+
+    def _open_notes_dialog(self):
+        dlg = NotesAndMediaDialog(self.item_data, db=self.db, is_container=self.is_container, parent=self)
+        dlg.exec()
+
+    def _get_media_dir(self) -> str:
+        return NotesAndMediaDialog._get_media_dir(self)
+
 
 
 class _DatapointScanThread(QThread):
@@ -1534,7 +2095,7 @@ class TrackerDumpWindow(QWidget):
         self.cmb_view_mode = QComboBox(self)
         self.cmb_view_mode.addItems(["Grouped by Client Container (SRPF)", "Individual Raw Captures"])
         self.cmb_view_mode.hide()
-        self.cmb_view_mode.currentIndexChanged.connect(self.load_data)
+        self.cmb_view_mode.currentIndexChanged.connect(lambda: self.load_data(reset_page=True))
         self.cmb_view_mode.currentIndexChanged.connect(self._sync_view_buttons)
 
         self.view_switch = Segmented(["Containers", "Raw captures"])
@@ -1720,10 +2281,7 @@ class TrackerDumpWindow(QWidget):
         """Reloads the list only when the pass changed a capture's client, and keeps the page the user is on."""
         if not updated or not self.isVisible():
             return
-        page = self._current_page
-        self.load_data()          # resets to page 1 ...
-        self._current_page = page  # ... so put the user's page back
-        self._apply_filters()
+        self.load_data(reset_page=False)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1898,6 +2456,7 @@ class TrackerDumpWindow(QWidget):
     def _on_cell_double_clicked(self, row, column):
         """Fast double click inspection."""
         if hasattr(self, "_current_page_items") and 0 <= row < len(self._current_page_items):
+            self.table.setCurrentCell(row, column)
             item = self._current_page_items[row]
             is_grouped = (self.cmb_view_mode.currentIndex() == 0)
             if is_grouped:
@@ -1910,6 +2469,10 @@ class TrackerDumpWindow(QWidget):
         row = self.table.rowAt(pos.y())
         if row < 0 or not hasattr(self, "_current_page_items") or row >= len(self._current_page_items):
             return
+        col = self.table.columnAt(pos.x())
+        if col < 0:
+            col = 0
+        self.table.setCurrentCell(row, col)
         item = self._current_page_items[row]
         is_grouped = (self.cmb_view_mode.currentIndex() == 0)
 
@@ -1918,6 +2481,8 @@ class TrackerDumpWindow(QWidget):
         if is_grouped:
             act_inspect = menu.addAction(_safe_qta_icon("mdi.eye", T["mint"]), "Inspect Client Container")
             act_inspect.triggered.connect(lambda: self._show_container_dialog(item))
+            act_notes = menu.addAction(_safe_qta_icon("mdi.note-text-outline", K["blue_tx"]), "Notes & Media")
+            act_notes.triggered.connect(lambda: self._show_notes_dialog(item, is_grouped=True))
             if item.get('is_unassigned'):
                 act_create = menu.addAction(_safe_qta_icon("mdi.account-plus", T["em2"]), "+ Create Client")
                 act_create.triggered.connect(lambda: self._create_client_from_capture(item))
@@ -1926,6 +2491,8 @@ class TrackerDumpWindow(QWidget):
         else:
             act_inspect = menu.addAction(_safe_qta_icon("mdi.code-json", T["mint"]), "View Raw Payload")
             act_inspect.triggered.connect(lambda: self._show_payload_dialog(item))
+            act_notes = menu.addAction(_safe_qta_icon("mdi.note-text-outline", K["blue_tx"]), "Notes & Media")
+            act_notes.triggered.connect(lambda: self._show_notes_dialog(item, is_grouped=False))
             if item.get('is_unassigned') or not item.get('client_id'):
                 act_create = menu.addAction(_safe_qta_icon("mdi.account-plus", T["em2"]), "+ Create Client")
                 act_create.triggered.connect(lambda: self._create_client_from_capture(item))
@@ -2033,13 +2600,20 @@ class TrackerDumpWindow(QWidget):
         if hasattr(self, "view_switch"):
             self.view_switch.set_current(self.cmb_view_mode.currentIndex())
 
-    def load_data(self):
+    def load_data(self, reset_page: bool = False):
         """Fetch tracker dumps or SRPF unified containers from database."""
         self._first_load_pending = False
         try:
             gen_at_start = self.db.data_generation() if hasattr(self.db, "data_generation") else None
             raw_gen_at_start = self.db.raw_generation() if hasattr(self.db, "raw_generation") else None
             is_grouped = (self.cmb_view_mode.currentIndex() == 0)
+
+            saved_page = 1 if reset_page else getattr(self, "_current_page", 1)
+            v_val = self.table.verticalScrollBar().value()
+            h_val = self.table.horizontalScrollBar().value()
+            curr_row = self.table.currentRow()
+            curr_col = self.table.currentColumn()
+
             # Every row is loaded so search and the filters see the whole database; the slim reads
             # keep payloads out of the list, and a dialog fetches its one row's payload on demand.
             if is_grouped:
@@ -2050,9 +2624,19 @@ class TrackerDumpWindow(QWidget):
                 self._dumps_cache = self.db.get_tracker_dumps(limit=-1, slim=True)
                 # Default chronological organisation: latest entry at top
                 self._dumps_cache.sort(key=lambda r: (str(r.get("created_at") or ""), r.get("id") or 0), reverse=True)
-            self._current_page = 1
+            self._current_page = max(1, saved_page)
             self._update_summary()
             self._apply_filters()
+
+            if curr_row >= 0 and self.table.rowCount() > 0:
+                target_r = min(curr_row, self.table.rowCount() - 1)
+                col = curr_col if (0 <= curr_col < self.table.columnCount()) else 0
+                self.table.setCurrentCell(target_r, col)
+            if v_val > 0:
+                self.table.verticalScrollBar().setValue(v_val)
+            if h_val > 0:
+                self.table.horizontalScrollBar().setValue(h_val)
+
             self._loaded_state = (gen_at_start, raw_gen_at_start, self.cmb_view_mode.currentIndex(), time.monotonic())
         except Exception as e:
             MessageBox.critical(self, "Error Loading Dumps", f"Could not load tracker dumps: {e}")
@@ -2229,6 +2813,10 @@ class TrackerDumpWindow(QWidget):
             actions.append(CellAction("view", "mdi.eye-outline", "View Payload"))
         if bool(item.get("client_id")) and not item.get("is_unassigned"):
             actions.append(self._autofill_action(item))
+        # Notes & Media lives in ⋮; the row shows it only when something is attached, so the
+        # indicator stays visible without a fourth button on every row.
+        if item.get("notes") or item.get("screenshot_path"):
+            actions.append(CellAction("notes", "mdi.note-text", "Notes & Media (Content attached)"))
         if item.get("is_unassigned") or (not is_grouped and not item.get("client_id")):
             actions.append(CellAction("create", "mdi.account-plus", "Create a client from this capture"))
         actions.append(CellAction("more", "mdi.dots-vertical", "More actions (Create Client, Delete)"))
@@ -2289,6 +2877,8 @@ class TrackerDumpWindow(QWidget):
                 self._show_container_dialog(item)
             else:
                 self._show_payload_dialog(item)
+        elif key == "notes":
+            self._show_notes_dialog(item, is_grouped)
         elif key == "create":
             self._create_client_from_capture(item)
         elif key == "more":
@@ -2317,6 +2907,23 @@ class TrackerDumpWindow(QWidget):
             return
         self.service_action_requested.emit(int(cid), service)
 
+    def _show_notes_dialog(self, item: dict, is_grouped: bool):
+        item = self._full_container(item)
+        saved_page = getattr(self, "_current_page", 1)
+        curr_row = self.table.currentRow()
+        curr_col = self.table.currentColumn()
+        v_val = self.table.verticalScrollBar().value()
+        h_val = self.table.horizontalScrollBar().value()
+        dlg = NotesAndMediaDialog(item, db=self.db, is_container=is_grouped, parent=self)
+        try:
+            dlg.exec()
+            self.load_data(reset_page=False)
+        finally:
+            self._restore_table_position(
+                saved_page, curr_row, curr_col, v_val, h_val,
+                item.get("identity_key") if is_grouped else item.get("id")
+            )
+
     def _show_row_action_menu(self, item: dict, is_grouped: bool, global_pos):
         """Overflow menu under the ⋮ button - mirrors the right-click context menu."""
         menu = QMenu(self)
@@ -2325,6 +2932,9 @@ class TrackerDumpWindow(QWidget):
             needs_create = item.get('is_unassigned')
         else:
             needs_create = item.get('is_unassigned') or not item.get('client_id')
+
+        act_notes = menu.addAction(_safe_qta_icon("mdi.note-text-outline", K["blue_tx"]), "Notes & Media")
+        act_notes.triggered.connect(lambda: self._show_notes_dialog(item, is_grouped))
 
         if needs_create:
             act_create = menu.addAction(_safe_qta_icon("mdi.account-plus", T["em2"]), "+ Create Client")
@@ -2401,8 +3011,9 @@ class TrackerDumpWindow(QWidget):
 
             period_sum = r.get("period_summary") or f"{r.get('total_captures', 1)} Capture(s)"
             hist_item = self._table_item(row_idx, self.COL_PERIOD, K["blue_tx"])
-            hist_item.setText(_filings_short(period_sum))
-            hist_item.setToolTip(period_sum)
+            latest = str(r.get("latest_period") or "").strip()
+            hist_item.setText(re.sub(r"\bAssessment Year\b", "AY", latest) if latest and latest != "N/A" else _filings_short(period_sum))
+            hist_item.setToolTip(f"Latest period captured: {latest}\n{period_sum}" if latest else period_sum)
 
             # Submission Status
             status_text, _ = _resolve_ltt_submission_status(r)
@@ -2430,6 +3041,40 @@ class TrackerDumpWindow(QWidget):
             a_item = self._table_item(row_idx, self.COL_ACTIONS)
             a_item.setData(ROLE_ACTIONS, self._row_actions(r, is_grouped=True))
             self._finish_client_tooltip(c_item, row_idx)
+
+            # VSDC247_verify flagged row visual highlight & tooltip
+            is_vsdc_verify = (str(method_val).startswith("VSDC247_") or
+                              any(str(h.get("capture_method") or "").startswith("VSDC247_")
+                                  for h in (r.get("filing_history") or [])))
+            if is_vsdc_verify:
+                verify_bg = QBrush(QColor(T["purpledim"]))
+                verify_tip = "Seen only by OCR — SGT missed it"
+                for col in range(self.COLUMN_COUNT):
+                    it = self.table.item(row_idx, col)
+                    if it is not None:
+                        it.setBackground(verify_bg)
+                        existing_tip = it.toolTip()
+                        if existing_tip:
+                            if verify_tip not in existing_tip:
+                                it.setToolTip(f"{existing_tip}\n[{verify_tip}]")
+                        else:
+                            it.setToolTip(verify_tip)
+            else:
+                # SGT row verified by VSDC247-V
+                r_json = r.get("raw_payload_json") or ""
+                if "vsdc247" in r_json:
+                    try:
+                        p_obj = json.loads(r_json) if isinstance(r_json, str) else r_json
+                        vb = p_obj.get("vsdc247-v") or p_obj.get("raw_payload", {}).get("vsdc247-v") or p_obj.get("raw_payload", {}).get("vsdc247")
+                        if isinstance(vb, dict) and (vb.get("verified") or vb.get("result") in ("matched", "matched_client_differs")):
+                            v_note = "✓ VSDC247-V Verified (OCR confirmed)"
+                            status_item = self.table.item(row_idx, self.COL_STATUS)
+                            if status_item:
+                                stip = status_item.toolTip()
+                                if v_note not in stip:
+                                    status_item.setToolTip(f"{stip}\n[{v_note}]" if stip else v_note)
+                    except Exception:
+                        pass
 
     def _populate_raw_table(self, records: list[dict]):
         """Populates table in granular Individual Raw Captures view."""
@@ -2491,6 +3136,37 @@ class TrackerDumpWindow(QWidget):
             a_item.setData(ROLE_ACTIONS, self._row_actions(r, is_grouped=False))
             self._finish_client_tooltip(c_item, row_idx)
 
+            # VSDC247_verify flagged row visual highlight & tooltip
+            if str(method).startswith("VSDC247_"):
+                verify_bg = QBrush(QColor(T["purpledim"]))
+                verify_tip = "Seen only by OCR — SGT missed it"
+                for col in range(self.COLUMN_COUNT):
+                    it = self.table.item(row_idx, col)
+                    if it is not None:
+                        it.setBackground(verify_bg)
+                        existing_tip = it.toolTip()
+                        if existing_tip:
+                            if verify_tip not in existing_tip:
+                                it.setToolTip(f"{existing_tip}\n[{verify_tip}]")
+                        else:
+                            it.setToolTip(verify_tip)
+            else:
+                # SGT row verified by VSDC247-V
+                r_json = r.get("raw_payload_json") or ""
+                if "vsdc247" in r_json:
+                    try:
+                        p_obj = json.loads(r_json) if isinstance(r_json, str) else r_json
+                        vb = p_obj.get("vsdc247-v") or p_obj.get("raw_payload", {}).get("vsdc247-v") or p_obj.get("raw_payload", {}).get("vsdc247")
+                        if isinstance(vb, dict) and (vb.get("verified") or vb.get("result") in ("matched", "matched_client_differs")):
+                            v_note = "✓ VSDC247-V Verified (OCR confirmed)"
+                            status_item = self.table.item(row_idx, self.COL_STATUS)
+                            if status_item:
+                                stip = status_item.toolTip()
+                                if v_note not in stip:
+                                    status_item.setToolTip(f"{stip}\n[{v_note}]" if stip else v_note)
+                    except Exception:
+                        pass
+
     def _full_container(self, item: dict) -> dict:
         """List rows are slim (no payloads); dialogs need the whole container, or the whole raw row."""
         if not item.get("_slim"):
@@ -2505,23 +3181,70 @@ class TrackerDumpWindow(QWidget):
                 return full[0]
         return item
 
+    def _restore_table_position(self, page: int, row: int, col: int, v_scroll: int, h_scroll: int, target_key=None):
+        if hasattr(self, "_current_page"):
+            self._current_page = max(1, page)
+        if self._page_size > 0 and hasattr(self, "_filtered_cache"):
+            total_items = len(self._filtered_cache)
+            total_pages = max(1, (total_items + self._page_size - 1) // self._page_size)
+            self._current_page = max(1, min(self._current_page, total_pages))
+
+        target_row = row
+        if target_key is not None and hasattr(self, "_current_page_items"):
+            for idx, itm in enumerate(self._current_page_items):
+                if itm.get("identity_key") == target_key or itm.get("id") == target_key:
+                    target_row = idx
+                    break
+        if target_row >= 0 and self.table.rowCount() > 0:
+            target_r = min(target_row, self.table.rowCount() - 1)
+            target_c = col if (0 <= col < self.table.columnCount()) else 0
+            self.table.setCurrentCell(target_r, target_c)
+        if v_scroll > 0:
+            self.table.verticalScrollBar().setValue(v_scroll)
+        if h_scroll > 0:
+            self.table.horizontalScrollBar().setValue(h_scroll)
+
     def _show_container_dialog(self, container_item: dict):
         container_item = self._full_container(container_item)
+        saved_page = getattr(self, "_current_page", 1)
+        curr_row = self.table.currentRow()
+        curr_col = self.table.currentColumn()
+        v_val = self.table.verticalScrollBar().value()
+        h_val = self.table.horizontalScrollBar().value()
         dlg = PayloadInspectorDialog(container_item, db=self.db, is_container=True, parent=self)
-        if dlg.exec() == QDialog.Accepted:
-            self.load_data()
+        try:
+            if dlg.exec() == QDialog.Accepted:
+                self.load_data(reset_page=False)
+        finally:
+            self._restore_table_position(saved_page, curr_row, curr_col, v_val, h_val, container_item.get("identity_key"))
 
     def _show_payload_dialog(self, dump_item: dict):
         dump_item = self._full_container(dump_item)
+        saved_page = getattr(self, "_current_page", 1)
+        curr_row = self.table.currentRow()
+        curr_col = self.table.currentColumn()
+        v_val = self.table.verticalScrollBar().value()
+        h_val = self.table.horizontalScrollBar().value()
         dlg = PayloadInspectorDialog(dump_item, db=self.db, is_container=False, parent=self)
-        if dlg.exec() == QDialog.Accepted:
-            self.load_data()
+        try:
+            if dlg.exec() == QDialog.Accepted:
+                self.load_data(reset_page=False)
+        finally:
+            self._restore_table_position(saved_page, curr_row, curr_col, v_val, h_val, dump_item.get("id"))
 
     def _create_client_from_capture(self, dump_item: dict):
         dump_item = self._full_container(dump_item)
+        saved_page = getattr(self, "_current_page", 1)
+        curr_row = self.table.currentRow()
+        curr_col = self.table.currentColumn()
+        v_val = self.table.verticalScrollBar().value()
+        h_val = self.table.horizontalScrollBar().value()
         dlg = AddClientFromCaptureDialog(self.db, dump_item, self)
-        if dlg.exec() == QDialog.Accepted:
-            self.load_data()
+        try:
+            if dlg.exec() == QDialog.Accepted:
+                self.load_data(reset_page=False)
+        finally:
+            self._restore_table_position(saved_page, curr_row, curr_col, v_val, h_val, dump_item.get("identity_key") or dump_item.get("id"))
 
     def _delete_srpf_container(self, identity_key: str):
         if MessageBox.question(
@@ -2550,7 +3273,7 @@ class TrackerDumpWindow(QWidget):
             self.db.clear_tracker_dumps()
             with self.db._connect_raw() as conn:
                 conn.execute("DELETE FROM client_raw_containers")
-            self.load_data()
+            self.load_data(reset_page=True)
 
     def _export_csv(self):
         if not self._dumps_cache:
@@ -2636,6 +3359,17 @@ class TrackerDumpWindow(QWidget):
         finally:
             QApplication.restoreOverrideCursor()
 
+    def _open_reconciliation_log(self):
+        """Opens the plain-text GST reconciliation audit log for accountants."""
+        from core.vsdc.vsdc247_reconciler import _default_accountant_log_path, append_accountant_reconciliation_log
+        log_path = _default_accountant_log_path()
+        if not log_path.exists() or log_path.stat().st_size == 0:
+            append_accountant_reconciliation_log("", "", path=log_path)
+        try:
+            os.startfile(str(log_path))
+        except Exception as e:
+            MessageBox.warning(self, "GST Reconciliation Log", f"Could not open the reconciliation log: {e}")
+
     def _open_distill(self):
         """Sera Distill (SDIS Part L): the admin PC only; the dialog is non-modal and kept alive here."""
         if not self.db.is_admin_pc():
@@ -2664,6 +3398,9 @@ class TrackerDumpWindow(QWidget):
 
         act_ltt_open = menu.addAction(_safe_qta_icon("mdi.microsoft-excel", T["mint"]), "Open LTT sheet")
         act_ltt_open.triggered.connect(self._open_ltt_sheet)
+
+        act_rec_log = menu.addAction(_safe_qta_icon("mdi.file-check-outline", T["mint"]), "Open GST Reconciliation Log")
+        act_rec_log.triggered.connect(self._open_reconciliation_log)
 
         menu.addSeparator()
 

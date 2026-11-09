@@ -10,7 +10,7 @@ from ui.dialogs import unified_settings_dialog as usd
 
 GOLDEN = json.loads((pathlib.Path(__file__).parent / "data" / "ui_lock_settings_golden.json").read_text("utf-8"))
 
-SETTINGS_PAGES = (usd._P_GENERAL, usd._P_ACTIONS, usd._P_SCC, usd._P_TRACKER,
+SETTINGS_PAGES = (usd._P_GENERAL, usd._P_ACTIONS, usd._P_SCC, usd._P_SCK, usd._P_SCA, usd._P_TRACKER,
                   usd._P_MAIN_VIS, usd._P_QC, usd._P_ADMIN_VIS)
 
 
@@ -23,7 +23,9 @@ def env(tmp_path, monkeypatch):
 
     from ui.utils import autostart
     monkeypatch.setattr(autostart, "is_autostart_enabled", lambda: False)
-    monkeypatch.setattr(autostart, "set_autostart_enabled", lambda on: outside["autostart"].append(on))
+    monkeypatch.setattr(autostart, "user_mismatch", lambda: None)
+    monkeypatch.setattr(autostart, "apply_autostart",
+                        lambda on: (outside["autostart"].append(on), autostart.AutostartResult(True, "none", ""))[1])
     import automation
     monkeypatch.setattr(automation, "update_extension_settings", lambda **kw: outside["extension"].append(kw))
 
@@ -213,7 +215,8 @@ def test_main_screen_visibility_reaches_the_search_grid_after_save(env):
 def test_every_settings_entry_is_there_in_order_and_opens_its_page(env):
     db, ids, dlg, written, outside = env
     labels = [item.text() for item, _ in dlg._nav_items]
-    assert labels == ["General", "Action Buttons", "SCC Vault Presets", "Tracker", "Master Column List", "Services",
+    assert labels == ["General", "Action Buttons", "SCC Vault Presets", "Credential Keeper", "SCA", "Tracker", "Screentime",
+                      "Master Column List", "Services",
                       "Main Screen", "Quick-Copy Fields", "Admin Screen", "Export CSV", "Backup & Restore",
                       "Purge Duplicates"]
     for item, idx in dlg._nav_items:

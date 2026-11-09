@@ -16,6 +16,7 @@ class ActionAlertFormatter:
         # Action: (Template with {client_name}, Generic Fallback, Level)
         "autofill": ("Auto-filled {client_name}", "Auto-filled credentials", "success"),
         "sca_autofill": ("SCA Ambient Autofill for {client_name}", "SCA Ambient Autofill completed", "success"),
+        "sca_widget": ("SCA Widget filled {client_name}", "SCA Widget completed", "success"),
         "manual_copy": ("Manually copied {client_name}", "Credentials copied to clipboard", "success"),
         "manual_assist": ("Manual assist opened for {client_name}", "Manual assist opened", "info"),
         "create": ("Client created: {client_name}", "Client created successfully", "success"),

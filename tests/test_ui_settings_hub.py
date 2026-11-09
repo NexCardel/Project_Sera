@@ -5,7 +5,7 @@ import pytest
 
 from ui.dialogs import unified_settings_dialog as usd
 
-SETTINGS_PAGES = (usd._P_GENERAL, usd._P_ACTIONS, usd._P_SCC, usd._P_TRACKER,
+SETTINGS_PAGES = (usd._P_GENERAL, usd._P_ACTIONS, usd._P_SCC, usd._P_SCK, usd._P_SCA, usd._P_TRACKER,
                   usd._P_MAIN_VIS, usd._P_QC, usd._P_ADMIN_VIS)
 
 

@@ -9,19 +9,25 @@ the SDC crosshair catalog, and delegates to the visual OCR and assembler pipelin
 import ctypes
 from ctypes import wintypes
 import os
+import tempfile
+import threading
 import time
 import re
 from typing import Dict, List, Optional, Tuple, Any, Callable
+
+from PIL import Image
 
 import comtypes.client
 from .vsdc_crosshairs import match_url_crosshair, CrosshairDefinition, ALL_CROSSHAIRS, get_crosshair
 from .vsdc_ocr import VSDCOcrEngine
 from . import vsdc_uia_text
+from . import vsdc_diag
 from .vsdc_scope import (
     is_in_scope_url, portal_for_url, is_government_registry_host, portal_logo_cue, TRIPWIRE_TOP_LINES, extract_host,
-    sanitize_page_url, registered_domain,
+    sanitize_page_url, registered_domain, local_test_pages_allowed, is_local_reference,
 )
-from .vsdc_alerts import AlertSender, stamp_device_name
+from .vsdc_alerts import AlertSender, device_name, stamp_device_name, stamp_original_author
+from .vsdc_health import HealthMonitor
 from .vsdc247 import Vsdc247Scanner, configured_mode, MODE_OFF, MODE_SHADOW, MODE_LIVE
 
 SGT_OFF = "off"
@@ -206,8 +212,9 @@ _STATIC_SCREEN_TIMEOUT_SEC = 30.0
 # closed browser window's state (and its assembler, with whatever it hadn't
 # yet flushed) doesn't linger forever. Generous on purpose - VSDC ticks fast
 # but a taxpayer can legitimately sit on one page for minutes while reading it.
-# Two hours, the same idle limit as SGT's sessions (core/sgt/sgt_shadow.py IDLE_END_SEC).
-_SESSION_IDLE_TIMEOUT_SEC = 2 * 3600
+# Four hours, as SGT's idle limit (core/sgt/sgt_shadow.py IDLE_END_SEC; owner D13). Never shorter:
+# the router must not end or park a session before SGT would.
+_SESSION_IDLE_TIMEOUT_SEC = 4 * 3600
 
 
 class VSDCRouter:
@@ -292,11 +299,31 @@ class VSDCRouter:
         # Identifiers already announced as merely "possible", so a probable candidate that
         # stays on screen prompts once, not on every tick.
         self._prompted_ids: Dict[str, float] = {}
+        # hwnd -> username whose login frame was already saved as evidence (second Notes & Media slot).
+        self._login_evidence: Dict[int, str] = {}
+        # hwnd -> {"username", "path", "saved_at"}: the last GST login frame read in this window.
+        # Kept after the login page is left so an ARN read later in the same session can carry it
+        # into Notes & Media (the UID screenshot must arrive with the ARN capture).
+        self._login_frames: Dict[int, Dict[str, Any]] = {}
         # One screenshot per tick, shared by the route handlers and VSDC247.
         self._tick_capture: Optional[Tuple[int, Any]] = None
         self._scope_ok_this_tick: bool = False
         self._tick_portal: Optional[str] = None
         self._tick_page_url: str = ""       # this tick's address-bar URL, query stripped
+        # VSDC247 when a non-browser window is in front (our own Notes & Media dialog, a
+        # terminal): the browser windows still on screen are looked at on their own slow
+        # tick. Screenshots run on daemon threads with a timeout, so a wedged PrintWindow
+        # cannot freeze the worker; a stuck shot is left out and the count is capped.
+        self._bg_247_last: Dict[int, float] = {}
+        self._shot_lock = threading.Lock()
+        self._shot_threads: set = set()
+        # Evidence PNGs are written from the frame already read (no second capture); the
+        # temp folder is swept at most this often instead of once per capture.
+        self._evidence_swept_at: float = 0.0
+        # VSDC247-V: last full OCR pass and the frame signature it saw - the verifier is
+        # throttled to at most one OCR a second, plus a forced pass every two seconds.
+        self._verifier_ocr_at: float = 0.0
+        self._verifier_sig = None
 
         # Portal pages already reported as matching no crosshair, so each unknown page
         # is logged once (with its link) instead of on every poll tick.
@@ -305,6 +332,12 @@ class VSDCRouter:
         self._tripwire_hosts: Dict[str, List[float]] = {}
         # Phone alert for a submission captured with no client (off unless configured).
         self.alerts: AlertSender = AlertSender()
+        # Is capture working? States, a short HUD event, a phone alert and a vsdc.log line when not
+        # (core/vsdc/vsdc_health). The callables read self.alerts at call time, so a replaced sender is used.
+        self.health = HealthMonitor(
+            hud=self._health_hud,
+            phone=lambda device, state, detail: self.alerts.notify_capture_health(device, state, detail),
+            alerts_enabled=lambda: self.alerts.enabled)
 
         # The acknowledgement of the return currently being e-Verified, read off an
         # earlier step of the e-Verify wizard. The confirmation screen names the form and
@@ -363,6 +396,28 @@ class VSDCRouter:
         self._sgt_mode: str = self._env_sgt_mode() or SGT_OFF
         self._sgt_alone: bool = False              # SGT on, the other three off: no crosshair routing
         self._sgt = None                           # core.sgt.sgt_shadow.SgtShadow, built on first use
+        # SGT's capture loop (core/vsdc/vsdc_capture): its own windows, scope gate and reader lanes,
+        # built on first use while SGT is on. The crosshair engines keep this router's own URL read
+        # (R7). The three below are for tests and tools: None = the real Windows platform, the real
+        # UI Automation backend and time.monotonic.
+        self.capture = None
+        self.capture_platform = None
+        self.capture_backend = None
+        self.capture_clock = None
+        self.diag_tick: Dict[str, Any] = {}        # this tick, for the heartbeat (vsdc_diag)
+
+        # VSDC247-V - SGT Verifier (plan section 7)
+        env_v = os.environ.get("VSDC247_VERIFY")
+        self._verifier_enabled: bool = (env_v.strip().lower() in ("1", "true", "yes", "on")) if env_v is not None else False
+        self._verifier = None
+        self._verifier_outbox: List[Dict[str, Any]] = []
+        if self._verifier_enabled:
+            self._apply_verifier()
+        self._verifier_stats: Dict[str, Any] = {
+            "ticks": 0, "gst_frames": 0, "logins": 0, "arns_seen": 0,
+            "matched": 0, "missed": 0, "last_heartbeat": 0.0,
+        }
+
         if self._sgt_mode != SGT_OFF:
             print(f"[SGT] mode = {self._sgt_mode.upper()} (from SGT_MODE)")
 
@@ -373,7 +428,7 @@ class VSDCRouter:
 
     def apply_engine_settings(self, vsdc: bool, vsdc_x: bool, vsdc247: bool, sgt: str = "off",
                               sgt_record: bool = True, sgt_i: bool = False, scc_detect: bool = False,
-                              sdis_record: bool = True) -> None:
+                              sdis_record: bool = True, vsdc247_verify: bool = False) -> None:
         """
         Applies the three Settings -> Tracker switches, live (no restart):
 
@@ -395,6 +450,8 @@ class VSDCRouter:
         engines', so it can run beside them. SGT_MODE overrides it. SGT-I (sgt_i) is SGT's
         Intelligence half: it only watches what SGT reads and never changes a capture. SCC-U
         (scc_detect) likewise only watches SGT's reads, for Income Tax logins.
+
+        VSDC247-V (vsdc247_verify) is the independent SGT verifier (plan section 7).
         """
         wanted = str(sgt).strip().lower()
         sgt_mode = self._env_sgt_mode() or (wanted if wanted in (SGT_SHADOW, SGT_LIVE) else SGT_OFF)
@@ -410,10 +467,16 @@ class VSDCRouter:
         self._apply_scc()
         if sgt_mode != self._sgt_mode and self._sgt is not None:
             # Open sessions end under the mode they were read in, so no dataset is keyed half
-            # one way and half the other.
-            self._sgt.end_all("SGT switched off" if sgt_mode == SGT_OFF else f"SGT switched to {sgt_mode}")
+            # one way and half the other. A read asked before the switch is never absorbed after it.
+            reason = "SGT switched off" if sgt_mode == SGT_OFF else f"SGT switched to {sgt_mode}"
+            if self.capture is not None:
+                self.capture.end_all(reason)
+            else:
+                self._sgt.end_all(reason)
             if sgt_mode != SGT_OFF:
                 self._sgt.set_mode(sgt_mode)
+            else:
+                self._drop_capture()
         self._sgt_mode = sgt_mode
         sgt_on = sgt_mode != SGT_OFF
         self._sgt_alone = sgt_on and not (vsdc or vsdc_x or vsdc247) and not self._env_247_only
@@ -428,10 +491,24 @@ class VSDCRouter:
             self._mode_247 = MODE_LIVE if vsdc247 else MODE_OFF
         self._247_only = self._env_247_only or (bool(vsdc247) and not vsdc and not vsdc_x)
         self._engines_off = not (vsdc or vsdc_x or vsdc247 or sgt_on) and not self._env_247_only
-        print(f"[VSDC] engines: VSDC={'on' if vsdc else 'off'} | VSDC-X={'on' if vsdc_x else 'off'} | "
-              f"VSDC247={self._mode_247.upper()}"
-              f"{' (works alone)' if self._247_only else ''} | SGT={self._sgt_mode.upper()}"
-              f"{' (works alone)' if self._sgt_alone else ''}{' - ALL OFF' if self._engines_off else ''}")
+
+        # VSDC247-V verifier engine switch (env override for tests only)
+        env_verify = os.environ.get("VSDC247_VERIFY")
+        if env_verify is not None:
+            self._verifier_enabled = env_verify.strip().lower() in ("1", "true", "yes", "on")
+        else:
+            self._verifier_enabled = bool(vsdc247_verify)
+        self._apply_verifier()
+
+        engines = (f"engines: VSDC={'on' if vsdc else 'off'} | VSDC-X={'on' if vsdc_x else 'off'} | "
+                   f"VSDC247={self._mode_247.upper()}"
+                   f"{' (works alone)' if self._247_only else ''} | SGT={self._sgt_mode.upper()}"
+                   f"{' (works alone)' if self._sgt_alone else ''} | SGT-I={'on' if sgt_i else 'off'} | "
+                   f"VSDC247-V={'on' if self._verifier_enabled else 'off'}"
+                   f"{' - ALL OFF' if self._engines_off else ''}")
+        print(f"[VSDC] {engines}")
+        vsdc_diag.note(engines)
+
 
     def _apply_sgt_i(self) -> None:
         """Attaches SGT-I to SGT when switched on. One host per run: one that switched itself
@@ -455,13 +532,26 @@ class VSDCRouter:
         if self._sgt is not None:
             self._sgt.set_client_lookup(lookup)
 
+    def set_digest(self, digest) -> None:
+        """digest(today) -> the daily capture digest, run by SGT's first tick of each day (WP12)."""
+        self._digest = digest
+        if self._sgt is not None:
+            self._sgt.set_digest(digest)
+
+    def sessions_open(self) -> bool:
+        """SGT has a session with content touched in the last few minutes (holds back a mandatory
+        update restart). False when SGT never started."""
+        return self._sgt is not None and self._sgt.sessions_open()
+
     def set_scc_handlers(self, factory) -> None:
-        """factory() -> the handlers to register on SCC-U's host when it is created (once per run)."""
+        """factory() -> the handlers to register on SCC-U's host. Called each time the switch is
+        applied, so a handler that shares the host (SCK) can join while SCC-U's own rules are off."""
         self._scc_handlers = factory
 
     def _apply_scc(self) -> None:
         """Attaches SCC-U to SGT when switched on, the same way as SGT-I: one host per run, and
-        one that switched itself off after a failure stays off."""
+        one that switched itself off after a failure stays off. The host may be shared with a
+        handler that has its own switch (SCK), so the handler list is refreshed on every apply."""
         if self._sgt is None:
             return
         on = getattr(self, "_scc_on", False)
@@ -469,16 +559,71 @@ class VSDCRouter:
         if on and host is None:
             from core.scc import SccHost
             host = self._scc_host = SccHost()
+        if on and host is not None:
             factory = getattr(self, "_scc_handlers", None)
-            for handler in (factory() if factory else []):
-                host.register(handler)
+            if factory is not None:
+                try:
+                    host.set_handlers(factory())
+                except Exception as e:
+                    print(f"[vsdc_router] SCC handlers not refreshed: {type(e).__name__}")
         if host is not None:
             host.set_enabled(on)
             self._sgt.set_scc(host if on else None)
 
-    def _run_sgt(self, hwnd: int, title: str = "") -> None:
-        """SGT observes this page. Its tracker rows leave through its own outbox (evaluate_tick
-        hands them out one per tick), never through this tick's result."""
+    def _apply_verifier(self) -> None:
+        """Configures or clears VSDC247-V verifier lane."""
+        if not self._verifier_enabled:
+            self._verifier = None
+            if self._sgt is not None:
+                self._sgt.set_verifier(None)
+            self._verifier_outbox.clear()
+            return
+        if self._verifier is None:
+            try:
+                from .vsdc247_reconciler import Reconciler
+                from .vsdc247_verify import Verifier
+                reconciler = Reconciler(
+                    sgt_router_getter=lambda: self._sgt,
+                    db=getattr(self, "db", None),
+                    client_lookup=getattr(self, "_client_lookup", None),
+                    on_alert=self._on_verifier_alert,
+                    allow_flagged_rows=True,
+                )
+                self._verifier = Verifier(
+                    client_lookup=getattr(self, "_client_lookup", None),
+                    reconciler=reconciler,
+                )
+                if self._sgt is not None:
+                    self._sgt.set_verifier(self._verifier)
+                print("[VSDC247-V] SGT verifier lane active")
+            except Exception as e:
+                print(f"[VSDC247-V] could not initialize verifier: {e}")
+        else:
+            reconciler = getattr(self._verifier, "reconciler", None)
+            if reconciler is not None and hasattr(reconciler, "set_db"):
+                reconciler.set_db(getattr(self, "db", None))
+
+    def _on_verifier_alert(self, kind: str, data: Dict[str, Any]) -> None:
+        """Dispatches ntfy alert and HUD notification for verifier events."""
+        try:
+            block = data.get("block") or {}
+            form = block.get("form") or "GST Return"
+            url = block.get("page_url") or ""
+            if kind == "client_differs":
+                if hasattr(self.alerts, "notify_client_conflict"):
+                    self.alerts.notify_client_conflict(form=form, page_url=url)
+                self._health_hud("SGT Verifier", "Client mismatch on GST submission")
+            elif kind == "sgt_missed":
+                if hasattr(self.alerts, "notify_sgt_missed"):
+                    self.alerts.notify_sgt_missed(form=form, page_url=url)
+                self._health_hud("SGT Verifier", "Seen only by OCR — SGT missed it")
+        except Exception as e:
+            print(f"[VSDC247-V] alert error: {e}")
+
+    def _ensure_sgt(self) -> None:
+
+        """Builds SGT on first use. Its tracker rows leave through its own outbox (evaluate_tick
+        hands them out one per tick), never through a tick's result."""
         if self._sgt is None:
             from core.sdis.recorder import SdisRecorder
             from core.sgt.sgt_corpus import PageRecorder
@@ -495,11 +640,174 @@ class VSDCRouter:
                                   mode=self._sgt_mode,
                                   alert_unattributed=lambda form, page: self.alerts.notify_unattributed_submission(form, page),
                                   ask_demotion=self.notify_demotion,
-                                  resolve_client=getattr(self, "_client_lookup", None))
+                                  resolve_client=getattr(self, "_client_lookup", None),
+                                  on_read=self.health.read_result, on_hits=self.health.hits,
+                                  on_ocr_row=lambda: self.health.row("ocr_only"))
+            self._sgt.set_digest(getattr(self, "_digest", None))
             self._apply_sgt_i()
             self._apply_scc()
-        self._sgt.observe(hwnd, self._tick_portal, self._tick_page_url,
-                          frame=self._capture_window(hwnd), ocr=self.ocr, title=title)
+            if self._verifier is not None:
+                self._sgt.set_verifier(self._verifier)
+                reconciler = getattr(self._verifier, "reconciler", None)
+                if reconciler is not None and hasattr(reconciler, "set_sgt_router"):
+                    reconciler.set_sgt_router(self._sgt)
+                if reconciler is not None and hasattr(reconciler, "set_db"):
+                    reconciler.set_db(getattr(self, "db", None))
+
+    def _run_capture(self) -> None:
+        """SGT's tick: the capture loop watches the browser windows, asks the reader for page reads
+        and hands SGT what comes back (core/vsdc/vsdc_capture). Its errors are logged like a tick's
+        and never stop the crosshair engines' tick."""
+        try:
+            if self.capture is None:
+                self._ensure_sgt()
+                from .vsdc_capture import CaptureLoop, WinPlatform
+                from .vsdc_reader import PageReader
+                clock = self.capture_clock or time.monotonic
+                reader = PageReader(backend=self.capture_backend, clock=clock)
+                self.capture = CaptureLoop(self.capture_platform or WinPlatform(self.ocr), reader, self._sgt,
+                                           self.ocr, self.health, clock=clock,
+                                           on_out_of_scope=self._check_unlisted_portal)
+                vsdc_diag.register_reader(reader)
+            self.capture.tick()
+            self.diag_tick.update(self.capture.diag())
+        except Exception as e:
+            vsdc_diag.tick_error(e)
+
+    def _drop_capture(self) -> None:
+        """SGT is off: the loop's reader lanes close and the heartbeat reads the old reader again."""
+        loop, self.capture = self.capture, None
+        if loop is not None:
+            vsdc_diag.register_reader(None)
+            loop.close()
+
+    def _run_verifier(self) -> None:
+        """VSDC247-V lane: passive OCR verifier for the GST portal (plan section 7).
+        Runs on every tick when enabled, in every SGT mode, wrapped so it never
+        stops SGT's tick or the crosshair engines."""
+        if self._verifier is None:
+            self._apply_verifier()
+        if self._verifier is None:
+            return
+        try:
+            self._verifier_stats["ticks"] += 1
+            now = time.time()
+
+            resolved = self._verifier.reconcile_tick(now)
+            for res in resolved:
+                if res.outcome == "matched":
+                    self._verifier_stats["matched"] += 1
+                elif res.outcome == "missed":
+                    self._verifier_stats["missed"] += 1
+
+            # 2. Check target window (foreground first, or visible background browser window)
+            hwnd, title, proc_name = self.get_foreground_info()
+            t_low = (title or "").lower()
+            is_gst_title = "gst" in t_low or "goods and services" in t_low
+            is_browser = any(b in (proc_name or "").lower() for b in BROWSER_EXE_NAMES)
+
+            if not (is_browser or is_gst_title):
+                # Foreground is non-browser (e.g. terminal or Sera window);
+                # inspect top visible browser window so verifier tracks in background like SGT.
+                from . import vsdc_windows
+                try:
+                    candidates = vsdc_windows.browser_windows(hwnd or 0)
+                    for cand in candidates:
+                        c_low = (cand.title or "").lower()
+                        c_gst = "gst" in c_low or "goods and services" in c_low
+                        c_browser = any(b in (cand.proc_name or "").lower() for b in BROWSER_EXE_NAMES)
+                        if c_gst or c_browser:
+                            hwnd, title, proc_name = cand.hwnd, cand.title, cand.proc_name
+                            t_low = c_low
+                            is_gst_title = c_gst
+                            is_browser = c_browser
+                            break
+                except Exception:
+                    pass
+
+            if not hwnd or not (is_browser or is_gst_title):
+                return
+
+            # Read active URL with fallback to window title (Section 4 independence rule)
+            url = self.extract_browser_url(hwnd) or ""
+            if not url and is_gst_title:
+                url = "services.gst.gov.in"
+
+            if url:
+                host = url.split("/")[0].lower() if "/" in url else url.lower()
+                is_local = local_test_pages_allowed() and is_local_reference(url)
+                if not is_local and not any(h in host for h in ("gst.gov.in", "services.gst", "return.gst")):
+                    if not is_gst_title:
+                        return
+
+            # Capture window screenshot and run OCR. The verifier used to OCR a full frame
+            # on every tick; on office hardware that alone doubled the tick cost. Now at
+            # most one OCR a second, an unchanged frame waits for the forced pass, and the
+            # screenshot is the tick's own (shared with VSDC247/SGT) where possible.
+            if now - getattr(self, "_verifier_ocr_at", 0.0) < self._VERIFIER_MIN_INTERVAL_SEC:
+                return
+            img = self._capture_window(hwnd)
+            if img is None:
+                return
+            from .vsdc_gate import frame_signature
+            sig = frame_signature(img)
+            if (sig == getattr(self, "_verifier_sig", None)
+                    and now - getattr(self, "_verifier_ocr_at", 0.0) < self._VERIFIER_FORCE_INTERVAL_SEC):
+                return
+            self._verifier_sig = sig
+            self._verifier_ocr_at = now
+            scan = self.ocr.scan_image(img) if hasattr(self.ocr, "scan_image") else {}
+            lines = scan.get("lines") or []
+            if not lines:
+                return
+
+            from .vsdc247 import find_green_boxes
+            green_boxes = find_green_boxes(img) if img else ()
+
+            self._verifier_stats["gst_frames"] += 1
+            obs = self._verifier.observe_frame(
+                hwnd, url, lines,
+                words=scan.get("words") or (),
+                green_boxes=green_boxes,
+            )
+            if obs.get("page_kind") == "gst_login":
+                self._verifier_stats["logins"] += 1
+                login_user = obs.get("username") or ""
+                if login_user:
+                    self._record_login_frame(hwnd, login_user, img, "GST Portal", client_id=obs.get("client_id"))
+                if obs.get("status") == "login_linked":
+                    user = obs.get("username") or (self._verifier.client_for_window(hwnd) if self._verifier else "") or ""
+                    key = f"verifier_login:{hwnd}:{user}"
+                    if key not in self._prompted_ids:
+                        self._prompted_ids[key] = now
+                        self.notify_activity("identity", f"GST User: {user}", "Window linked • SGT Verifier")
+                        print(f"[VSDC247-V] Linked window {hwnd} to GST user '{user}'")
+                elif obs.get("status") == "login_seen":
+                    cand_user = obs.get("username") or ""
+                    key = f"verifier_login_seen:{hwnd}:{cand_user}"
+                    if key not in self._prompted_ids:
+                        self._prompted_ids[key] = now
+                        print(f"[VSDC247-V] GST login username '{cand_user}' seen on window {hwnd} (awaiting second frame)")
+            else:
+                # Left the login page: a later login in this window is a new session.
+                self._login_evidence.pop(hwnd, None)
+            if obs.get("status") == "saved":
+                self._verifier_stats["arns_seen"] += 1
+
+            # Periodic heartbeat log (every 60s)
+            if now - self._verifier_stats["last_heartbeat"] >= 60.0:
+                self._verifier_stats["last_heartbeat"] = now
+                vsdc_diag.note(
+                    f"[Verifier Heartbeat] ticks={self._verifier_stats['ticks']} "
+                    f"gst_frames={self._verifier_stats['gst_frames']} "
+                    f"logins={self._verifier_stats['logins']} "
+                    f"arns={self._verifier_stats['arns_seen']} "
+                    f"matched={self._verifier_stats['matched']} "
+                    f"missed={self._verifier_stats['missed']}"
+                )
+        except Exception as e:
+            vsdc_diag.tick_error(e)
+
 
     _TRIPWIRE_MAX_PROBES = 3
     _TRIPWIRE_RETRY_SEC = 5.0
@@ -536,6 +844,7 @@ class VSDCRouter:
         if not cue:
             return      # nothing to see yet (UIA warm-up, page still loading) or not a portal: retry / ignore
         self._tripwire_hosts[host] = [-1, now]         # raised once for this host; done
+        self.health.unlisted_portal()
         print(f"[VSDC Scope] {host} shows the {cue} logo but is not on the allowed list - VSDC is paused there. "
               f"Add it to vsdc_scope.json if this is the real portal.")
         # SDIS Part T: the domain a 'watch it too' offer (W4-5) would add as an extra_domains entry.
@@ -662,6 +971,18 @@ class VSDCRouter:
     # ── VSDC247: the crosshair-independent submission safety net ────────────────
     _DISPATCH_TTL_SEC = 24 * 3600
     _PROMPT_TTL_SEC = 600
+    # A background browser is looked at this often while a non-browser window is in front.
+    _BG_247_TICK_SEC = 1.0
+    # One background screenshot may take this long before it is abandoned (PrintWindow can
+    # block forever on a Chromium window that another window covers).
+    _BG_SHOT_TIMEOUT_SEC = 2.5
+    _MAX_STUCK_SHOTS = 2
+    # Evidence temp files older than this are swept, but not more than every 10 minutes.
+    _EVIDENCE_SWEEP_SEC = 600.0
+    _EVIDENCE_TTL_SEC = 24 * 3600
+    # VSDC247-V OCR cadence.
+    _VERIFIER_MIN_INTERVAL_SEC = 1.0
+    _VERIFIER_FORCE_INTERVAL_SEC = 2.0
 
     def _remember_dispatch(self, payload: Dict[str, Any]) -> None:
         """Records every ack/ARN in a dispatched payload so nothing is sent twice."""
@@ -685,11 +1006,16 @@ class VSDCRouter:
                 self._scanner_247 = Vsdc247Scanner()
             self._scanner_247.observe(cached[1])
 
-    def _run_vsdc247(self, hwnd: int) -> Optional[Dict[str, Any]]:
-        portal = self._tick_portal
+    def _run_vsdc247(self, hwnd: int, portal: Optional[str] = None,
+                     page_url: Optional[str] = None, img=None) -> Optional[Dict[str, Any]]:
+        """VSDC247's scan. `portal`/`page_url`/`img` are supplied when this runs for a
+        background window (no foreground tick has loaded them); the foreground path keeps
+        using this tick's own values and screenshot."""
+        portal = portal if portal is not None else self._tick_portal
         if portal not in ("Income Tax", "GST Portal"):
             return None
-        img = self._capture_window(hwnd)
+        if img is None:
+            img = self._capture_window(hwnd)
         if img is None:
             return None
         if self._scanner_247 is None:
@@ -701,7 +1027,7 @@ class VSDCRouter:
         )
         det = outcome.detection
         if det is not None:
-            det.page_url = self._tick_page_url
+            det.page_url = page_url if page_url is not None else self._tick_page_url
         payload = None
         if det is not None:
             if det.tier == "vetoed":
@@ -712,12 +1038,279 @@ class VSDCRouter:
                     self._prompted_ids[key] = time.time()
                     print(f"[VSDC247] not a submission ({'; '.join(det.vetoes)}): {det.identifier}")
             else:
-                payload = self._handle_247_detection(det)
+                payload = self._handle_247_detection(det, img, hwnd)
         if payload is None:
             payload = self._attribute_pending_247_orphans()
         return payload
 
-    def _handle_247_detection(self, det) -> Optional[Dict[str, Any]]:
+    def _background_247_tick(self, foreground_hwnd: int = 0) -> Optional[Dict[str, Any]]:
+        """VSDC247 while a non-browser window is in front (our own Notes & Media dialog, a
+        terminal, the tracker). The browser windows still on screen are read one slow tick
+        at a time. Without this, opening Notes & Media - a modal - blinded VSDC247 entirely,
+        while SGT kept working from its own background-window loop.
+
+        Only a window whose address bar is readable AND in scope is read: a cold title
+        alone is never trusted with a screenshot/OCR.
+        """
+        if self._mode_247 == MODE_OFF:
+            return None
+        from . import vsdc_windows
+        now = time.time()
+        last_seen = getattr(self, "_bg_247_last", None)
+        if last_seen is None:
+            last_seen = self._bg_247_last = {}
+        if len(last_seen) > 16:
+            cutoff = now - 3600
+            self._bg_247_last = last_seen = {h: t for h, t in last_seen.items() if t >= cutoff}
+        try:
+            windows = vsdc_windows.browser_windows(foreground_hwnd)
+        except Exception:
+            return None
+
+        for win in windows:
+            hwnd = int(getattr(win, "hwnd", 0) or 0)
+            if not hwnd:
+                continue
+            if now - last_seen.get(hwnd, 0.0) < self._BG_247_TICK_SEC:
+                continue
+            last_seen[hwnd] = now
+            try:
+                url = self.extract_browser_url(hwnd) or ""
+            except Exception:
+                url = ""
+            if not url or not is_in_scope_url(url):
+                continue
+            portal = portal_for_url(url)
+            if portal not in ("Income Tax", "GST Portal"):
+                continue
+            img = self._timed_capture(hwnd)
+            if img is None:
+                continue
+
+            # This window's own scanner/assembler/identity, restored afterwards so the
+            # foreground tick that called us still sees its own state.
+            saved = {field: getattr(self, field, None) for field in _SESSION_FIELDS}
+            session = self._get_or_create_session(hwnd)
+            self._load_session(session)
+            try:
+                result = self._run_vsdc247(hwnd, portal=portal,
+                                           page_url=sanitize_page_url(url), img=img)
+                if result:
+                    self._attach_pending_login_evidence(result, hwnd)
+                    self._remember_dispatch(result)
+                    cm = str(result.get("capture_method") or "").lower()
+                    is_history = ("history" in cm or "audit" in cm or "calendar" in cm
+                                  or "view_filed" in cm)
+                    stamp_original_author(result, is_live=not is_history)
+                    stamp_device_name(result)
+                return result
+            finally:
+                self._save_session(session)
+                for field, value in saved.items():
+                    setattr(self, field, value)
+        return None
+
+    def _timed_capture(self, hwnd: int, timeout: float = 0.0):
+        """One background-window screenshot, abandoned after `timeout`. PrintWindow can
+        hang on a covered Chromium window, so the call runs on a daemon thread; a shot
+        still running when the timeout fires is left alone and counted, and no more than
+        `_MAX_STUCK_SHOTS` are ever left behind."""
+        timeout = timeout or self._BG_SHOT_TIMEOUT_SEC
+        lock = getattr(self, "_shot_lock", None)
+        if lock is None:
+            lock = self._shot_lock = threading.Lock()
+            self._shot_threads = set()
+        with lock:
+            if len(self._shot_threads) >= self._MAX_STUCK_SHOTS:
+                return None
+
+        box: Dict[str, Any] = {}
+
+        def grab():
+            try:
+                box["img"] = self.ocr.capture_window_image(hwnd)
+            except Exception:
+                box["img"] = None
+            finally:
+                with lock:
+                    self._shot_threads.discard(threading.current_thread())
+
+        thread = threading.Thread(target=grab, name="vsdc-bg-shot", daemon=True)
+        with lock:
+            self._shot_threads.add(thread)
+        thread.start()
+        thread.join(timeout)
+        if thread.is_alive():
+            vsdc_diag.note(f"[VSDC247] background screenshot of {hwnd} abandoned after {timeout:.1f}s")
+            return None
+        return box.get("img")
+
+    def _sweep_evidence_dir(self, out_dir: str) -> None:
+        """Deletes evidence PNGs older than a day, at most every `_EVIDENCE_SWEEP_SEC`
+        (the old code listed the folder on every capture)."""
+        now = time.monotonic()
+        last = getattr(self, "_evidence_swept_at", 0.0) or 0.0
+        if now - last < self._EVIDENCE_SWEEP_SEC:
+            return
+        self._evidence_swept_at = now
+        cutoff = time.time() - self._EVIDENCE_TTL_SEC
+        try:
+            for name in os.listdir(out_dir):
+                old = os.path.join(out_dir, name)
+                if os.path.isfile(old) and os.path.getmtime(old) < cutoff:
+                    os.remove(old)
+        except OSError:
+            pass
+
+    def _save_login_evidence(self, username: str, img, hwnd: int = 0) -> str:
+        """Saves the exact login frame that was OCR'd (username filled, password not read)."""
+        try:
+            if not isinstance(img, Image.Image):
+                return ""
+            out_dir = os.path.join(tempfile.gettempdir(), "sera_vsdc247_evidence")
+            os.makedirs(out_dir, exist_ok=True)
+            self._sweep_evidence_dir(out_dir)
+            stem = re.sub(r"[^A-Za-z0-9]+", "", str(username or ""))[:40] or "login"
+            path = os.path.join(out_dir, f"login_{stem}_{int(time.time() * 1000)}.png")
+            img.save(path, "PNG", compress_level=1)
+            return path
+        except Exception as e:
+            print(f"[VSDC247-V] login evidence screenshot could not be saved: {e}")
+            return ""
+
+    def _capture_login_evidence(self, hwnd: int, username: str, img, client_id=None,
+                                path: str = "") -> str:
+        """Copies the login frame into Notes & Media slot 2 for the matched client. Never logs
+        the password (only the username and the saved path)."""
+        path = path or self._save_login_evidence(username, img, hwnd)
+        if not path:
+            return ""
+        rel_path = ""
+        db = getattr(self, "db", None)
+        if db is not None:
+            try:
+                from .vsdc247_evidence import attach_login_evidence
+                rel_path = attach_login_evidence(db, path, client_id=client_id, username=username)
+            except Exception as e:
+                vsdc_diag.note(f"[VSDC247-V] login evidence could not be attached: {e}")
+        if rel_path:
+            vsdc_diag.note(f"[VSDC247-V] login screenshot for '{username}': {rel_path}")
+        else:
+            vsdc_diag.note(f"[VSDC247-V] login screenshot for '{username}' kept at {path}")
+        return rel_path
+
+    _LOGIN_FRAME_TTL_SEC = 12 * 3600
+
+    def _record_login_frame(self, hwnd: int, username: str, img, portal: str = "", client_id=None) -> str:
+        """Saves the exact login frame (UID typed in) and records it for this window session."""
+        if not hwnd or not username or not isinstance(img, Image.Image):
+            return ""
+        clean_user = str(username).strip().upper()
+        now = time.time()
+        prev = self._login_frames.get(hwnd)
+        if prev and prev.get("username") == clean_user and prev.get("path") and os.path.isfile(prev.get("path")):
+            return prev.get("path")
+
+        path = self._save_login_evidence(clean_user, img, hwnd)
+        if not path:
+            return ""
+        self._login_frames[hwnd] = {
+            "username": clean_user,
+            "path": path,
+            "saved_at": now,
+            "portal": portal,
+        }
+        cutoff = now - self._LOGIN_FRAME_TTL_SEC
+        for stale_hwnd in [h for h, f in list(self._login_frames.items())
+                           if float(f.get("saved_at") or 0) < cutoff]:
+            self._login_frames.pop(stale_hwnd, None)
+
+        self._capture_login_evidence(hwnd, clean_user, img, client_id=client_id, path=path)
+        self._login_evidence[hwnd] = clean_user
+        print(f"[VSDC247] Recorded {portal or 'portal'} login frame for UID '{clean_user}' in window {hwnd}")
+        return path
+
+    def _pending_login_frame(self, hwnd) -> Optional[Dict[str, Any]]:
+        """The last GST or ITR login frame read in this window (or the latest if only one exists), while the file still exists."""
+        frames = getattr(self, "_login_frames", None) or {}
+        try:
+            key = int(hwnd) if hwnd else 0
+        except (TypeError, ValueError):
+            key = 0
+        frame = frames.get(key)
+        if not frame and len(frames) == 1:
+            frame = next(iter(frames.values()))
+        if not frame:
+            return None
+        path = str(frame.get("path") or "")
+        if not path or not os.path.isfile(path):
+            return None
+        if float(frame.get("saved_at") or 0) < time.time() - self._LOGIN_FRAME_TTL_SEC:
+            frames.pop(key, None)
+            return None
+        return frame
+
+    def _attach_pending_login_evidence(self, payload, hwnd) -> None:
+        """Hands the main thread the GST or ITR UID/login frame read earlier in this window, so it can
+        be stored in Notes & Media slot 2 beside the ARN capture (and on the capture row)."""
+        if not isinstance(payload, dict) or not hwnd:
+            return
+        frame = self._pending_login_frame(hwnd)
+        if frame is None:
+            return
+        f_portal = str(frame.get("portal") or "").lower()
+        if not f_portal:
+            uname = str(frame.get("username") or "")
+            from .vsdc_regex import extract_pan
+            f_portal = "income tax" if extract_pan(uname) == uname else "gst"
+
+        p_portal = str(payload.get("portal") or "").lower()
+        if f_portal and p_portal:
+            if "gst" in f_portal and "gst" not in p_portal:
+                return
+            if ("income" in f_portal or "itr" in f_portal) and ("income" not in p_portal and "itr" not in p_portal):
+                return
+        payload["_login_evidence_screenshot"] = frame.get("path")
+        payload["_login_evidence_username"] = frame.get("username") or ""
+
+    def _attach_verifier_login_evidence(self, payload, arn: str) -> None:
+        """The verifier's ledger knows which window saw this ARN; carry that window's login frame."""
+        if not isinstance(payload, dict) or not arn:
+            return
+        if not (self._verifier_enabled and self._verifier is not None):
+            return
+        try:
+            hwnd = self._verifier.window_for_arn(arn)
+        except Exception:
+            return
+        self._attach_pending_login_evidence(payload, hwnd)
+
+    def _save_247_evidence(self, identifier: str, img, hwnd: int = 0) -> str:
+        """
+        Writes the frame VSDC247 actually read to a temp PNG and returns its path.
+        The frame handed to the scanner IS the evidence, so this never takes a second
+        screenshot and never PNG-encodes on a different picture: both used to stall the
+        capture tick for hundreds of milliseconds on a slow PC. `hwnd` is kept for older
+        callers. The main thread copies this into the app's media folder and records it
+        on the capture.
+        """
+        try:
+            if not isinstance(img, Image.Image):
+                return ""
+
+            out_dir = os.path.join(tempfile.gettempdir(), "sera_vsdc247_evidence")
+            os.makedirs(out_dir, exist_ok=True)
+            self._sweep_evidence_dir(out_dir)
+
+            stem = re.sub(r"[^A-Za-z0-9]+", "", str(identifier or ""))[:40] or "capture"
+            path = os.path.join(out_dir, f"{stem}_{int(time.time() * 1000)}.png")
+            img.save(path, "PNG", compress_level=1)
+            return path
+        except Exception as e:
+            print(f"[VSDC247] evidence screenshot could not be saved: {e}")
+            return ""
+
+    def _handle_247_detection(self, det, img=None, hwnd: int = 0) -> Optional[Dict[str, Any]]:
         now = time.time()
         ident = det.identifier
         source_tag = " • VSDC247 (Visual)"
@@ -741,9 +1334,23 @@ class VSDCRouter:
                                      f"{ident} • confidence {det.score}% • check it in the tracker{source_tag}")
             return None
 
-        # CERTAIN: save it, whatever else is or is not known yet.
+        # CERTAIN: save it, whatever else is or is not known yet. Keep the frame that was read
+        # as evidence; the main thread copies it into Notes & Media once the row is in the DB.
+        shot = self._save_247_evidence(ident, img, hwnd)
+        det.evidence_screenshot = shot
         payload = self.assembler.build_247_payload(det)
-        self._dispatched_ids[ident] = now
+        if shot:
+            payload["_evidence_screenshot"] = shot
+        self._attach_pending_login_evidence(payload, hwnd)
+        frame = self._pending_login_frame(hwnd)
+        if frame is not None:
+            # Kept on the detection so a submission captured before its client was known still
+            # carries the login frame when it is re-sent attributed.
+            det.login_evidence_screenshot = frame.get("path")
+            det.login_evidence_username = frame.get("username") or ""
+        # Not remembered here: the caller records it (_remember_dispatch) only once the
+        # payload is actually handed off. Marking it before the row existed meant a failed
+        # write left the ARN permanently "already sent" and VSDC247 never read it again.
         print(f"[VSDC247] captured {det.kind} {ident} score={det.score} ({'; '.join(det.reasons)})")
         who = self.assembler.client_name or self.assembler.client_pan or ""
         form_lbl = det.form or self.assembler.current_filing_type or "Submission"
@@ -770,6 +1377,13 @@ class VSDCRouter:
         ident, det = next(iter(self._pending_247_orphans.items()))
         del self._pending_247_orphans[ident]
         payload = self.assembler.build_247_payload(det)
+        shot = getattr(det, "evidence_screenshot", "") or ""
+        if shot and os.path.exists(shot):
+            payload["_evidence_screenshot"] = shot
+        login_shot = getattr(det, "login_evidence_screenshot", "") or ""
+        if login_shot and os.path.exists(login_shot):
+            payload["_login_evidence_screenshot"] = login_shot
+            payload["_login_evidence_username"] = getattr(det, "login_evidence_username", "") or ""
         if not payload.get("identity_resolved"):
             return None
         print(f"[VSDC247] attributed {ident} to {self.assembler.client_name or self.assembler.client_pan}")
@@ -847,16 +1461,21 @@ class VSDCRouter:
         """
         now = time.time()
         stale = [
-            hwnd for hwnd, s in self._window_sessions.items()
+            (hwnd, hwnd != current_hwnd and not user32.IsWindow(hwnd))
+            for hwnd, s in self._window_sessions.items()
             if (
                 (hwnd != current_hwnd and not user32.IsWindow(hwnd))
                 or (now - s.last_seen) > _SESSION_IDLE_TIMEOUT_SEC
             )
         ]
-        for hwnd in stale:
+        for hwnd, gone in stale:
             del self._window_sessions[hwnd]
             if self._sgt is not None:
-                self._sgt.end_session(hwnd, "window closed")
+                # A window that still exists only sat idle: its clients are parked (resumable), not lost.
+                if gone:
+                    self._sgt.window_gone(hwnd)
+                else:
+                    self._sgt.window_idle(hwnd)
 
     def end_all_active_sessions(self, reason: str) -> None:
         """
@@ -872,7 +1491,9 @@ class VSDCRouter:
                 except Exception:
                     pass
                 asm._session_started = False
-        if self._sgt is not None:
+        if self.capture is not None:
+            self.capture.end_all(reason)        # ends SGT's sessions too
+        elif self._sgt is not None:
             self._sgt.end_all(reason)
 
     def drain_sgt_dispatches(self) -> List[Dict[str, Any]]:
@@ -881,6 +1502,7 @@ class VSDCRouter:
             return []
         rows = self._sgt.drain()
         for r in rows:
+            self._enrich_sgt_row_with_verifier(r)
             stamp_device_name(r)
         return rows
 
@@ -954,77 +1576,140 @@ class VSDCRouter:
         """
         if not self._uia or not hwnd:
             return None
+        # One helper for both readers (the reader v2's lanes call it on their own threads).
+        return vsdc_uia_text.address_bar_here(self._uia, self._uia_client, hwnd, self._cached_address_elements)
 
-        # Fast-path: Check cached address bar element for this hwnd (< 0.2ms)
-        cached = self._cached_address_elements.get(hwnd)
-        if cached:
-            edit, val_obj = cached
-            try:
-                url_val = val_obj.CurrentValue
-                if url_val and ("." in url_val or "/" in url_val):
-                    return url_val
-            except Exception:
-                # Element is stale or invalidated (e.g. navigation or tab closed)
-                self._cached_address_elements.pop(hwnd, None)
-
-        try:
-            element = self._uia.ElementFromHandle(hwnd)
-            if not element:
-                return None
-
-            # Look for Edit control (Address bar) - or a ComboBox, which is what Firefox's bar is
-            # UIA_EditControlTypeId = 50004, UIA_ComboBoxControlTypeId = 50003
-            condition = self._uia.CreateOrCondition(
-                self._uia.CreatePropertyCondition(self._uia_client.UIA_ControlTypePropertyId, 50004),
-                self._uia.CreatePropertyCondition(self._uia_client.UIA_ControlTypePropertyId, 50003),
-            )
-            edits = element.FindAll(self._uia_client.TreeScope_Descendants, condition)
-            if not edits:
-                return None
-
-            count = edits.Length
-            for i in range(count):
-                edit = edits.GetElement(i)
-                try:
-                    name = (edit.CurrentName or "").lower()
-                    auto_id = (edit.CurrentAutomationId or "").lower()
-                    # Address bar indicators across Chrome, Edge, Brave, Firefox
-                    if any(k in name for k in ("address", "search", "url")) or any(k in auto_id for k in ("address", "url", "view_")):
-                        val_pattern = edit.GetCurrentPattern(self._uia_client.UIA_ValuePatternId)
-                        if val_pattern:
-                            val_obj = val_pattern.QueryInterface(self._uia_client.IUIAutomationValuePattern)
-                            url_val = val_obj.CurrentValue
-                            if url_val and ("." in url_val or "/" in url_val):
-                                if len(self._cached_address_elements) > 20:
-                                    self._cached_address_elements.clear()
-                                self._cached_address_elements[hwnd] = (edit, val_obj)
-                                return url_val
-                except Exception:
-                    continue
-
-        except Exception as e:
-            # Silently handle transient UIA errors (e.g. during alt-tab)
-            pass
-
-        return None
+    def _health_hud(self, title: str, subtitle: str = "") -> None:
+        """A capture-health HUD event. Straight to the callback, not through this tick's buffer: the
+        watch thread raises "stuck" while the capture thread is inside a tick that never ends."""
+        self._emit_activity("prompt", title, subtitle, {})
 
     def evaluate_tick(self) -> Optional[Dict[str, Any]]:
         """
         Executes a single monitoring tick (called every 1–2s by worker).
         Returns completed master payload dictionary if a filing is finalized, else None.
+        Capture health (vsdc_health) is evaluated at the end of every tick, whatever the tick did.
         """
-        # SGT tracker rows waiting to be saved go out first, one per tick - even when the
-        # engines were just switched off (switching SGT off queues its last rows) and whatever
-        # window is in front. They are SGT's own rows: never recorded in _dispatched_ids, so
-        # they can never stop VSDC247 from saving its own capture of the same filing.
-        if self._sgt is not None and self._sgt.pending():
-            sgt_row = self._sgt.pop_dispatch()
-            if sgt_row:
-                stamp_device_name(sgt_row)
-                return sgt_row
-        if self._engines_off:
-            return None
+        try:
+            return self._evaluate_tick()
+        finally:
+            self._health_end_of_tick()
+
+    def _health_end_of_tick(self) -> None:
+        try:
+            h = self.health
+            loop = self.capture
+            h.uia_paused(bool(vsdc_uia_text.worker_health().get("disabled")) or (loop is not None and loop.paused()))
+            h.tick()
+            if h.due():
+                h.write(loop.health_extra() if loop is not None else None)
+        except Exception:
+            pass
+
+    def _enrich_sgt_row_with_verifier(self, sgt_row: Dict[str, Any]) -> Dict[str, Any]:
+        """Ensures the SGT row carries the vsdc247-v verification section and original_author dataset metadata."""
+        if not isinstance(sgt_row, dict):
+            return sgt_row
+
+        arn = (sgt_row.get("arn") or "").strip().upper()
+        is_real_arn = bool(arn and arn not in ("N/A", "NONE", "", "UNKNOWN"))
+
+        # Ensure original_author on dataset payload
+        raw_p = sgt_row.get("raw_payload", {}) if isinstance(sgt_row.get("raw_payload"), dict) else {}
+        existing_orig = sgt_row.get("original_author") or raw_p.get("original_author")
+        if existing_orig:
+            orig_author = existing_orig
+        elif is_real_arn:
+            orig_author = device_name()
+        else:
+            orig_author = None
+
+        sgt_row["original_author"] = orig_author
+        if "raw_payload" in sgt_row and isinstance(sgt_row["raw_payload"], dict):
+            sgt_row["raw_payload"]["original_author"] = orig_author
+
+        v_existing = sgt_row.get("vsdc247-v")
+        if not isinstance(v_existing, dict):
+            v_existing = sgt_row.get("raw_payload", {}).get("vsdc247-v") if isinstance(sgt_row.get("raw_payload"), dict) else None
+
+        if isinstance(v_existing, dict) and v_existing.get("verified"):
+            if is_real_arn:
+                self._attach_verifier_login_evidence(sgt_row, arn)
+            return sgt_row
+
+        verif = None
+        if is_real_arn and self._verifier_enabled and self._verifier is not None:
+            verif = self._verifier.get_verification(arn)
+            if verif is None:
+                # Active screen frame might show the confirmation right now; give OCR a quick pass
+                try:
+                    self._run_verifier()
+                    verif = self._verifier.get_verification(arn)
+                except Exception:
+                    pass
+
+        if verif:
+            vsdc_v_section = dict(verif)
+            if self._verifier and self._verifier.reconciler:
+                try:
+                    self._verifier.reconciler.record_sgt_matched(arn, sgt_row)
+                except Exception:
+                    pass
+        else:
+            vsdc_v_section = {
+                "verified": False,
+                "status": "unverified",
+                "arn": arn if is_real_arn else "N/A",
+            }
+
+        if is_real_arn:
+            self._attach_verifier_login_evidence(sgt_row, arn)
+
+        sgt_row["vsdc247-v"] = vsdc_v_section
+        if "raw_payload" in sgt_row and isinstance(sgt_row["raw_payload"], dict):
+            sgt_row["raw_payload"]["vsdc247-v"] = dict(vsdc_v_section)
+            sgt_row["raw_payload"]["vsdc247"] = dict(vsdc_v_section)
+        return sgt_row
+
+    def _evaluate_tick(self) -> Optional[Dict[str, Any]]:
+        try:
+            # "One screenshot per tick": never hand the next tick a picture taken earlier
+            # (the background-window path may not reach the per-window reset in
+            # _crosshair_tick at all).
+            self._tick_capture = None
+            # SGT tracker rows waiting to be saved go out first, one per tick - even when the
+            # engines were just switched off (switching SGT off queues its last rows) and whatever
+            # window is in front. They are SGT's own rows: never recorded in _dispatched_ids, so
+            # they can never stop VSDC247 from saving its own capture of the same filing.
+            if self._sgt is not None and self._sgt.pending():
+                sgt_row = self._sgt.pop_dispatch()
+                if sgt_row:
+                    self._enrich_sgt_row_with_verifier(sgt_row)
+                    stamp_device_name(sgt_row)
+                    return sgt_row
+            if self._engines_off:
+                self.diag_tick = {"engines": "all off"}
+                return None
+            # SGT runs in its own capture loop, after the crosshair engines (when they are on at all);
+            # it cannot change their result: its rows go out through its outbox, at the top of a tick.
+            if self._sgt_alone:
+                self.diag_tick = {}
+                return None
+            return self._crosshair_tick()
+        finally:
+            if self._sgt_mode != SGT_OFF and not self._engines_off:
+                self._run_capture()
+            if self._verifier_enabled:
+                self._run_verifier()
+
+
+    def _crosshair_tick(self) -> Optional[Dict[str, Any]]:
+        """The crosshair engines and VSDC247: the window in front, with this router's own
+        address-bar read (R7)."""
         hwnd, title, proc_name = self.get_foreground_info()
+        # What the heartbeat says was in front (logs/vsdc.log): the exe only, until the scope
+        # gate has passed - a page outside the portals is never named there.
+        self.diag_tick = {"front": proc_name or ("none" if not hwnd else "?")}
         if not hwnd or not title:
             return None
 
@@ -1035,6 +1720,11 @@ class VSDCRouter:
         is_browser = any(b in proc_name for b in BROWSER_EXE_NAMES)
 
         if not (is_portal_title or is_browser):
+            # Our own modal Notes & Media dialog (or another app) is in front. SGT keeps
+            # watching browser windows from its own loop; VSDC247 must do the same, or a
+            # submission completed behind that dialog is never seen.
+            if self._mode_247 != MODE_OFF:
+                return self._background_247_tick(hwnd)
             return None
 
         # Isolate this window's tracking state for the duration of this tick —
@@ -1057,12 +1747,12 @@ class VSDCRouter:
                     result = self._run_vsdc247(hwnd)
                 else:
                     self._observe_247(hwnd)      # the crosshair pipeline handled this frame
-            # SGT: after everything else, on the same scope-gated pages; it cannot change
-            # `result` (its rows go out through its outbox, at the top of the next tick).
-            if self._scope_ok_this_tick and self._sgt_mode != SGT_OFF:
-                self._run_sgt(hwnd, title)
             if result:
+                self._attach_pending_login_evidence(result, hwnd)
                 self._remember_dispatch(result)
+                cm = str(result.get("capture_method") or "").lower()
+                is_history = "history" in cm or "audit" in cm or "calendar" in cm or "view_filed" in cm
+                stamp_original_author(result, is_live=not is_history)
                 stamp_device_name(result)        # which PC captured it, inside the payload
             return result
         finally:
@@ -1144,6 +1834,13 @@ class VSDCRouter:
         # only) have no portal host, so they fall back to what the window title implies.
         self._tick_portal = (portal_for_url(extracted_url) if address_bar_readable else None) or self.active_portal
         self._tick_page_url = sanitize_page_url(extracted_url) if address_bar_readable else ""
+        self.diag_tick.update(address_bar="read" if address_bar_readable else "unreadable",
+                              in_scope="yes" if in_scope else "no")
+        if in_scope:
+            self.diag_tick.update(portal=self._tick_portal, page=self._tick_page_url or None)
+        if self._sgt_mode == SGT_OFF:           # with SGT on, its capture loop tells health
+            self.health.window(hwnd, in_scope, self._tick_portal or "", titled_portal=is_portal_title,
+                               url_readable=address_bar_readable)
 
         matched_crosshair = None
         if in_scope and (address_bar_readable or is_portal_title):
@@ -1636,6 +2333,7 @@ class VSDCRouter:
         # Mark route captured when key data points for the matched route render on screen
         if is_login_auth and pan:
             self.route_captured = True
+            self._record_login_frame(hwnd, pan, img, "Income Tax")
         elif matched_crosshair.id in ("itr_personal_info", "itr_profile") and (client_name or pan):
             # Don't lock this route purely on identity — the header profile pill
             # carries name/PAN in the page shell from the very first tick, while
@@ -1954,6 +2652,18 @@ class VSDCRouter:
                 self.route_poll_count = 0
                 self.notify_activity("logout", "GST Session Concluded", f"Archived: {ident}")
                 return flushed
+
+        # GST Login page: record Username/UID frame as login evidence
+        if matched_crosshair.id == "gst_login":
+            from .vsdc247_verify_pages import read_login_username
+            login_user = read_login_username(uia_lines) if uia_lines else None
+            if not login_user and lines:
+                login_user = read_login_username(lines)
+            if not login_user and full_text:
+                login_user = read_login_username(full_text.splitlines())
+            if login_user:
+                self._record_login_frame(hwnd, login_user, img, "GST Portal")
+            return None
 
         # Clear active workflow selection when returning to welcome/dashboard
         if matched_crosshair.id in ("gst_welcome_calendar", "gst_returns_dashboard"):

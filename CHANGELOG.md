@@ -7,6 +7,18 @@ All notable changes to **Project Sera** are documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- **Redesigned Notes & Media into a dedicated 2-pane modal dialog with a direct row switch in Tracker Dump.**
+  - Scrapped the cramped Tab 3 from Payload Inspector and created a dedicated, ergonomic NotesAndMediaDialog featuring side-by-side notes and media preview, WinRT OCR scanner, and clipboard paste.
+  - Added a dedicated Notes & Media switch button (mdi.note-text-outline / mdi.note-text) directly in each table row's action group; highlights in emerald (#4CF9B7) when notes or screenshots are attached.
+  - Notes and media attachments now survive re-captures, container key re-resolutions, and app updates.
+  - Raw capture row replacements (by dataset_key, unsubmitted draft purge, or URL fallback) automatically snapshot and carry over notes and screenshots to replacement rows.
+  - Container notes and media are now persisted in a dedicated client_container_notes table that survives container rebuilds and follows identity key transitions (e.g. unassigned PAN -> registered client CLI-#####).
+  - Attachments are stored under the user data directory (<data_dir>/media/), relative paths are used in SQLite, and a guard prevents missing files from wiping existing database pointers.
+  - Startup maintenance backfills existing data/media attachments and migrates absolute paths to relative references.
+- **Notes & Media now keeps two screenshots per client: filing evidence and GST login evidence.**
+  - Screenshot 1 holds the filing/submission frame; Screenshot 2 holds the GST login frame captured once the username is filled. Passwords are never read, stored, or logged.
+  - Automatic evidence only replaces an empty slot or an earlier automatic frame; screenshots attached by hand are never overwritten.
+  - Both slots survive re-captures, container rebuilds, key migrations, and startup path normalization.
 - **The unattended ARN-row fixer no longer hogs the CPU.** On the admin PC it re-read the whole SDIS corpus (about 1.7 GB) at every start, for minutes at 50-90% of a core, stalling the app's own thread for 4-7 seconds. It now works in short bursts (a quarter of one core at most), and a row it judged "not sure" is not looked at again until the corpus files for its two days change (remembered in `mr_fixer/auto_state.json`). `core/sdis/arn_autofix.py`, `core/sdis/arn_fixer.py`; tests in `tests/test_arn_autofix.py`.
 
 ---

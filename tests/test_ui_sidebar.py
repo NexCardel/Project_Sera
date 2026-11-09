@@ -62,7 +62,7 @@ def test_brand_name_is_not_truncated(sidebar):
 def test_groups_and_entries_for_staff(sidebar):
     sidebar.set_admin_mode(False)
     APP.processEvents()
-    assert _visible_text(sidebar) == ["All Clients", "Tracker Dump", "Import CSV", "Display"]
+    assert _visible_text(sidebar) == ["All Clients", "Tracker Dump", "DRS System", "Import CSV", "Display"]
     labels = [w.text() for w in sidebar.findChildren(kit.NavLabel) if w.isVisible()]
     assert labels == ["CLIENTS", "TOOLS"]
 
@@ -70,8 +70,8 @@ def test_groups_and_entries_for_staff(sidebar):
 def test_groups_and_entries_for_admin(sidebar):
     sidebar.set_admin_mode(True)
     APP.processEvents()
-    assert _visible_text(sidebar) == ["All Clients", "Manage Clients", "Tracker Dump", "Audit Log",
-                                      "Import CSV", "Display", "Options"]
+    assert _visible_text(sidebar) == ["All Clients", "Manage Clients", "Tracker Dump", "DRS System",
+                                      "Audit Log", "Import CSV", "Display", "Options"]
     labels = [w.text() for w in sidebar.findChildren(kit.NavLabel) if w.isVisible()]
     assert labels == ["CLIENTS", "TOOLS", "ADMIN"]
 

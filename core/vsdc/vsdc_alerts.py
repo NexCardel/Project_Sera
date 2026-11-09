@@ -100,6 +100,41 @@ def stamp_device_name(payload):
     return payload
 
 
+def stamp_original_author(payload, is_live=True, author=None):
+    """
+    Records which PC filed/captured the return: "original_author" at the top level
+    and inside "raw_payload".
+
+    If the return carries an ARN (whether live or from history), records that PC's name (author or device_name()).
+    An existing original_author is never overwritten. Returns the payload.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    existing = payload.get("original_author")
+    if not existing and isinstance(payload.get("raw_payload"), dict):
+        existing = payload["raw_payload"].get("original_author")
+    if existing:
+        payload["original_author"] = existing
+        if isinstance(payload.get("raw_payload"), dict):
+            payload["raw_payload"]["original_author"] = existing
+        return payload
+
+    arn = str(payload.get("arn") or payload.get("ack_number") or "").strip().upper()
+    has_arn = bool(arn and arn not in ("N/A", "NA", "", "UNKNOWN", "NONE"))
+    if has_arn or is_live:
+        orig = str(author or device_name()).strip()
+        payload["original_author"] = orig
+        raw = payload.get("raw_payload")
+        if isinstance(raw, dict):
+            raw["original_author"] = orig
+    else:
+        payload.setdefault("original_author", None)
+        raw = payload.get("raw_payload")
+        if isinstance(raw, dict):
+            raw.setdefault("original_author", None)
+    return payload
+
+
 def _config_path() -> Path:
     """
     Installed app: next to the program first, else the PC's Sera data folder. The program sits
@@ -198,31 +233,8 @@ class AlertSender:
         A submission was captured but no client is known. True when an alert was queued.
         The text carries no client data (see the module docstring).
         """
-        now = time.time()
-        if not self.enabled and self._reads_config_file and now - self._last_reload >= self.RELOAD_INTERVAL_SEC:
-            # The app may have been started before the config file existed (or before it was
-            # fixed). Pick it up now rather than staying silent until the next restart.
-            self._last_reload = now
-            cfg = load_alert_config()
-            if cfg:
-                self.config = cfg
-                print(f"[VSDC Alert] phone alerts ON via {cfg['server']} (topic ...{cfg['topic'][-4:]}, "
-                      f"this PC: '{self._machine()}') - config found after start-up")
-        if not self.enabled:
-            if now - self._warned_off_at > 600:
-                self._warned_off_at = now
-                print(f"[VSDC Alert] a submission with no client was captured, but phone alerts are not configured "
-                      f"({_config_path()} / VSDC_ALERT_TOPIC) - no alert sent")
+        if not self._admit("a submission with no client was captured"):
             return False
-        while self._sent and now - self._sent[0] > 3600:
-            self._sent.popleft()
-        if len(self._sent) >= self.MAX_PER_HOUR:
-            if not self._warned_limit:
-                self._warned_limit = True
-                print(f"[VSDC Alert] {self.MAX_PER_HOUR} alerts in the last hour - holding further ones back")
-            return False
-        self._sent.append(now)
-        self._warned_limit = False
 
         when = when or datetime.now()
         page = redact_identifiers(page_url or "") or "(address bar not readable)"
@@ -236,13 +248,105 @@ class AlertSender:
             "page on that machine so it can be linked.",
         ))
         print(f"[VSDC Alert] submission with no client captured - alerting ({self._machine()})")
-        title = "Sera: submission captured, client unknown"
+        self._dispatch("Sera: submission captured, client unknown", body)
+        return True
+
+    def notify_capture_health(self, device: Optional[str], state: str, detail: str = "",
+                              when: Optional[datetime] = None) -> bool:
+        """
+        Capture stopped working on a PC (core/vsdc/vsdc_health). True when an alert was queued.
+        Counts toward the same hourly limit as the other alerts. The text is the PC name, the
+        state's name and a fixed sentence, redacted like every alert: no client data.
+        """
+        if not self._admit("capture has a problem"):
+            return False
+        when = when or datetime.now()
+        pc = redact_identifiers(device or self._machine())[:40]
+        body = "\n".join((
+            f"PC: {pc}",
+            f"State: {redact_identifiers(state or 'unknown')}",
+            f"Seen: {when.strftime('%d-%b %H:%M')}",
+            "",
+            redact_identifiers(detail or "")[:200],
+        )).rstrip()
+        print(f"[VSDC Alert] capture problem ({state}) - alerting ({pc})")
+        self._dispatch(f"Sera: capture problem on {pc}", body)
+        return True
+
+    def notify_sgt_missed(self, form: Optional[str], page_url: Optional[str],
+                          when: Optional[datetime] = None) -> bool:
+        """SGT missed an ARN observed by OCR on the GST portal (VSDC247-V, plan 6.5)."""
+        if not self._admit("SGT missed a GST submission"):
+            return False
+        when = when or datetime.now()
+        page = redact_identifiers(page_url or "") or "(address bar not readable)"
+        body = "\n".join((
+            f"PC: {self._machine()}",
+            f"Form: {redact_identifiers(form or 'GST Return')}",
+            f"Seen: {when.strftime('%d-%b %H:%M')}",
+            f"Page: {page}",
+            "",
+            "VSDC247-V: SGT missed this filing on the GST portal. An independent flagged row has been recorded.",
+        ))
+        print(f"[VSDC Alert] SGT missed GST filing - alerting ({self._machine()})")
+        self._dispatch("Sera: SGT missed GST submission", body)
+        return True
+
+    def notify_client_conflict(self, form: Optional[str], page_url: Optional[str],
+                               when: Optional[datetime] = None) -> bool:
+        """SGT and OCR disagree on the client for an ARN (VSDC247-V, plan 6.3)."""
+        if not self._admit("client mismatch on GST submission"):
+            return False
+        when = when or datetime.now()
+        page = redact_identifiers(page_url or "") or "(address bar not readable)"
+        body = "\n".join((
+            f"PC: {self._machine()}",
+            f"Form: {redact_identifiers(form or 'GST Return')}",
+            f"Seen: {when.strftime('%d-%b %H:%M')}",
+            f"Page: {page}",
+            "",
+            "VSDC247-V: SGT and OCR captured the same ARN under different clients. Please review in Tracker.",
+        ))
+        print(f"[VSDC Alert] GST filing client mismatch - alerting ({self._machine()})")
+        self._dispatch("Sera: GST filing client mismatch", body)
+        return True
+
+
+    def _admit(self, what: str) -> bool:
+        """Configured, and under the hourly limit? (Reloads a config that appeared after start-up.)"""
+        now = time.time()
+        if not self.enabled and self._reads_config_file and now - self._last_reload >= self.RELOAD_INTERVAL_SEC:
+            # The app may have been started before the config file existed (or before it was
+            # fixed). Pick it up now rather than staying silent until the next restart.
+            self._last_reload = now
+            cfg = load_alert_config()
+            if cfg:
+                self.config = cfg
+                print(f"[VSDC Alert] phone alerts ON via {cfg['server']} (topic ...{cfg['topic'][-4:]}, "
+                      f"this PC: '{self._machine()}') - config found after start-up")
+        if not self.enabled:
+            if now - self._warned_off_at > 600:
+                self._warned_off_at = now
+                print(f"[VSDC Alert] {what}, but phone alerts are not configured "
+                      f"({_config_path()} / VSDC_ALERT_TOPIC) - no alert sent")
+            return False
+        while self._sent and now - self._sent[0] > 3600:
+            self._sent.popleft()
+        if len(self._sent) >= self.MAX_PER_HOUR:
+            if not self._warned_limit:
+                self._warned_limit = True
+                print(f"[VSDC Alert] {self.MAX_PER_HOUR} alerts in the last hour - holding further ones back")
+            return False
+        self._sent.append(now)
+        self._warned_limit = False
+        return True
+
+    def _dispatch(self, title: str, body: str) -> None:
         url = f"{self.config['server']}/{self.config['topic']}"
         if self._sync:
             self._deliver(url, title, body)
         else:
             threading.Thread(target=self._deliver, args=(url, title, body), daemon=True, name="vsdc-alert").start()
-        return True
 
     def _deliver(self, url: str, title: str, body: str) -> bool:
         for attempt in (1, 2):

@@ -1,5 +1,10 @@
 # SGT idle-resume: plan for the implementer
 
+> **2026-10-14 note:** superseded in part by `docs/sgt-never-miss-blueprint.md` (decision D13, WP9).
+> The idle end is now 4 h (`IDLE_END_SEC = 4 * 3600`) and the resume window 12 h
+> (`RESUME_WINDOW_SEC = 12 * 3600`). Parked sessions are kept on disk and restored after a restart,
+> so the "out of scope: persisting parked sessions" note below no longer holds.
+
 File: `core/sgt/sgt_shadow.py` (tests: `tests/test_sgt_shadow.py`). Do NOT commit, bump version.json, or touch `package_dist/`.
 
 ## Problem (observed live, Sept GSTR-1 filing)

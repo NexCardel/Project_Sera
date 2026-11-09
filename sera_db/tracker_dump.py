@@ -9,10 +9,38 @@ import json
 import time
 from core.dataset_key import NOT_CARRIER_SQL, compute_dataset_key as _compute_dataset_key
 
-from sera_db.common import SKELETON_NAME_REGEX
+from sera_db.common import (
+    SKELETON_NAME_REGEX,
+    is_filed_dataset,
+    is_sgt_capture,
+    payload_device_name,
+    payload_original_author,
+    stamp_payload_original_author,
+)
 
 
 RECOVERED_NAME_MARK = "/-"      # follows the client name of a row the ARN fixer corrected
+
+COMPLETE_RANK = 4               # "Submitted & Verified" and above (get_status_rank)
+
+
+def is_complete(status, arn) -> bool:
+    """A complete dataset: it has an ARN and its status is verified or processed. Derived from the row, so
+    it needs no column and every existing row is covered. Such a row is never lowered by a re-read of the
+    portal or by a peer's older view of it - only by a status change the user confirmed."""
+    if not arn or str(arn).strip().upper() in ("N/A", "NA", ""):
+        return False
+    from core.vsdc.vsdc_assembler import get_status_rank
+    return get_status_rank(status) >= COMPLETE_RANK
+
+
+def _user_confirmed(payload) -> bool:
+    """The payload says a lowered status was confirmed by the user (SGT's demotion dialog)."""
+    try:
+        p = json.loads(payload) if isinstance(payload, str) else payload
+    except Exception:
+        return False
+    return isinstance(p, dict) and bool(p.get("status_correction")) and bool(p.get("status_confirmed"))
 
 
 class TrackerDumpMixin:
@@ -30,6 +58,143 @@ class TrackerDumpMixin:
             cur = r_conn.execute(
                 "DELETE FROM tracker_dump WHERE dataset_key = ? AND capture_method LIKE 'SGT%'", (dataset_key,))
             return cur.rowcount or 0
+
+    def annotate_vsdc247(self, arn: str, block: dict) -> int:
+        """Annotates SGT's row(s) for arn with the vsdc247 verification block (plan 6.4).
+        Idempotent: merges raw_payload["vsdc247"] and raw_payload["vsdc247-v"],
+        leaves all other keys and columns unchanged.
+        Never goes through insert_tracker_dump. Returns count of updated rows."""
+        clean_arn = (arn or "").strip().upper()
+        if not clean_arn or not isinstance(block, dict):
+            return 0
+        v_block = dict(block)
+        if "verified" not in v_block:
+            v_block["verified"] = True
+        if "status" not in v_block:
+            v_block["status"] = "verified"
+        updated = 0
+        with self._connect_raw() as r_conn:
+            rows = r_conn.execute(
+                "SELECT id, raw_payload_json FROM tracker_dump "
+                "WHERE capture_method LIKE 'SGT%' AND UPPER(TRIM(arn_number)) = ?",
+                (clean_arn,),
+            ).fetchall()
+            for r_id, r_json in rows:
+                try:
+                    payload = json.loads(r_json) if r_json else {}
+                except Exception:
+                    payload = {}
+                if not isinstance(payload, dict):
+                    payload = {}
+                if "raw_payload" in payload and isinstance(payload["raw_payload"], dict):
+                    payload["raw_payload"]["vsdc247"] = dict(v_block)
+                    payload["raw_payload"]["vsdc247-v"] = dict(v_block)
+                payload["vsdc247"] = dict(v_block)
+                payload["vsdc247-v"] = dict(v_block)
+                new_json = json.dumps(payload, ensure_ascii=False)
+                r_conn.execute(
+                    "UPDATE tracker_dump SET raw_payload_json = ? WHERE id = ?",
+                    (new_json, r_id),
+                )
+                updated += 1
+        return updated
+
+    def attach_arn_to_sgt_row(self, row_id: int, arn: str, block: dict = None) -> int:
+        """Plan 6.5 fallback: SGT stored a filed return under its identity but without an ARN
+        (the returns calendar row carries 'N/A'). Fill that missing ARN in place, so the OCR
+        ledger's ARN and the SGT row become one dataset and later ARN lookups resolve. A row that
+        already holds a real ARN is never overwritten. Returns 1 when the row was updated."""
+        clean_arn = (arn or "").strip().upper()
+        if not row_id or not clean_arn:
+            return 0
+        with self._connect_raw() as r_conn:
+            row = r_conn.execute(
+                "SELECT arn_number, raw_payload_json, capture_method FROM tracker_dump WHERE id = ?",
+                (row_id,),
+            ).fetchone()
+            if not row:
+                return 0
+            current_arn, r_json, capture_method = row
+            if not str(capture_method or "").startswith("SGT") or capture_method == "SGT_sdis_info":
+                return 0
+            current = (current_arn or "").strip().upper()
+            if current and current not in ("N/A", "NA", "NONE", "UNKNOWN"):
+                return 0
+            try:
+                payload = json.loads(r_json) if r_json else {}
+            except Exception:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            if isinstance(block, dict) and block:
+                v_block = dict(block)
+                v_block.setdefault("verified", True)
+                v_block.setdefault("status", "verified")
+                if isinstance(payload.get("raw_payload"), dict):
+                    payload["raw_payload"]["vsdc247"] = dict(v_block)
+                    payload["raw_payload"]["vsdc247-v"] = dict(v_block)
+                payload["vsdc247"] = dict(v_block)
+                payload["vsdc247-v"] = dict(v_block)
+                r_conn.execute(
+                    "UPDATE tracker_dump SET arn_number = ?, raw_payload_json = ? WHERE id = ?",
+                    (clean_arn, json.dumps(payload, ensure_ascii=False), row_id),
+                )
+            else:
+                r_conn.execute(
+                    "UPDATE tracker_dump SET arn_number = ? WHERE id = ?", (clean_arn, row_id))
+            return 1
+
+    def insert_vsdc247_flagged_row(self, row_dict: dict) -> int:
+        """Inserts or updates an independent flagged row for an ARN missed by SGT (plan 6.5).
+        capture_method = 'VSDC247_verify'
+        dataset_key = 'V247:GST:<ARN>'"""
+        arn = (row_dict.get("arn") or "").strip().upper()
+        if not arn:
+            return 0
+        d_key = row_dict.get("dataset_key") or f"V247:GST:{arn}"
+        portal = row_dict.get("portal") or "GST Portal"
+        period = row_dict.get("period_label") or ""
+        status = row_dict.get("status") or "Submitted"
+        client_name = row_dict.get("client_name") or f"Pending_{arn}"
+        unassigned_id = f"Pending_{arn}"
+        capture_method = "VSDC247_verify"
+        raw_payload = row_dict.get("raw_payload") or {}
+        raw_json = json.dumps(raw_payload, ensure_ascii=False) if isinstance(raw_payload, dict) else str(raw_payload)
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        with self._connect_raw() as r_conn:
+            existing = r_conn.execute(
+                "SELECT id FROM tracker_dump WHERE dataset_key = ? AND capture_method = 'VSDC247_verify'",
+                (d_key,),
+            ).fetchone()
+            if existing:
+                r_conn.execute(
+                    "UPDATE tracker_dump SET raw_payload_json = ?, status = ?, period_label = ? WHERE id = ?",
+                    (raw_json, status, period, existing[0]),
+                )
+                return existing[0]
+
+            cur = r_conn.execute(
+                """INSERT INTO tracker_dump
+                   (client_id, unassigned_identity, service_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, created_at, dataset_key)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (None, unassigned_id, None, portal, period, arn, capture_method, status, raw_json, "VSDC247-V", now, d_key),
+            )
+            return cur.lastrowid
+
+    def remove_vsdc247_flagged_row(self, arn: str) -> int:
+        """Removes the independent flagged row when SGT later delivers the ARN (plan 6.5)."""
+        clean_arn = (arn or "").strip().upper()
+        if not clean_arn:
+            return 0
+        d_key = f"V247:GST:{clean_arn}"
+        with self._connect_raw() as r_conn:
+            cur = r_conn.execute(
+                "DELETE FROM tracker_dump WHERE capture_method = 'VSDC247_verify' AND (arn_number = ? OR dataset_key = ?)",
+                (clean_arn, d_key),
+            )
+            return cur.rowcount or 0
+
 
     @staticmethod
     def _convert_sgt_shadow_rows(conn) -> int:
@@ -113,8 +278,12 @@ class TrackerDumpMixin:
         # Never for SGT: a row it sends without a PAN is one whose client it has NOT identified,
         # and "whoever was captured on this portal in the last 15 minutes" is how a filing lands
         # on the previous client. SGT re-sends the row under its client once it reads the PAN.
-        if not candidates and portal and not str(capture_method or "").startswith("SGT"):
-            prox_cand = self._resolve_session_proximity_candidate(portal, now, max_seconds=900, session_id=session_id)
+        # Only from a capture of THIS PC (see re_resolve_all_tracker_dumps): another PC's screen says
+        # nothing about who this one was on.
+        device = payload_device_name(raw_payload_json)
+        if not candidates and portal and device and not is_sgt_capture(capture_method):
+            prox_cand = self._resolve_session_proximity_candidate(portal, now, max_seconds=900, session_id=session_id,
+                                                                  device=device)
             if prox_cand:
                 candidates = [prox_cand]
 
@@ -162,6 +331,8 @@ class TrackerDumpMixin:
         incoming_form = filing_type or ""
         incoming_pref = ""
         status_correction = False
+        user_confirmed = False
+        p_obj = None
         cli_key = f"CLI_{valid_gid}" if valid_gid else (f"CLI_{valid_id}" if valid_id else None)
         taxpayer_id = pan or unassigned_identity or (candidates[0] if candidates else None) or cli_key
         
@@ -174,6 +345,7 @@ class TrackerDumpMixin:
                     incoming_form = p_obj.get("filing_type") or raw_p.get("filing_type") or incoming_form
                     incoming_pref = p_obj.get("filing_preference") or raw_p.get("filing_preference") or ""
                     status_correction = bool(p_obj.get("status_correction"))
+                    user_confirmed = status_correction and bool(p_obj.get("status_confirmed"))
                     taxpayer_id = p_obj.get("gstin") or p_obj.get("pan") or raw_p.get("gstin") or raw_p.get("pan") or taxpayer_id
                     page_url = p_obj.get("page_key") or p_obj.get("url") or raw_p.get("page_key") or raw_p.get("url")
                     if page_url and isinstance(page_url, str):
@@ -244,26 +416,75 @@ class TrackerDumpMixin:
                         "capture_method": capture_method, "status": status, "created_at": now, "duplicate": True
                     }
 
+            preserved_raw_notes = None
+            preserved_raw_screenshot = None
+            preserved_raw_screenshot_2 = None
+            media_source_ids = []
+
             # Exact Dataset Matching: Unconditionally purge ALL older duplicates for this dataset_key
             # Monotonicity Guard: A submitted status must NEVER demote back to 'Not Submitted'!
             if final_dataset_key and not final_dataset_key.endswith(":UNKNOWN:FORM:CURRENT"):
+                # Snapshot user notes/screenshots before purging duplicate rows
+                try:
+                    for m_id, m_notes, m_spath, m_spath2 in r_conn.execute(
+                        f"SELECT id, notes, screenshot_path, screenshot_path_2 FROM tracker_dump WHERE dataset_key = ? "
+                        f"AND ((notes IS NOT NULL AND notes != '') OR (screenshot_path IS NOT NULL AND screenshot_path != '') "
+                        f"OR (screenshot_path_2 IS NOT NULL AND screenshot_path_2 != '')) "
+                        f"ORDER BY created_at DESC, {order_sec}, id DESC",
+                        (final_dataset_key,)
+                    ).fetchall():
+                        media_source_ids.append(m_id)
+                        if preserved_raw_notes is None and m_notes:
+                            preserved_raw_notes = m_notes
+                        if preserved_raw_screenshot is None and m_spath:
+                            preserved_raw_screenshot = m_spath
+                        if preserved_raw_screenshot_2 is None and m_spath2:
+                            preserved_raw_screenshot_2 = m_spath2
+                except Exception:
+                    pass
                 ex_row = r_conn.execute(
-                    f"SELECT status, arn_number FROM tracker_dump WHERE dataset_key = ? ORDER BY created_at DESC, {order_sec}, id DESC LIMIT 1",
+                    f"SELECT status, arn_number, raw_payload_json FROM tracker_dump WHERE dataset_key = ? ORDER BY created_at DESC, {order_sec}, id DESC LIMIT 1",
                     (final_dataset_key,)
                 ).fetchone()
                 if ex_row:
-                    ex_status, ex_arn = ex_row
+                    ex_status, ex_arn, ex_json = ex_row
+                    ex_author = payload_original_author(ex_json)
+                    # A complete dataset (ARN + verified) is locked: the portal read again, a dashboard tile or an
+                    # unasked "correction" cannot lower it. Only a change the user confirmed gets through.
+                    if status_correction and not user_confirmed and is_complete(ex_status, ex_arn):
+                        status_correction = False
                     try:
                         from core.vsdc.vsdc_assembler import get_status_rank
                         if get_status_rank(ex_status) > get_status_rank(status) and not status_correction:
                             status = ex_status
-                            if (not arn_number or arn_number == "N/A") and ex_arn and ex_arn != "N/A":
-                                arn_number = ex_arn
                     except Exception:
                         pass
+                    # An ARN, once captured, is never dropped by a later row without one - also at an
+                    # equal status (a dashboard tile "Filed" re-read after the filing carries no ARN).
+                    if (not arn_number or arn_number == "N/A") and ex_arn and ex_arn != "N/A" and not status_correction:
+                        arn_number = ex_arn
+                    if ex_author and is_filed_dataset(ex_status, ex_arn) and isinstance(p_obj, dict):
+                        # The first live filing owns the dataset: any later capture of it - another
+                        # PC's live re-capture included, not only a history scan - keeps that author.
+                        # An in-progress row has no author to lock: the PC that files it becomes one.
+                        p_obj["original_author"] = ex_author
+                        if isinstance(p_obj.get("raw_payload"), dict):
+                            p_obj["raw_payload"]["original_author"] = ex_author
+                        raw_payload_json = json.dumps(p_obj, ensure_ascii=False)
                 del_cur = r_conn.execute("DELETE FROM tracker_dump WHERE dataset_key = ?", (final_dataset_key,))
                 if del_cur.rowcount > 0:
                     is_replaced = True
+
+            # If the dataset is completed (has an ARN), ensure original_author is filled with device_name()
+            # if not already established by an earlier capture or incoming payload. Once filled, immutable.
+            if is_filed_dataset(status, arn_number) and isinstance(p_obj, dict):
+                if not payload_original_author(p_obj):
+                    from core.vsdc.vsdc_alerts import device_name
+                    dev_author = device_name()
+                    p_obj["original_author"] = dev_author
+                    if isinstance(p_obj.get("raw_payload"), dict):
+                        p_obj["raw_payload"]["original_author"] = dev_author
+                    raw_payload_json = json.dumps(p_obj, ensure_ascii=False)
 
             # Unsubmitted Draft Supersession Guard:
             # Only ONE unsubmitted draft can exist per (assessee, portal, period).
@@ -307,6 +528,30 @@ class TrackerDumpMixin:
                                 "duplicate": True, "dataset_key": filed_row[4]
                             }
 
+                    # Snapshot notes/screenshots from drafts about to be purged
+                    try:
+                        purge_media_sql = f"""
+                            SELECT id, notes, screenshot_path, screenshot_path_2 FROM tracker_dump
+                            WHERE portal = ?
+                              AND period_label = ?
+                              AND (status IN ('Not Submitted', 'Draft', 'Visited / In Progress', 'Draft / Personal Info', 'Form Selected', 'Pending') OR status IS NULL OR status = '')
+                              AND ({' OR '.join(assessee_conds)})
+                              AND {same_engine}
+                              AND ((notes IS NOT NULL AND notes != '') OR (screenshot_path IS NOT NULL AND screenshot_path != '')
+                                   OR (screenshot_path_2 IS NOT NULL AND screenshot_path_2 != ''))
+                            ORDER BY created_at DESC, {order_sec}, id DESC
+                        """
+                        for m_id, m_notes, m_spath, m_spath2 in r_conn.execute(purge_media_sql, assessee_params).fetchall():
+                            media_source_ids.append(m_id)
+                            if preserved_raw_notes is None and m_notes:
+                                preserved_raw_notes = m_notes
+                            if preserved_raw_screenshot is None and m_spath:
+                                preserved_raw_screenshot = m_spath
+                            if preserved_raw_screenshot_2 is None and m_spath2:
+                                preserved_raw_screenshot_2 = m_spath2
+                    except Exception:
+                        pass
+
                     # Purge prior unsubmitted drafts for this assessee & period
                     purge_sql = f"""
                         DELETE FROM tracker_dump
@@ -341,6 +586,18 @@ class TrackerDumpMixin:
                                 c_raw = c_obj.get("raw_payload") if isinstance(c_obj.get("raw_payload"), dict) else {}
                                 c_url = c_obj.get("page_key") or c_obj.get("url") or c_raw.get("page_key") or c_raw.get("url")
                                 if c_url and c_url.strip().split("?")[0].rstrip("/").lower() == page_url_norm:
+                                    try:
+                                        m_row = r_conn.execute("SELECT notes, screenshot_path, screenshot_path_2 FROM tracker_dump WHERE id = ?", (r_id,)).fetchone()
+                                        if m_row:
+                                            media_source_ids.append(r_id)
+                                            if preserved_raw_notes is None and m_row[0]:
+                                                preserved_raw_notes = m_row[0]
+                                            if preserved_raw_screenshot is None and m_row[1]:
+                                                preserved_raw_screenshot = m_row[1]
+                                            if preserved_raw_screenshot_2 is None and m_row[2]:
+                                                preserved_raw_screenshot_2 = m_row[2]
+                                    except Exception:
+                                        pass
                                     r_conn.execute("DELETE FROM tracker_dump WHERE id = ?", (r_id,))
                                     is_replaced = True
                                     break
@@ -354,6 +611,17 @@ class TrackerDumpMixin:
                 (valid_id, unassigned_identity, service_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, now, final_dataset_key)
             )
             dump_id = cur.lastrowid
+
+            if (preserved_raw_notes is not None or preserved_raw_screenshot is not None
+                    or preserved_raw_screenshot_2 is not None):
+                upd_cur = r_conn.execute(
+                    "UPDATE tracker_dump SET notes = COALESCE(?, notes), screenshot_path = COALESCE(?, screenshot_path), "
+                    "screenshot_path_2 = COALESCE(?, screenshot_path_2) WHERE id = ?",
+                    (preserved_raw_notes, preserved_raw_screenshot, preserved_raw_screenshot_2, dump_id)
+                )
+                if upd_cur.rowcount == 0:
+                    print(f"[database] insert_tracker_dump: WARNING media could not be re-applied to new row id={dump_id} "
+                          f"for dataset_key={final_dataset_key!r} (old source ids={media_source_ids})")
 
             # Update SRPF Unified Container (Key normalized by client_id if registered)
             if valid_id:
@@ -405,6 +673,31 @@ class TrackerDumpMixin:
         with self._connect_raw() as r_conn:
             cols = {r[1] for r in r_conn.execute("PRAGMA table_info(tracker_dump)").fetchall()}
             order_sec = "gid DESC" if "gid" in cols else "id DESC"
+
+            # Remember the first live author of every dataset before collapsing duplicates: the
+            # surviving (newest) row must inherit it, or a later capture from another PC would
+            # become the "original author" of a return that PC never filed.
+            author_by_key = {}
+            for d_key, r_status, r_arn, r_json in r_conn.execute(
+                f"SELECT dataset_key, status, arn_number, raw_payload_json FROM tracker_dump "
+                f"WHERE dataset_key IS NOT NULL AND dataset_key != '' "
+                f"AND dataset_key NOT LIKE '%:UNKNOWN:FORM:CURRENT' "
+                f"AND raw_payload_json LIKE '%original_author%' "
+                f"ORDER BY created_at ASC, {order_sec}"
+            ):
+                author = payload_original_author(r_json)
+                if author and is_filed_dataset(r_status, r_arn) and d_key not in author_by_key:
+                    author_by_key[d_key] = author
+            author_by_arn = {}
+            for portal, arn, r_status, r_json in r_conn.execute(
+                f"SELECT portal, arn_number, status, raw_payload_json FROM tracker_dump "
+                f"WHERE arn_number IS NOT NULL AND arn_number != '' AND arn_number != 'N/A' "
+                f"AND raw_payload_json LIKE '%original_author%' "
+                f"ORDER BY created_at ASC, {order_sec}"
+            ):
+                author = payload_original_author(r_json)
+                if author and is_filed_dataset(r_status, arn) and (portal, arn) not in author_by_arn:
+                    author_by_arn[(portal, arn)] = author
 
             # 1. Deduplicate by non-empty dataset_key (keep newest by created_at, gid)
             cur = r_conn.execute(f"""
@@ -487,6 +780,33 @@ class TrackerDumpMixin:
             """)
             deleted_count += cur5.rowcount
 
+            # Re-stamp the surviving rows with the dataset's first live author.
+            for d_key, author in author_by_key.items():
+                survivor = r_conn.execute(
+                    f"SELECT id, raw_payload_json FROM tracker_dump WHERE dataset_key = ? "
+                    f"ORDER BY created_at DESC, {order_sec}, id DESC LIMIT 1",
+                    (d_key,)
+                ).fetchone()
+                if survivor and survivor[1]:
+                    new_json = stamp_payload_original_author(survivor[1], author)
+                    if new_json != survivor[1]:
+                        r_conn.execute(
+                            "UPDATE tracker_dump SET raw_payload_json = ? WHERE id = ?",
+                            (new_json, survivor[0]))
+            for (portal, arn), author in author_by_arn.items():
+                survivor = r_conn.execute(
+                    f"SELECT id, raw_payload_json FROM tracker_dump "
+                    f"WHERE portal = ? AND arn_number = ? "
+                    f"ORDER BY created_at DESC, {order_sec}, id DESC LIMIT 1",
+                    (portal, arn)
+                ).fetchone()
+                if survivor and survivor[1]:
+                    new_json = stamp_payload_original_author(survivor[1], author)
+                    if new_json != survivor[1]:
+                        r_conn.execute(
+                            "UPDATE tracker_dump SET raw_payload_json = ? WHERE id = ?",
+                            (new_json, survivor[0]))
+
         if deleted_count > 0:
             print(f"[database] deduplicate_tracker_dumps: Purged {deleted_count} duplicate tracker dump row(s).")
         return deleted_count
@@ -514,12 +834,34 @@ class TrackerDumpMixin:
                 if dataset_key and not dataset_key.endswith(":UNKNOWN:FORM:CURRENT"):
                     td_cols = {r[1] for r in r_conn.execute("PRAGMA table_info(tracker_dump)").fetchall()}
                     order_sec = "gid DESC" if "gid" in td_cols else "id DESC"
-                    cur = r_conn.execute(f"SELECT id, created_at FROM tracker_dump WHERE dataset_key = ? ORDER BY created_at DESC, {order_sec}, id DESC", (dataset_key,))
+                    cur = r_conn.execute(f"SELECT id, created_at, status, arn_number, raw_payload_json FROM tracker_dump WHERE dataset_key = ? ORDER BY created_at DESC, {order_sec}, id DESC", (dataset_key,))
                     existing = cur.fetchall()
                     if existing:
+                        # A complete dataset here is not replaced by a lower view of it from another PC, however
+                        # new - unless that PC's user confirmed the lowering.
+                        try:
+                            from core.vsdc.vsdc_assembler import get_status_rank
+                            if (any(is_complete(e[2], e[3]) for e in existing)
+                                    and get_status_rank(d.get("status")) < max(get_status_rank(e[2]) for e in existing)
+                                    and not _user_confirmed(d.get("raw_payload_json"))):
+                                continue
+                        except Exception:
+                            pass
                         existing_newest_created = existing[0][1] or ""
                         # If incoming record is newer or same timestamp, purge older duplicates and replace
                         if str(created_at or "") >= str(existing_newest_created):
+                            # Keep the dataset's first live author (existing rows are newest-first),
+                            # but only if that row is an actual filing.
+                            ex_author = ""
+                            for e in reversed(existing):
+                                if not is_filed_dataset(e[2], e[3]):
+                                    continue
+                                ex_author = payload_original_author(e[4])
+                                if ex_author:
+                                    break
+                            if ex_author:
+                                d["raw_payload_json"] = stamp_payload_original_author(
+                                    d.get("raw_payload_json"), ex_author)
                             r_conn.execute("DELETE FROM tracker_dump WHERE dataset_key = ?", (dataset_key,))
                         else:
                             # Incoming snapshot is older than what we already have
@@ -710,15 +1052,23 @@ class TrackerDumpMixin:
 
         from datetime import datetime
 
-        # 1. Proximity matching for wizard submissions with empty candidates
+        # 1. Proximity matching for wizard submissions with empty candidates.
+        # Never for SGT (as in insert_tracker_dump): a row it sends without a PAN/GSTIN is one whose
+        # client it has NOT identified, and it re-sends the row under its client once it reads it.
+        # This loop used to give such a row the client of whatever row came before it on the
+        # portal - from ANY PC, since the tracker is office-wide - so a filing done on one PC sat on
+        # the client open on another PC until SGT re-sent it (2026-10-13), and for good when the
+        # session ended without the client. For the other engines: only a row of the SAME PC.
         resolved_dumps = []
         for i, d in enumerate(dumps):
             cands = self._extract_identity_candidates_from_payload(arn_number=d["arn_number"], raw_payload_json=d["raw_payload_json"])
-            if not cands and d.get("created_at"):
+            device = payload_device_name(d.get("raw_payload_json"))
+            if not cands and d.get("created_at") and device and not is_sgt_capture(d.get("capture_method")):
                 try:
                     t0 = datetime.fromisoformat(d["created_at"])
                     for nearby in (reversed(dumps[:i]) if i > 0 else []):
-                        if nearby.get("portal") == d.get("portal") and nearby.get("created_at"):
+                        if nearby.get("portal") == d.get("portal") and nearby.get("created_at") \
+                                and payload_device_name(nearby.get("raw_payload_json")) == device:
                             tn = datetime.fromisoformat(nearby["created_at"])
                             if abs((t0 - tn).total_seconds()) <= 900:
                                 nb_cands = self._extract_identity_candidates_from_payload(arn_number=nearby["arn_number"], raw_payload_json=nearby["raw_payload_json"])
@@ -748,16 +1098,30 @@ class TrackerDumpMixin:
 
         # 3. Update tracker_dump and rebuild client_raw_containers cleanly
         with self._connect_raw() as r_conn:
-            # notes/screenshot_path are user-entered, not derived from tracker_dump,
-            # so the DELETE below must not lose them (they're re-applied by identity_key
-            # once the rebuild is done).
-            preserved_notes = {
-                row[0]: (row[1], row[2])
+            # notes/screenshots are user-entered, not derived from tracker_dump.
+            # Preserve from client_container_notes (stable primary table) and client_raw_containers (cache).
+            preserved_notes = {}
+            try:
                 for row in r_conn.execute(
-                    "SELECT identity_key, notes, screenshot_path FROM client_raw_containers "
-                    "WHERE notes IS NOT NULL OR screenshot_path IS NOT NULL"
-                ).fetchall()
-            }
+                    "SELECT identity_key, notes, screenshot_path, screenshot_path_2, client_id FROM client_container_notes "
+                    "WHERE (notes IS NOT NULL AND notes != '') OR (screenshot_path IS NOT NULL AND screenshot_path != '') "
+                    "OR (screenshot_path_2 IS NOT NULL AND screenshot_path_2 != '')"
+                ).fetchall():
+                    preserved_notes[row[0]] = (row[1], row[2], row[3], row[4])
+            except Exception:
+                pass
+
+            try:
+                for row in r_conn.execute(
+                    "SELECT identity_key, notes, screenshot_path, screenshot_path_2, client_id FROM client_raw_containers "
+                    "WHERE (notes IS NOT NULL AND notes != '') OR (screenshot_path IS NOT NULL AND screenshot_path != '') "
+                    "OR (screenshot_path_2 IS NOT NULL AND screenshot_path_2 != '')"
+                ).fetchall():
+                    if row[0] not in preserved_notes:
+                        preserved_notes[row[0]] = (row[1], row[2], row[3], row[4])
+            except Exception:
+                pass
+
             r_conn.execute("DELETE FROM client_raw_containers")
             r_conn.execute("DELETE FROM client_raw_container_light")
             for d in resolved_dumps:
@@ -781,6 +1145,9 @@ class TrackerDumpMixin:
                     )
                     updated_count += 1
 
+                # Prior container key before re-resolution
+                old_ckey = f"CLI-{d['client_id']:05d}" if d.get("client_id") else (d.get("unassigned_identity") or f"UNASSIGNED_{d['id']}")
+
                 # Container key: single key per registered client or candidate
                 if new_cid:
                     c_key = f"CLI-{new_cid:05d}"
@@ -788,6 +1155,31 @@ class TrackerDumpMixin:
                     c_key = cands[0]
                 else:
                     c_key = new_unassigned or f"UNASSIGNED_{d['id']}"
+
+                # Key migration in client_container_notes: if container key changed (e.g. PAN -> CLI-00005)
+                # and old key had notes/media while new key has none, carry over to new key.
+                if old_ckey != c_key and old_ckey in preserved_notes:
+                    old_n, old_s, old_s2, _ = preserved_notes.pop(old_ckey)
+                    if c_key not in preserved_notes:
+                        preserved_notes[c_key] = (old_n, old_s, old_s2, new_cid)
+                    from datetime import datetime
+                    now_iso = datetime.now().isoformat()
+                    try:
+                        r_conn.execute("DELETE FROM client_container_notes WHERE identity_key = ?", (old_ckey,))
+                        r_conn.execute("""
+                            INSERT INTO client_container_notes (identity_key, client_id, notes, screenshot_path, screenshot_path_2, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(identity_key) DO UPDATE SET
+                                client_id = COALESCE(excluded.client_id, client_container_notes.client_id),
+                                notes = CASE WHEN client_container_notes.notes IS NULL OR client_container_notes.notes = '' THEN excluded.notes ELSE client_container_notes.notes END,
+                                screenshot_path = CASE WHEN client_container_notes.screenshot_path IS NULL OR client_container_notes.screenshot_path = '' THEN excluded.screenshot_path ELSE client_container_notes.screenshot_path END,
+                                screenshot_path_2 = CASE WHEN client_container_notes.screenshot_path_2 IS NULL OR client_container_notes.screenshot_path_2 = '' THEN excluded.screenshot_path_2 ELSE client_container_notes.screenshot_path_2 END,
+                                updated_at = excluded.updated_at
+                        """, (c_key, new_cid, old_n, old_s, old_s2, now_iso))
+                        print(f"[database] re_resolve_all_tracker_dumps: notes/screenshot for identity_key={old_ckey!r} "
+                              f"could not be carried over under the old key (migrated to {c_key}); preserved in client_container_notes.")
+                    except Exception:
+                        pass
 
                 self._update_srpf_container(
                     r_conn,
@@ -805,21 +1197,33 @@ class TrackerDumpMixin:
                     }
                 )
 
-            for identity_key, (notes, screenshot_path) in preserved_notes.items():
+            from datetime import datetime
+            now_iso = datetime.now().isoformat()
+            for identity_key, val in preserved_notes.items():
+                notes, screenshot_path, screenshot_path_2 = val[0], val[1], val[2]
+                cid = val[3] if len(val) > 3 else None
+                try:
+                    r_conn.execute("""
+                        INSERT INTO client_container_notes (identity_key, client_id, notes, screenshot_path, screenshot_path_2, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(identity_key) DO UPDATE SET
+                            client_id = COALESCE(excluded.client_id, client_container_notes.client_id),
+                            notes = CASE WHEN client_container_notes.notes IS NULL OR client_container_notes.notes = '' THEN excluded.notes ELSE client_container_notes.notes END,
+                            screenshot_path = CASE WHEN client_container_notes.screenshot_path IS NULL OR client_container_notes.screenshot_path = '' THEN excluded.screenshot_path ELSE client_container_notes.screenshot_path END,
+                            screenshot_path_2 = CASE WHEN client_container_notes.screenshot_path_2 IS NULL OR client_container_notes.screenshot_path_2 = '' THEN excluded.screenshot_path_2 ELSE client_container_notes.screenshot_path_2 END,
+                            updated_at = excluded.updated_at
+                    """, (identity_key, cid, notes, screenshot_path, screenshot_path_2, now_iso))
+                except Exception:
+                    pass
+
                 cur = r_conn.execute(
-                    "UPDATE client_raw_containers SET notes = ?, screenshot_path = ? WHERE identity_key = ?",
-                    (notes, screenshot_path, identity_key)
+                    "UPDATE client_raw_containers SET notes = ?, screenshot_path = ?, screenshot_path_2 = ? WHERE identity_key = ?",
+                    (notes, screenshot_path, screenshot_path_2, identity_key)
                 )
                 r_conn.execute("UPDATE client_raw_container_light SET notes = ? WHERE identity_key = ?", (notes, identity_key))
                 if cur.rowcount == 0:
-                    # The identity_key this note was filed under no longer exists after
-                    # the rebuild (e.g. the underlying dumps re-resolved to a client, so
-                    # the container moved from an unassigned key to "CLI-00005"). There's
-                    # no reliable way to know which new row inherited it, so it's dropped;
-                    # this is logged rather than silent so support can trace a lost note.
-                    print(f"[database] re_resolve_all_tracker_dumps: notes/screenshot for "
-                          f"identity_key={identity_key!r} could not be carried over (no "
-                          f"container has that key after the rebuild); the note was lost.")
+                    print(f"[database] re_resolve_all_tracker_dumps: notes/screenshot for identity_key={identity_key!r} "
+                          f"could not be carried over (no container has that key after the rebuild); safely preserved in client_container_notes.")
 
         return updated_count
 
@@ -847,7 +1251,8 @@ class TrackerDumpMixin:
                          + ", " + self._payload_field_sql("$.client_name", "$.name", "$.taxpayer_name",
                                                           "$.raw_payload.client_name", "$.raw_payload.client_temp_name")
                          + " AS payload_name"
-                         + ", " + self._payload_field_sql("$.raw_payload.recovered_by.tool", "$.recovered_by.tool") + " AS recovered_tool")
+                         + ", " + self._payload_field_sql("$.raw_payload.recovered_by.tool", "$.recovered_by.tool") + " AS recovered_tool"
+                         + ", " + self._payload_field_sql("$.original_author", "$.raw_payload.original_author") + " AS payload_original_author")
             payload_col = "''" if slim else "raw_payload_json"
             sql = ("SELECT id, client_id, unassigned_identity, service_id, portal, "
                    "period_label, arn_number, capture_method, status, "
@@ -962,7 +1367,22 @@ class TrackerDumpMixin:
                 "created_at": r[11], "dataset_key": r[12] if len(r) > 12 else "", "notes": r[13] if len(r) > 13 else ""
             }
             if slim:
-                row.update({"_slim": True, "payload_status": r[14], "device_name": r[15] or ""})
+                orig_author_val = (r[18] if len(r) > 18 else "") or ""
+                row.update({
+                    "_slim": True,
+                    "payload_status": r[14],
+                    "device_name": r[15] or "",
+                    "original_author": orig_author_val,
+                    "payload_original_author": orig_author_val,
+                })
+            else:
+                orig_author_val = ""
+                if isinstance(p_obj, dict):
+                    orig_author_val = (
+                        p_obj.get("original_author") or
+                        (p_obj.get("raw_payload", {}).get("original_author") if isinstance(p_obj.get("raw_payload"), dict) else "") or ""
+                    )
+                row["original_author"] = orig_author_val
             results.append(row)
 
         # Default chronological entry organisation: latest entry at top
@@ -971,15 +1391,67 @@ class TrackerDumpMixin:
 
     def get_tracker_dump_media(self, dump_id: int) -> dict:
         with self._connect_raw() as conn:
-            cur = conn.execute("SELECT notes, screenshot_path FROM tracker_dump WHERE id = ?", (dump_id,))
+            cur = conn.execute("SELECT notes, screenshot_path, screenshot_path_2 FROM tracker_dump WHERE id = ?", (dump_id,))
             row = cur.fetchone()
             if row:
-                return {"notes": row[0] or "", "screenshot_path": row[1] or ""}
-            return {"notes": "", "screenshot_path": ""}
+                return {"notes": row[0] or "", "screenshot_path": row[1] or "", "screenshot_path_2": row[2] or ""}
+            return {"notes": "", "screenshot_path": "", "screenshot_path_2": ""}
 
-    def save_tracker_dump_media(self, dump_id: int, notes: str, screenshot_path: str) -> bool:
+    def save_tracker_dump_media(self, dump_id: int, notes: str, screenshot_path: str,
+                                screenshot_path_2: str | None = None) -> bool:
+        """Saves notes and up to two screenshots. `screenshot_path_2=None` preserves the existing
+        second screenshot (so older callers cannot wipe it); pass "" to clear it."""
         with self._connect_raw() as conn:
-            cur = conn.execute("UPDATE tracker_dump SET notes = ?, screenshot_path = ? WHERE id = ?", (notes, screenshot_path, dump_id))
+            # One read up front: an autosave that changes nothing must not rewrite the row
+            # (or its payload JSON) every second. Only a changed notes value touches
+            # raw_payload_json; screenshot paths alone are two cheap columns.
+            row = conn.execute(
+                "SELECT notes, screenshot_path, raw_payload_json FROM tracker_dump WHERE id = ?",
+                (dump_id,)
+            ).fetchone()
+            old_notes = (row[0] if row else "") or ""
+            old_path = (row[1] if row else "") or ""
+            raw_json = row[2] if row else None
+            keep_slot2 = screenshot_path_2 is None
+            old_path_2 = None
+            if not keep_slot2:
+                try:
+                    r2 = conn.execute(
+                        "SELECT screenshot_path_2 FROM tracker_dump WHERE id = ?", (dump_id,)
+                    ).fetchone()
+                    old_path_2 = (r2[0] if r2 else "") or ""
+                except Exception:
+                    old_path_2 = None
+            new_path_2 = old_path_2 if keep_slot2 else (screenshot_path_2 or "")
+
+            if (row is not None and old_notes == (notes or "")
+                    and old_path == (screenshot_path or "")
+                    and (old_path_2 is None or old_path_2 == new_path_2)):
+                return True
+
+            if keep_slot2:
+                cur = conn.execute(
+                    "UPDATE tracker_dump SET notes = ?, screenshot_path = ? WHERE id = ?",
+                    (notes, screenshot_path, dump_id)
+                )
+            else:
+                cur = conn.execute(
+                    "UPDATE tracker_dump SET notes = ?, screenshot_path = ?, screenshot_path_2 = ? WHERE id = ?",
+                    (notes, screenshot_path, screenshot_path_2, dump_id)
+                )
+
+            # Also store notes inside raw_payload_json so it connects seamlessly to DRS and sync
+            if raw_json and old_notes != (notes or ""):
+                try:
+                    payload = json.loads(raw_json) if isinstance(raw_json, str) else raw_json
+                    if isinstance(payload, dict):
+                        payload["notes"] = notes
+                        conn.execute(
+                            "UPDATE tracker_dump SET raw_payload_json = ? WHERE id = ?",
+                            (json.dumps(payload), dump_id)
+                        )
+                except Exception:
+                    pass
             return cur.rowcount > 0
 
     def delete_tracker_dump(self, dump_id: int) -> bool:

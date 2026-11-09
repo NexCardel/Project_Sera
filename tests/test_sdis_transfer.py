@@ -292,3 +292,37 @@ def test_excavator_on_the_admin_pc_checks_what_arrived(nodes, tmp_path, monkeypa
     assert status["reason"] == "unreadable files"
     assert ev.lines[-1][1].endswith("check") and "1 file unreadable" in ev.lines[-1][2] and "half-received" in ev.lines[-1][2]
     assert engine.opened == 0
+
+
+def test_excavator_discard_mode_measures_deletes_exactly_the_finished_files_and_never_connects(nodes, tmp_path, staff_pc):
+    ev = Events()
+    cap, engine, exc = _dig_setup(nodes, None, tmp_path, ev)
+    exc._discard = True
+    a = _write(cap, "2026-10-01", b"a" * 1024)
+    b = _write(cap, "2026-10-02", b"b" * 2048)
+    today = cap / f"sdis_{date.today().isoformat()}.jsonl"
+    today.write_bytes(b"open\n")
+    other = cap / "notes.txt"
+    other.write_bytes(b"not a capture\n")
+    status = exc.dig()
+    assert not a.exists() and not b.exists() and today.exists() and other.exists()
+    assert engine.opened == 0 and status["state"] == "idle" and exc.stats["deleted"] == 2
+    assert ev.titles() == ["Corpus deleted on this PC"]
+    assert "2 files" in ev.lines[0][2] and "not sent" in ev.lines[0][2] and ev.lines[0][0] == "SDIS"
+    exc.dig()
+    assert ev.titles() == ["Corpus deleted on this PC"]     # nothing left: silent
+
+
+def test_excavator_discard_follows_the_setting(nodes, tmp_path, staff_pc):
+    cap, engine, exc = _dig_setup(nodes, None, tmp_path, Events())
+
+    class Db:
+        value = "1"
+
+        def get_setting(self, key, default=None):
+            assert key == "sdis_corpus_discard"
+            return self.value
+    engine.db = Db()
+    assert exc.discarding() is True
+    engine.db.value = "0"
+    assert exc.discarding() is False

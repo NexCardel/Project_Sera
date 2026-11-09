@@ -425,10 +425,10 @@ def test_right_click_menu_lists_the_actions_for_the_row_and_view(make_window, mo
     _right_click(win, 0)
     _right_click(win, 1)
     assert shown == [
-        ["Inspect Client Container", "Delete Container"],
-        ["Inspect Client Container", "+ Create Client", "Delete Container"],
-        ["View Raw Payload", "Delete Record"],
-        ["View Raw Payload", "+ Create Client", "Delete Record"],
+        ["Inspect Client Container", "Notes & Media", "Delete Container"],
+        ["Inspect Client Container", "Notes & Media", "+ Create Client", "Delete Container"],
+        ["View Raw Payload", "Notes & Media", "Delete Record"],
+        ["View Raw Payload", "Notes & Media", "+ Create Client", "Delete Record"],
     ]
 
 
@@ -439,7 +439,8 @@ def test_kebab_menu_lists_create_and_delete(make_window, monkeypatch):
     win._on_grid_action(1, W.COL_ACTIONS, "more")
     win.cmb_view_mode.setCurrentIndex(1)
     win._on_grid_action(0, W.COL_ACTIONS, "more")
-    assert shown == [["Delete Container"], ["+ Create Client", "Delete Container"], ["Delete Record"]]
+    assert shown == [["Notes & Media", "Delete Container"], ["Notes & Media", "+ Create Client", "Delete Container"],
+                     ["Notes & Media", "Delete Record"]]
 
 
 def test_delete_container_asks_first_and_removes_only_that_container(make_window, monkeypatch):
@@ -490,7 +491,7 @@ def test_tools_menu_entries_in_order(make_window, monkeypatch):
     assert win.btn_preferences.is_chevron()
     win.btn_preferences.click()
     assert shown == [["Re-Resolve Identities (SRPF)", "Map Datapoints to MCL Columns…", "Open LTT sheet",
-                      "Export Captures (CSV)", "Distill…", "Clear All Captures"]]
+                      "Open GST Reconciliation Log", "Export Captures (CSV)", "Distill…", "Clear All Captures"]]
 
 
 def test_re_resolve_reports_how_many_captures_changed(make_window, monkeypatch):

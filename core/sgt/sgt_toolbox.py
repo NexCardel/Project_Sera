@@ -148,11 +148,26 @@ def is_submit_level(status: Optional[str]) -> bool:
     return str(status or "").strip().lower() in _LEVEL_OF
 
 
+def t_collapse_repeat(value: str) -> str:
+    """'TULIP FASHION TULIP FASHION' -> 'TULIP FASHION': a name printed twice on one line (Firefox
+    exposed a header's name and its dropdown copy as one line, 2026-10-11). Only a unit of two or more
+    words repeated whole is collapsed, so a one-word name such as 'SINGH SINGH' is left alone."""
+    words = (value or "").split()
+    n = len(words)
+    for unit in range(2, n // 2 + 1):
+        if n % unit == 0:
+            first = [w.lower() for w in words[:unit]]
+            if all([w.lower() for w in words[i:i + unit]] == first for i in range(unit, n, unit)):
+                return " ".join(words[:unit])
+    return value
+
+
 TRANSFORMS: Dict[str, Transform] = {
     "upper": lambda v: v.upper(),
     "lower": lambda v: v.lower(),
     "strip": lambda v: v.strip(),
     "collapse_spaces": lambda v: re.sub(r"\s+", " ", v).strip(),
+    "collapse_repeat": t_collapse_repeat,
     "strip_spaces": lambda v: re.sub(r"\s+", "", v),
     "strip_commas": lambda v: v.replace(",", "").strip() or None,
     "digits_only": lambda v: re.sub(r"[^0-9]", "", v) or None,

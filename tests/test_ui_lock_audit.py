@@ -18,6 +18,7 @@ GOLDEN_CSV = pathlib.Path(__file__).parent / "data" / "ui_lock_audit_export_gold
 ACTIONS = ["view", "manual_assist", "autofill", "manual_copy", "create", "update", "archive", "unarchive", "delete",
            "csv_import", "backup", "restore", "csv_export", "filing_submitted", "sync_pushed", "sync_received",
            "audit_log_viewed"]
+SCA_FILTERS = ["SCA (All)", "sca_autofill", "sca_widget"]   # main: SCA audit actions, listed first
 
 BADGE_WORD = {"view": "View", "manual_assist": "Manual Assist", "autofill": "Autofill", "manual_copy": "Copy",
               "create": "Create", "update": "Update", "archive": "Archive", "unarchive": "Restore",
@@ -104,8 +105,11 @@ def test_every_action_type_is_listed_in_order_and_filters_to_exactly_its_rows(wo
     db, ids, make = world
     win = make()
     items = [win.action_combo.itemText(i) for i in range(win.action_combo.count())]
-    assert items == ["All Actions"] + ACTIONS
+    assert items == ["All Actions"] + SCA_FILTERS + ACTIONS
     assert len(ACTIONS) == 17
+    for sca in SCA_FILTERS:                                          # no SCA rows are seeded
+        win.action_combo.setCurrentText(sca)
+        assert _ids(win) == [], sca
     for i, action in enumerate(ACTIONS, start=1):
         win.action_combo.setCurrentText(action)
         got = [win.table.item(r, 3).toolTip() for r in range(win.table.rowCount())]
@@ -221,7 +225,7 @@ def test_cells_show_name_service_and_detail_text(world):
     row = _ids(win).index(3)                                             # autofill, client A, service 1
     assert win.table.item(row, 4).text() == "Alpha Traders Pvt Ltd"
     assert win.table.item(row, 4).toolTip() == f"Client: Alpha Traders Pvt Ltd (ID: {ids['A']})"
-    assert win.table.item(row, 5).text() == "1"                          # the service id, not its name
+    assert win.table.item(row, 5).text() == "GST"                        # the service name (main, SCA audit work)
     assert win.table.item(row, 6).text() == "detail for autofill"
     # the grid shows the readable time (Today / Yesterday / 30 Sep 16:40); the tooltip keeps the UTC stamp
     assert re.fullmatch(r"(Today|Yesterday) \d\d:\d\d|\d{1,2} [A-Z][a-z]{2} \d\d:\d\d", win.table.item(row, 1).text())
@@ -244,7 +248,7 @@ def test_row_drill_down_and_copy_details(world):
     assert lines[0].startswith("\U0001F4CC Log ID: 3  |  ") and "UTC: 2026-03-02T10:03:00" in lines[0]
     assert lines[1].endswith("Workstation: local  |  \U0001F464 Actor: Asha  |  \u26a1 Action: autofill")
     assert lines[2] == (f"\U0001F3E2 Client: Alpha Traders Pvt Ltd (Token: CLI-{ids['A']:05d} | ID: {ids['A']})"
-                        f"  |  \U0001F310 Service: ID: 1")
+                        f"  |  \U0001F310 Service: GST")
     assert lines[3] == "\U0001F4DD Detail Payload: detail for autofill"
     win.btn_copy_insp.click()
     assert QGuiApplication.clipboard().text() == text

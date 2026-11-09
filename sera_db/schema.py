@@ -10,6 +10,8 @@ import os
 import sys
 import shutil
 
+from sera_db.common import is_filed_dataset, payload_original_author, stamp_payload_original_author
+
 
 class SchemaMixin:
 
@@ -252,6 +254,19 @@ class SchemaMixin:
                     t_cols = {r[1] for r in conn.execute("PRAGMA table_info(tracker_dump)").fetchall()}
                     order_sec = "gid DESC" if "gid" in t_cols else "id DESC"
 
+                    # Keep each dataset's first live author: the purge below keeps only the
+                    # newest row, which may be another PC's later re-capture of the same filing.
+                    author_by_key = {}
+                    for d_key_row, r_status, r_arn, p_json in conn.execute(
+                        f"SELECT dataset_key, status, arn_number, raw_payload_json FROM tracker_dump "
+                        f"WHERE dataset_key IS NOT NULL AND dataset_key != '' "
+                        f"AND raw_payload_json LIKE '%original_author%' "
+                        f"ORDER BY created_at ASC, {order_sec}"
+                    ):
+                        author = payload_original_author(p_json)
+                        if author and is_filed_dataset(r_status, r_arn) and d_key_row not in author_by_key:
+                            author_by_key[d_key_row] = author
+
                     # Purge duplicate entries, keeping strictly the newest by (created_at DESC, gid DESC)
                     conn.execute(f"""
                         DELETE FROM tracker_dump 
@@ -266,6 +281,19 @@ class SchemaMixin:
                             ) WHERE rn = 1
                         ) AND dataset_key IS NOT NULL AND dataset_key != '';
                     """)
+
+                    for d_key_row, author in author_by_key.items():
+                        survivor = conn.execute(
+                            f"SELECT id, raw_payload_json FROM tracker_dump WHERE dataset_key = ? "
+                            f"ORDER BY created_at DESC, {order_sec}, id DESC LIMIT 1",
+                            (d_key_row,)
+                        ).fetchone()
+                        if survivor and survivor[1]:
+                            new_json = stamp_payload_original_author(survivor[1], author)
+                            if new_json != survivor[1]:
+                                conn.execute(
+                                    "UPDATE tracker_dump SET raw_payload_json = ? WHERE id = ?",
+                                    (new_json, survivor[0]))
 
                     # Purge legacy non-filing dummy rows (ITR landing page and profile views)
                     conn.execute("""
@@ -326,8 +354,10 @@ class SchemaMixin:
             
             self._ensure_column(conn, "tracker_dump", "notes", "TEXT")
             self._ensure_column(conn, "tracker_dump", "screenshot_path", "TEXT")
+            self._ensure_column(conn, "tracker_dump", "screenshot_path_2", "TEXT")
             self._ensure_column(conn, "client_raw_containers", "notes", "TEXT")
             self._ensure_column(conn, "client_raw_containers", "screenshot_path", "TEXT")
+            self._ensure_column(conn, "client_raw_containers", "screenshot_path_2", "TEXT")
             # What the tracker list reads from a container, kept apart from the big
             # filing_history column (see SrpfMixin._write_container_light). Derived cache.
             conn.execute("""
@@ -341,6 +371,33 @@ class SchemaMixin:
                 );
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_client_raw_container_light_updated ON client_raw_container_light(last_updated DESC);")
+
+            # Stable identity container notes & media (survives container rebuilds & key re-resolutions)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS client_container_notes (
+                    identity_key    TEXT PRIMARY KEY,
+                    client_id       INTEGER,
+                    notes           TEXT,
+                    screenshot_path TEXT,
+                    screenshot_path_2 TEXT,
+                    updated_at      TEXT NOT NULL
+                );
+            """)
+            self._ensure_column(conn, "client_container_notes", "screenshot_path_2", "TEXT")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_client_container_notes_client_id ON client_container_notes(client_id);")
+
+            try:
+                cnt = conn.execute("SELECT COUNT(*) FROM client_container_notes").fetchone()[0]
+                if cnt == 0:
+                    conn.execute("""
+                        INSERT OR IGNORE INTO client_container_notes (identity_key, client_id, notes, screenshot_path, screenshot_path_2, updated_at)
+                        SELECT identity_key, client_id, notes, screenshot_path, screenshot_path_2, COALESCE(last_updated, datetime('now'))
+                        FROM client_raw_containers
+                        WHERE (notes IS NOT NULL AND notes != '') OR (screenshot_path IS NOT NULL AND screenshot_path != '')
+                           OR (screenshot_path_2 IS NOT NULL AND screenshot_path_2 != '')
+                    """)
+            except Exception:
+                pass
             
             conn.execute("CREATE INDEX IF NOT EXISTS idx_sdc_timelines_pan ON sdc_session_timelines(pan);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_sdc_timelines_cid ON sdc_session_timelines(client_id);")
@@ -527,6 +584,13 @@ class SchemaMixin:
             self._ensure_column(conn, "services", "arn_selector", "TEXT")
             self._ensure_column(conn, "services", "automation_mode_2", "TEXT DEFAULT ''")
             self._ensure_column(conn, "services", "browser", "TEXT DEFAULT ''")
+            # SCK: the portal's logged-in / welcome page. The new-password card leaves when this
+            # page is reached, so SCK knows where its widget belongs and where it ends.
+            self._ensure_column(conn, "services", "dashboard_page_link", "TEXT")
+            # SCA: the page where staff see a client's UID. Sera reads it by UIA and matches it to a client.
+            self._ensure_column(conn, "services", "uid_page_link", "TEXT")
+            # SCA: the node on that page that shows the UID (core/sca/uid_node fingerprint, JSON), set by the picker.
+            self._ensure_column(conn, "services", "uid_node", "TEXT")
             conn.execute("UPDATE services SET automation_mode = 'extension' WHERE automation_mode IN ('automated', 'playwright')")
 
             # 6. Client Services (Attachment table)
