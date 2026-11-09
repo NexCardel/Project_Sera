@@ -41,6 +41,9 @@ IDLE_S = 3.0          # no browser in front, no UID page saved, or SCA off
 STABLE_READS = 2      # a TYPED UID (a box); a text UID needs one read
 MISSING_READS = 4     # about 1 s without the node before "missing" (a page still loading is not lost)
 NO_UID_READS = 8      # about 2 s of the same text with no UID in it (typing pauses are shorter)
+LEAVE_READS = 2       # the page must be missing this many reads in a row to count as left: one
+                      # odd address-bar read used to end the visit, re-report the UID and re-arm
+                      # (the SCA card slid out and in again: the 2026-11-09 flicker)
 
 EVENT_SYSTEM_FOREGROUND = 0x0003
 WINEVENT_OUTOFCONTEXT = 0x0000
@@ -123,6 +126,7 @@ class UidSourceWatcher:
         self._on_uid, self._on_warn = on_uid, on_warn
         self._reader, self._foreground = reader, foreground
         self._visit: Optional[str] = None                     # page link in front, or None
+        self._gone = 0                                        # reads in a row with the visit's page not seen
         self._seen: Dict[Any, Tuple[str, int]] = {}           # service -> (uid, reads in a row) this visit
         self._reported: Dict[Any, str] = {}                   # service -> uid reported this visit
         self._warned: set = set()                             # services warned this visit
@@ -187,6 +191,7 @@ class UidSourceWatcher:
             sca_log.note(f"watch: left UID page {self._visit}")
         self._steps.clear()
         self._visit = None
+        self._gone = 0
         self._seen.clear()
         self._reported.clear()
         self._warned.clear()
@@ -207,8 +212,12 @@ class UidSourceWatcher:
             self._reader = UiaReader()
         link = keys.page_link(self._reader.read_url(hwnd))
         if link not in pages:
+            if self._visit is not None and self._gone + 1 < LEAVE_READS:
+                self._gone += 1                 # one odd read is not leaving: the visit is kept
+                return False
             self._leave()                       # leaving the page forgets it: coming back reports again
             return False
+        self._gone = 0
         if link != self._visit:
             self._leave()
             self._visit = link

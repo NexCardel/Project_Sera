@@ -154,6 +154,12 @@ class SccCard:
         with self._lock:
             return next((t for lb, t in self._rows.get(attempt_id, []) if lb == label), None)
 
+    def attempt_hwnd(self, attempt_id: str) -> int:
+        """The attempt's browser window (0 when unknown); the OS card docks to it."""
+        with self._lock:
+            att = self._attempts.get(attempt_id)
+            return int(getattr(att, "hwnd", 0) or 0) if att else 0
+
     def failed(self, attempt_id: str) -> List[str]:
         """Labels the portal refused in this attempt (x on the card)."""
         with self._lock:

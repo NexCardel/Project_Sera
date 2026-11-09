@@ -843,6 +843,15 @@ class UnifiedSettingsDialog(QDialog):
         buttons.add_row(SettingRow("Enable \u2018Show / Hide\u2019 Eye Buttons",
             "Shows a password-reveal toggle next to each credential field in Client Detail.", self.show_hide_check))
 
+        self.assist_engine_combo = Select()
+        self.assist_engine_combo.addItem("Extension", "extension")
+        self.assist_engine_combo.addItem("OS", "os")
+        self.assist_engine_combo.setAccessibleName("Assist engine")
+        self.assist_engine_combo.currentIndexChanged.connect(self._on_control_changed)
+        buttons.add_row(SettingRow("Assist engine",
+            "OS: Sera fills from outside the browser; the extension is used only for Fast Autofill",
+            self.assist_engine_combo))
+
         return self._kit_page(header, buttons)
 
     def _build_page_scc(self) -> QScrollArea:
@@ -1356,6 +1365,7 @@ class UnifiedSettingsDialog(QDialog):
             state["sca_uid_pages"] = sorted((i, e.text().strip()) for i, e in self._sca_uid_edits.items())
         if hasattr(self, "show_hide_check"):
             state["show_hide"] = self.show_hide_check.isChecked()
+            state["assist_engine"] = self.assist_engine_combo.currentData()
         if hasattr(self, "scc_check"):
             state["scc_enabled"] = self.scc_check.isChecked()
             state["scc_detect_mode"] = self.scc_detect_combo.currentData()
@@ -1600,6 +1610,8 @@ class UnifiedSettingsDialog(QDialog):
 
         if self._pending("actions", "show_hide_check", force):
             self.show_hide_check.setChecked(g("show_hide_btn_enabled", "1") == "1")
+            import automation
+            _set(self.assist_engine_combo, automation.assist_engine())
 
 
         if self._pending("tracker", "vsdc_check", force):
@@ -1730,6 +1742,8 @@ class UnifiedSettingsDialog(QDialog):
 
             if hasattr(self, "show_hide_check"):
                 bulk_settings["show_hide_btn_enabled"]      = b(self.show_hide_check)
+                import automation
+                automation.set_assist_engine(self.assist_engine_combo.currentData())
 
 
             if hasattr(self, "vsdc_check"):

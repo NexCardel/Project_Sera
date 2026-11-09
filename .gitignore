@@ -137,3 +137,5 @@ tmp_pytest/
 !docs/sgt_never_miss/sgt-never-miss-questions.csv
 .sgt-never-miss.lock
 logs/sgt-never-miss/
+.os-assist.lock
+logs/os-assist/
