@@ -776,6 +776,12 @@ class SeraSyncDialog(QDialog):
             summary += f"   •   Stalled: {stalled} stream(s)"
         self.sync_status_summary_label.setText(summary)
 
+        # The tab's count badge (POLISH-PLAN P-13): what needs a person -- conflicts to settle and
+        # stalled streams -- amber; otherwise the changes still waiting to go out, neutral.
+        if hasattr(self, "tabs"):
+            needs_action = len(conflicts) + stalled
+            self.tabs.set_count(2, (needs_action or total_pending) or None, amber=bool(needs_action))
+
         # Parked age warning (P3-8a): amber > 1 hour in shadow mode, red > 7 days in any mode
         if hasattr(self, "sync_status_warning_label"):
             if oldest_age is not None and oldest_age >= 7 * 86400:
