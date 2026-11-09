@@ -84,6 +84,16 @@ def inputs_page():
     kv.set_not_set(["DOB", "TAN"])
     _row(grid, r, "KeyValueGrid", [kv])
     r += 1
+    svc = kit.ListRow(first=True)
+    svc.layout().addWidget(kit.ServiceIcon("mdi.percent", "#E5534B"))
+    svc.layout().addWidget(kit.RowTitle("GST"), 1)
+    svc.layout().addWidget(kit.Hint("✓ Saved"))
+    svc.setFixedWidth(320)
+    drop = kit.DropArea("No CSV file selected.", suffixes=(".csv",))
+    drop.add_widget(kit.LabelledAction("Browse CSV…", variant="secondary", icon="mdi.file-outline"))
+    drop.setFixedWidth(420)
+    _row(grid, r, "ListRow, ServiceIcon, RowTitle, Hint; DropArea", [svc, drop])
+    r += 1
     long_in = fixed(kit.Input())
     long_in.setText("A very long client name that runs past the right edge of the field")
     long_in.setCursorPosition(0)

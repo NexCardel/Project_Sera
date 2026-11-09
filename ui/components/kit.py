@@ -311,7 +311,7 @@ def _action_qss(variant, sm, icon_only, chevron=False):
         f" min-height: {h}px; max-height: {h}px; }}"
         f"QPushButton::menu-indicator {{ image: none; width: 0px; }}"
         f"QPushButton:hover, QPushButton:pressed {{ background: {hbg}; border-color: {hbd}; }}"
-        f"QPushButton:focus {{ border: 2px solid {T['mint']}; padding: 0 {max(pad - 1, 0)}px; }}"
+        f"QPushButton:focus {{ border: 2px solid {T['mint']}; padding: 0 {max(pad_r - 1, 0)}px 0 {max(pad - 1, 0)}px; }}"
         f"QPushButton:disabled {{ background: {_rgba(bg, _DISABLED_ALPHA)};"
         f" border-color: {_rgba(bd, _DISABLED_ALPHA)}; color: {_rgba(tx, _DISABLED_ALPHA)}; }}"
     )
@@ -379,6 +379,31 @@ class LabelledAction(_ReasonMixin, QPushButton):
 
     def is_chevron(self):
         return self._chevron
+
+    # A chevron button opens its menu itself: QPushButton.setMenu shifts the label right by the
+    # (hidden) indicator's width, which ran the text into the painted chevron ("More˅").
+    def setMenu(self, menu):
+        if not self._chevron:
+            return super().setMenu(menu)
+        self._chevron_menu = menu
+        if not getattr(self, "_chevron_menu_wired", False):
+            self._chevron_menu_wired = True
+            self.clicked.connect(self._popup_chevron_menu)
+
+    def menu(self):
+        if not self._chevron:
+            return super().menu()
+        return getattr(self, "_chevron_menu", None)
+
+    def showMenu(self):
+        if not self._chevron:
+            return super().showMenu()
+        self._popup_chevron_menu()
+
+    def _popup_chevron_menu(self):
+        menu = getattr(self, "_chevron_menu", None)
+        if menu is not None:
+            menu.popup(self.mapToGlobal(QPoint(0, self.height())))
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -2099,6 +2124,8 @@ class ChipBar(QFrame):
         self._overflow_chip = None
         self._overflow_menu = None
         self._selected_id = None
+        self._folded = []           # chips moved into the overflow menu because the bar is too narrow
+        self._folded_actions = []
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -2151,12 +2178,62 @@ class ChipBar(QFrame):
                     chip.update()
         else:
             self.selectionChanged.emit(chip)
+        if on and chip in self._folded:
+            self._fit()             # a chip picked from the menu comes back onto the bar
+
+    # ---- narrow bars: chips that do not fit fold into the overflow menu instead of being squeezed
+
+    def _shown(self, chip):
+        return not (self._compact and chip.compact_hide())
+
+    def _fit(self):
+        over = self._overflow_chip
+        width = self.width()
+        for c in self._folded:
+            c.setVisible(self._shown(c))
+        self._folded = []
+        if over is None or width <= 0:
+            return
+        gap = self.layout().spacing()
+        chips = [c for c in self._chips if c is not over and self._shown(c)]
+        need = sum(c.sizeHint().width() for c in chips) + over.sizeHint().width() + gap * len(chips)
+        for c in reversed(chips[1:]):           # the first chip (All) always stays
+            if need <= width:
+                break
+            if c.isChecked():
+                continue
+            c.setVisible(False)
+            self._folded.insert(0, c)
+            need -= c.sizeHint().width() + gap
+
+    def _fill_folded(self):
+        menu = self._overflow_menu
+        if menu is None:
+            return
+        for a in self._folded_actions:
+            menu.removeAction(a)
+        self._folded_actions = []
+        first = menu.actions()[0] if menu.actions() else None
+        from PySide6.QtGui import QAction
+        for c in self._folded:
+            act = QAction(c.base_text(), menu)
+            menu.insertAction(first, act)      # first None appends
+            act.triggered.connect(lambda _=False, chip=c: chip.click())
+            self._folded_actions.append(act)
+        if self._folded and first is not None:
+            self._folded_actions.append(menu.insertSeparator(first))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit()
 
     def add_overflow_chip(self, menu=None, text="More", title="More filters"):
         chip = Chip(text, self, menu=menu, tooltip=title, has_menu=True)
         chip._chip_id = "__overflow__"
         self._overflow_chip = chip
         self._overflow_menu = menu
+        if menu is not None:
+            menu.aboutToShow.connect(self._fill_folded)
         self._chips.append(chip)
         self._chips_by_id["__overflow__"] = chip
         chip.toggled.connect(lambda on, c=chip: self._on_chip_toggled(c, on))
@@ -2168,6 +2245,8 @@ class ChipBar(QFrame):
             return self.add_overflow_chip(menu, text=text)
         self._overflow_chip.set_menu(menu)
         self._overflow_menu = menu
+        if menu is not None:
+            menu.aboutToShow.connect(self._fill_folded)
         return self._overflow_chip
 
     def select_overflow_value(self, value_text, id=None):
@@ -2208,6 +2287,7 @@ class ChipBar(QFrame):
         for c in self._chips:
             if c.compact_hide():
                 c.setVisible(not self._compact)
+        self._fit()
         self.compactChanged.emit(self._compact)
 
     def apply_width_mode(self, mode):

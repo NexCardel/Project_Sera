@@ -42,7 +42,7 @@ from ui.components.kit import (
     MessageBox,
     ROLE_PILL, ROLE_SERVICES, ROLE_SUB, Banner, Card, Checkbox, Chip, ChipBar, DataGrid, DialogFrame,
     FieldLabel, GridFooter, GridFrame, Input, LabelledAction, PageHeader, SectionLabel, SelectionBar,
-    Select, TextArea, set_page_margins, Avatar, Caption,
+    Select, TextArea, set_page_margins, Avatar, Caption, sentence_label,
 )
 from ui.utils.dynamic_form_widgets import make_input_widget, read_input_widget, set_input_widget_value
 from ui.utils.responsive import WidthAware, WidthMode
@@ -153,7 +153,7 @@ class NewClientDialog(QDialog):
             widget = make_input_widget(col, "", mask_password=False)
             self._input_widgets[col["id"]] = (col, widget)
             is_pk = col.get("is_internal_pk", False)
-            label = FieldLabel(col["label"], required=bool(is_pk), for_widget=widget)
+            label = FieldLabel(sentence_label(col["label"]), required=bool(is_pk), for_widget=widget)
             if is_pk:
                 label.setToolTip(_PK_TIP)
             frame.add_widget(_labelled(label, widget))
@@ -718,7 +718,7 @@ class AdminWindow(WidthAware, QWidget):
             if wide and col_idx:
                 row, col_idx = row + 1, 0
             is_pk = bool(col.get("is_internal_pk"))
-            label = FieldLabel(col["label"], required=is_pk, for_widget=widget)
+            label = FieldLabel(sentence_label(col["label"]), required=is_pk, for_widget=widget)
             if is_pk:
                 label.setToolTip(_PK_TIP)
             span = 2 if wide else 1
