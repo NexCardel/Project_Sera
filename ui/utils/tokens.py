@@ -347,6 +347,8 @@ KIT = {
     "d_ibtn_kv": 24,
     "w_kv_one_col": 400,   # KeyValueGrid drops to one column below this width (narrow panel)
     "f_hint": 11,
+    "drop_line": "#3A3A3A",      # CSV import drop area: dashed 1 px
+    "drop_line_on": "#4CF9B7",   # a file is held over it
     "idchip_r": 8,
     "pad_idchip_h": 9,
     "pad_idchip_v": 3,

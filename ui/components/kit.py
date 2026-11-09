@@ -3548,6 +3548,69 @@ class RowTitle(QLabel):
         self.setStyleSheet("QLabel { background: transparent; }")   # the theme's QLabel ground showed as a strip
 
 
+class DropArea(QFrame):
+    """A dashed 1 px drop zone (the mockup's CSV file row): a muted sentence on the left, add_widget()
+    on the right (a secondary Browse button). Dropping a file whose suffix is in `suffixes` emits
+    fileDropped(path); the border turns mint while such a file is held over it."""
+
+    fileDropped = Signal(str)
+
+    def __init__(self, text="", parent=None, *, suffixes=()):
+        super().__init__(parent)
+        self.setObjectName("KitDropArea")
+        self._suffixes = tuple(s.lower() for s in suffixes)
+        self.setAcceptDrops(True)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(T["s_4"], T["s_3"], T["s_3"], T["s_3"])
+        lay.setSpacing(T["s_3"])
+        self.label = QLabel(text, self)
+        self.label.setWordWrap(True)
+        self.label.setStyleSheet(f"QLabel {{ color: {T['text2']}; background: transparent; }}")
+        lay.addWidget(self.label, 1)
+        self._set_hot(False)
+
+    def set_text(self, text):
+        self.label.setText(text)
+
+    def text(self):
+        return self.label.text()
+
+    def add_widget(self, widget):
+        self.layout().addWidget(widget, 0, Qt.AlignVCenter)
+
+    def _set_hot(self, hot):
+        line = K["drop_line_on"] if hot else K["drop_line"]
+        self.setStyleSheet(f"QFrame#KitDropArea {{ background: transparent; border: 1px dashed {line};"
+                           f" border-radius: {T['r_l']}px; }}")
+
+    def _path_of(self, event):
+        urls = event.mimeData().urls() if event.mimeData().hasUrls() else []
+        if len(urls) != 1 or not urls[0].isLocalFile():
+            return None
+        path = urls[0].toLocalFile()
+        if self._suffixes and not path.lower().endswith(self._suffixes):
+            return None
+        return path
+
+    def dragEnterEvent(self, event):
+        if self._path_of(event):
+            self._set_hot(True)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self._set_hot(False)
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event):
+        self._set_hot(False)
+        path = self._path_of(event)
+        if path:
+            event.acceptProposedAction()
+            self.fileDropped.emit(path)
+
+
 _HINT_TONES = {None: "muted", "muted": "muted", "emerald": "mint", "amber": "warn", "red": "warn"}
 
 

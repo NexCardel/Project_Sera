@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 from database import SeraDatabase
 from ui.components.kit import (
     MessageBox,
-    ROLE_PILL, Banner, Card, DarkListTable, DialogFrame, EmptyState, LabelledAction, SectionLabel, Tile,
+    ROLE_PILL, Banner, Card, DarkListTable, DialogFrame, DropArea, EmptyState, LabelledAction, SectionLabel, Tile,
 )
 from ui.utils.tokens import TOKENS
 
@@ -100,38 +100,34 @@ class CSVImportDialog(QDialog):
             "Attach services with a <i>'Services'</i> column or columns named <i>'Service: [Name]'</i> holding Yes/No.",
             "i"))
 
-        self.file_label = QLabel("No CSV file selected. The file's encoding is detected and shown here.")
-        self.file_label.setWordWrap(True)
-        browse_btn = LabelledAction("Browse CSV…", icon="mdi.folder-open-outline",
-                                    tooltip="Choose the CSV file to import")
+        # the mockup's dashed drop area: drag a .csv onto it, or Browse
+        self.drop_area = DropArea("No CSV file selected. The file's encoding is detected and shown here.",
+                                  suffixes=(".csv",))
+        self.file_label = self.drop_area.label
+        browse_btn = LabelledAction("Browse CSV…", variant="secondary", icon="mdi.file-outline",
+                                    tooltip="Choose the CSV file to import (or drop it here)")
         browse_btn.clicked.connect(self._on_browse)
-        file_row = QWidget()
-        file_lay = QHBoxLayout(file_row)
-        file_lay.setContentsMargins(0, 0, 0, 0)
-        file_lay.setSpacing(TOKENS["s_3"])
-        file_lay.addWidget(self.file_label, 1)
-        file_lay.addWidget(browse_btn)
-        file_card = Card()
-        file_card.add_widget(file_row)
-        frame.add_widget(file_card)
+        self.drop_area.add_widget(browse_btn)
+        self.drop_area.fileDropped.connect(self._load_preview)
+        frame.add_widget(self.drop_area)
 
-        frame.add_widget(SectionLabel("Column mapping preview"))
-
+        # one card: title, then either the empty state or the mapping table
+        table_card = Card("Column mapping preview")
         self.table = DarkListTable(0, 2)
         self.table.setHorizontalHeaderLabels(["CSV Header", "Maps to MCL Column"])
         self.table.setSelectionMode(QAbstractItemView.NoSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.set_column(0, kind="strong", minimum=160, max_share=0.4)
         self.table.set_column(1, minimum=240)
-        table_card = Card()
-        table_card.add_widget(self.table, 1)
-        self.table_card = table_card
         self.empty_state = EmptyState("No file chosen yet",
-                                      "Browse for a CSV to see how each column will map.",
-                                      icon="mdi.file-delimited-outline")
-        frame.add_widget(self.empty_state, 1)
+                                      "Browse for a CSV, or drop one above, to see how each column will map.",
+                                      icon="mdi.table")
+        self.empty_state.setMinimumHeight(170)
+        table_card.add_widget(self.empty_state, 1)
+        table_card.add_widget(self.table, 1)
+        self.table.hide()
+        self.table_card = table_card
         frame.add_widget(table_card, 1)
-        self.table_card.hide()
 
         close_btn = frame.add_action("Cancel", icon="mdi.close")
         close_btn.clicked.connect(self.reject)
@@ -211,7 +207,7 @@ class CSVImportDialog(QDialog):
             self.table.setItem(i, 1, status)
 
         self.empty_state.hide()
-        self.table_card.show()
+        self.table.show()
         self.import_btn.set_disabled_reason(None)
 
     def _on_import(self):
