@@ -108,12 +108,38 @@ def page_documents(hwnd: int) -> list:
     return out
 
 
+_DOC_CACHE: dict = {}         # hwnd -> (uia, the Document page_rect found last); worker thread only
+
+
+def _doc_rect(doc) -> Optional[Tuple[int, int, int, int]]:
+    r = _safe(lambda: doc.CurrentBoundingRectangle, None)
+    if r is not None and r.right > r.left and r.bottom > r.top:
+        return (int(r.left), int(r.top), int(r.right), int(r.bottom))
+    return None
+
+
 def page_rect(hwnd: int) -> Optional[Tuple[int, int, int, int]]:
-    """(left, top, right, bottom) of the first on-screen Document, for docking; None if none."""
+    """(left, top, right, bottom) of the first on-screen Document, for docking; None if none.
+    The Document found last time is asked first (two property reads). The whole-tree search
+    (100-200 ms on Chrome, and it keeps the browser busy) runs only when that one is gone,
+    off-screen (a tab switch) or has no size."""
+    uia = worker.current_uia()
+    key = int(hwnd or 0)
+    cached = _DOC_CACHE.get(key)
+    if cached is not None and cached[0] is uia:
+        doc = cached[1]
+        if not _safe(lambda: doc.CurrentIsOffscreen, True):
+            rect = _doc_rect(doc)
+            if rect is not None:
+                return rect
+    _DOC_CACHE.pop(key, None)
     for doc in page_documents(hwnd):
-        r = _safe(lambda: doc.CurrentBoundingRectangle, None)
-        if r is not None and r.right > r.left and r.bottom > r.top:
-            return (int(r.left), int(r.top), int(r.right), int(r.bottom))
+        rect = _doc_rect(doc)
+        if rect is not None:
+            if len(_DOC_CACHE) >= 16:
+                _DOC_CACHE.clear()
+            _DOC_CACHE[key] = (uia, doc)
+            return rect
     return None
 
 

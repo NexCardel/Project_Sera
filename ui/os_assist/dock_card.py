@@ -30,7 +30,7 @@ from ctypes import wintypes
 from typing import Callable, Optional, Tuple
 
 from PySide6.QtCore import (Qt, QTimer, QPoint, QPointF, QRectF, QAbstractAnimation,
-                            QPropertyAnimation, QVariantAnimation, QEasingCurve, Signal)
+                            QPropertyAnimation, QEasingCurve, Signal)
 from PySide6.QtGui import QColor, QFont, QPainter, QGuiApplication
 from PySide6.QtWidgets import QWidget, QFrame, QHBoxLayout, QVBoxLayout, QLabel, QPushButton
 
@@ -45,6 +45,26 @@ TOP_PX, RIGHT_PX = 18, 24                        # the in-page card's `top: 18px
 SLIDE_MS, FADE_MS = 380, 320
 CARD_MIN_PX, CARD_MAX_PX = 320, 420
 RESUME_DISMISS_MS = 500                          # resuming with this little left dismisses (as the extension)
+BAR_MIN_MS, BAR_MAX_MS = 16, 250                 # timer-bar repaint check: one device pixel, in these bounds
+SPI_GETCLIENTAREAANIMATION = 0x1042
+
+ANIMATIONS: Optional[bool] = None                # None: follow Windows; tests may force True / False
+
+
+def animations_enabled() -> bool:
+    """Windows' "Show animations in Windows" (off under "Adjust for best performance", the usual
+    setting on weak PCs). Off: the cards appear and go at once, no slide or fade."""
+    if ANIMATIONS is not None:
+        return ANIMATIONS
+    if sys.platform != "win32":
+        return True
+    try:
+        on = wintypes.BOOL(True)
+        if ctypes.windll.user32.SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, ctypes.byref(on), 0):
+            return bool(on.value)
+    except Exception:
+        pass
+    return True
 
 GWL_EXSTYLE = -20
 GWLP_HWNDPARENT = -8
@@ -56,6 +76,23 @@ def css_px(v: float) -> int:
     """A CSS pixel of the in-page card in Qt logical pixels. Qt already applies the monitor DPI;
     the app's own UI scale (QT_SCALE_FACTOR, ui_scale) is undone so the card matches the browser."""
     return max(1, round(v / (running_scale() or 1.0)))
+
+
+WARM_TEXT = "⚡✎✕✓✗✔⚠●•×📋👉👤🔑"                     # the cards' glyphs that Segoe UI lacks (fallback fonts)
+
+
+def warm_up() -> None:
+    """Resolve the cards' fallback glyphs (⚡ etc.) now, at idle, so the first card of a session
+    lays out in ~5 ms instead of ~300 ms (Qt searches the system fonts once per glyph script;
+    the answer is cached for the process). Call on the Qt thread; shows nothing."""
+    try:
+        from PySide6.QtGui import QFontMetrics
+        for family, weight in (("Segoe UI", QFont.Normal), ("Segoe UI", QFont.Bold), ("Segoe UI Symbol", QFont.Normal)):
+            f = QFont(family)
+            f.setWeight(weight)
+            QFontMetrics(f).horizontalAdvance(WARM_TEXT)
+    except Exception:
+        pass
 
 
 def slide_curve() -> QEasingCurve:
@@ -177,10 +214,11 @@ class TimerBar(QWidget):
         self._expiry = QTimer(self)
         self._expiry.setSingleShot(True)
         self._expiry.timeout.connect(self._expire)
-        self._paint = QVariantAnimation(self)        # only drives repaints
-        self._paint.setStartValue(0.0)
-        self._paint.setEndValue(1.0)
-        self._paint.valueChanged.connect(lambda _v: self.update())
+        # Repaints only when the bar has lost a whole device pixel (4-13 a second for a 30-90 s
+        # card), not every animation frame: each repaint also repaints the card under the bar.
+        self._paint = QTimer(self)
+        self._paint.timeout.connect(self._repaint_if_moved)
+        self._drawn_px = -1
 
     # -- state ---------------------------------------------------------------------------------
     def remaining_ms(self) -> float:
@@ -207,9 +245,22 @@ class TimerBar(QWidget):
         self._started_at = self._clock()
         ms = max(0, round(self._remaining))
         self._expiry.start(ms)
-        self._paint.stop()
-        self._paint.setDuration(max(1, ms))
-        self._paint.start()
+        self._paint.start(self._pixel_ms())
+        self.update()
+
+    def _bar_px(self) -> int:
+        return round(self.width() * (self.devicePixelRatioF() or 1.0) * self.fraction())
+
+    def _pixel_ms(self) -> int:
+        """How long the bar takes to lose one device pixel, within 16-250 ms."""
+        px = self.width() * (self.devicePixelRatioF() or 1.0)
+        if px < 1 or self.duration_ms <= 0:
+            return 50
+        return int(min(max(self.duration_ms / px, BAR_MIN_MS), BAR_MAX_MS))
+
+    def _repaint_if_moved(self) -> None:
+        if self._bar_px() != self._drawn_px:
+            self.update()
 
     def pause(self) -> None:
         if self._paused or not self.running or self._done:
@@ -258,6 +309,7 @@ class TimerBar(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.setPen(Qt.NoPen)
+        self._drawn_px = self._bar_px()
         r = QRectF(self.rect())
         radius = min(2.0, r.height() / 2)
         p.setBrush(self.TRACK)
@@ -631,7 +683,7 @@ class DockCard(QWidget):
     # -- in and out ----------------------------------------------------------------------------
     def _slide_in(self) -> None:
         self._slid_in = True
-        if not self.SLIDE_IN_MS:
+        if not self.SLIDE_IN_MS or not animations_enabled():
             self.card.move(0, 0)
             self.setWindowOpacity(1.0)
             return
@@ -658,7 +710,7 @@ class DockCard(QWidget):
         self.dismissed.emit(reason)
         if not self.isVisible():
             return
-        if not self.SLIDE_IN_MS:
+        if not self.SLIDE_IN_MS or not animations_enabled():
             self._after_slide_out()
             return
         self._slide.stop()

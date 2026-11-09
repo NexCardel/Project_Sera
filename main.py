@@ -648,6 +648,8 @@ class SeraApp:
         _os_launcher.set_clear_seconds_provider(lambda: self.db.get_setting("clipboard_clear_seconds", "30"))
         import automation as _automation                        # SCA engine switch (blueprint §4.7)
         _automation.add_engine_listener(self._on_assist_engine_changed)
+        if _automation.assist_engine() == "os":                 # first OS card: no 0.1-0.3 s font search
+            QTimer.singleShot(8000, _os_dock_card.warm_up)
         self.bridge.sck_candidate_received.connect(self._handle_sck_candidate)
         self.bridge.sck_outcome_received.connect(self._handle_sck_outcome)
         self.bridge.extension_settings_updated_received.connect(self._handle_extension_settings_updated)
@@ -812,6 +814,9 @@ class SeraApp:
         if engine != "os":
             from core.os_assist import sca_engine
             sca_engine.disarm_all("ENGINE")
+        else:
+            from ui.os_assist import dock_card
+            QTimer.singleShot(1000, dock_card.warm_up)
         self._sync_extension_settings()
 
     def _get_extension_settings_payload(self) -> dict:

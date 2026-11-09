@@ -92,6 +92,7 @@ class ScaChip(DockCard):
         self._dismissed = True
         self.clear_secrets()                  # holds none; kept so every dismiss path is the same
         self._life.stop()
+        self._stop_watch()                    # the base dismiss is skipped: unhook the window events here
         self._tick.stop()
         self._probe_job = None
         self.dismissed.emit(reason)

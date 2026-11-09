@@ -509,3 +509,19 @@ def test_real_hub_hooks_and_unhooks():
         hub.unwatch(token)
     finally:
         hub.stop()
+
+
+def test_the_fill_chip_unhooks_when_it_goes(app, pid_known):
+    from ui.os_assist.sca_chip import ScaChip
+
+    class Chip(ScaChip):
+        def _native_hwnd(self):
+            return 0xBEEF
+
+    hub = FakeHub()
+    chip = Chip("Fictional Traders", "GST", locator=SyncLocator(), win=FakeWin(), clock=Clock(), events=hub)
+    chip.attach(BROWSER, SERVICE)
+    chip.present()
+    assert hub.subs
+    chip.dismiss()
+    assert hub.subs == {} and hub.unwatched

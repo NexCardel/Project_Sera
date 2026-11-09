@@ -261,6 +261,7 @@ class ScaEngine(QObject):
         self._probe_job = None
         self._pending: Dict[str, dict] = {}       # busy key -> granted fill waiting for its box
         self.cards: Dict[int, object] = {}        # hwnd -> the SCA card shown there
+        self._card_for: Dict[int, tuple] = {}     # hwnd -> (client_id, service_id) of that card
         self._timer = QTimer(self)
         self._timer.setInterval(TICK_MS)
         self._timer.timeout.connect(self.tick)
@@ -486,11 +487,20 @@ class ScaEngine(QObject):
         return self._request(a, service, hwnd, host, sca_protocol.normalize_uid(candidate), key, False)
 
     def _show_card(self, a: dict, service: dict, hwnd: int, note: str) -> None:
-        old = self.cards.pop(hwnd, None)
+        """A live card on that window for the same client and portal is kept and points at the new
+        arm (a re-arm - a second visit read, the clipboard then the UID page - used to slide it out
+        and a new one in: the 2026-11-09 flicker). Inject on it acts on the live arm either way."""
+        who = (a.get("client_id"), service.get("service_id"))
+        old = self.cards.get(hwnd)
+        if old is not None and not old.is_dismissed and self._card_for.get(hwnd) == who:
+            old.arm_id = a.get("arm_id")
+            return
+        self.cards.pop(hwnd, None)
         if old is not None and not old.is_dismissed:
             old.dismiss("replaced")
         card = self._card_factory(a, service, hwnd, note)
         self.cards[hwnd] = card
+        self._card_for[hwnd] = who
         card.inject_requested.connect(
             lambda arm_id, service_id, h=hwnd, cid=a.get("client_id"): self.on_widget_fill(arm_id, service_id, h, cid))
         card.dismissed.connect(lambda _r, h=hwnd, c=card: self.cards.pop(h, None) if self.cards.get(h) is c else None)

@@ -179,3 +179,69 @@ def test_worker_urgent_job_jumps_the_queue():
         f.result(timeout=5)
     w.stop()
     assert order == ["urgent", "normal"]
+
+
+# -- page_rect reuses the Document it found last (the whole-tree search is 100-200 ms on Chrome) -----
+class CountingUia(FakeUia):
+    def __init__(self, docs):
+        super().__init__(docs)
+        self.searches = 0
+
+    def documents(self, hwnd):
+        self.searches += 1
+        return self.docs
+
+
+def test_page_rect_reuses_the_document_found_last():
+    uia = CountingUia([El()])
+    worker.bind(uia)
+    try:
+        assert locate.page_rect(7) == (10, 20, 210, 50)
+        assert locate.page_rect(7) == (10, 20, 210, 50)
+        assert uia.searches == 1
+    finally:
+        worker.bind(None)
+
+
+def test_page_rect_searches_again_when_the_document_goes_offscreen():
+    first, second = El(), El(w=400)
+    uia = CountingUia([first])
+    worker.bind(uia)
+    try:
+        assert locate.page_rect(8) == (10, 20, 210, 50)
+        first.CurrentIsOffscreen = True                # a tab switch
+        uia.docs = [first, second]
+        assert locate.page_rect(8) == (10, 20, 410, 50)
+        assert uia.searches == 2
+    finally:
+        worker.bind(None)
+
+
+def test_page_rect_searches_again_when_the_document_is_gone():
+    class Dead:
+        @property
+        def CurrentIsOffscreen(self):
+            raise OSError("element not available")
+
+    uia = CountingUia([El()])
+    worker.bind(uia)
+    try:
+        locate.page_rect(9)
+        locate._DOC_CACHE[9] = (uia, Dead())          # a navigation dropped the element
+        assert locate.page_rect(9) == (10, 20, 210, 50)
+        assert uia.searches == 2
+    finally:
+        worker.bind(None)
+
+
+def test_page_rect_cache_never_crosses_uia_objects():
+    worker.bind(CountingUia([El()]))
+    try:
+        locate.page_rect(10)
+    finally:
+        worker.bind(None)
+    worker.bind(CountingUia([]))
+    try:
+        assert locate.page_rect(10) is None
+    finally:
+        worker.bind(None)

@@ -169,6 +169,30 @@ def test_widget_mode_shows_card_without_note():
     assert len(r.cards) == 1 and r.cards[0].note == "" and r.watcher.requests == []
 
 
+def test_a_rearm_for_the_same_client_keeps_the_live_card():
+    """2026-11-09 flicker: each fresh arm slid the card out and a new one in."""
+    r = Rig()
+    r.arm(mode="widget")
+    r.show()
+    assert len(r.cards) == 1
+    r.engine.arm(make_arm(mode="widget", now=r.t, arm_id="arm_test2"), [])
+    r.show()
+    assert len(r.cards) == 1 and not r.cards[0].is_dismissed
+    assert r.cards[0].arm_id == "arm_test2"                              # Inject acts on the live arm
+    r.cards[0].inject_requested.emit(r.cards[0].arm_id, 1)
+    assert [q["arm_id"] for q in r.watcher.requests] == ["arm_test2"]
+
+
+def test_a_rearm_for_another_client_replaces_the_card():
+    r = Rig()
+    r.arm(mode="widget")
+    r.show()
+    r.engine.arm(make_arm(mode="widget", now=r.t, arm_id="arm_other", client_id=8,
+                          client_id_token="8"), [])
+    r.show()
+    assert len(r.cards) == 2 and r.cards[0].is_dismissed and not r.cards[1].is_dismissed
+
+
 def test_inject_from_another_clients_card_is_ignored():
     r = Rig()
     r.arm(mode="widget")

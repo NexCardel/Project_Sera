@@ -298,3 +298,63 @@ def test_card_without_timeout_has_no_timer(app):
     card.attach(BROWSER, SERVICE)
     card.present()
     card.dismiss()
+
+
+# -- lightweight: timer-bar repaints, Windows animation setting --------------------------------------
+def test_timer_bar_repaints_only_when_it_loses_a_pixel(app, monkeypatch):
+    clock = Clock()
+    bar = dc.TimerBar(10000, clock=clock)
+    bar.resize(100, 3)
+    monkeypatch.setattr(bar, "devicePixelRatioF", lambda: 1.0)
+    updates = []
+    monkeypatch.setattr(bar, "update", lambda *a: updates.append(1))
+    bar.start()
+    assert bar._paint.interval() == 100               # 10 s over 100 px: one pixel each 100 ms
+    updates.clear()
+    bar._drawn_px = bar._bar_px()
+    clock.t += 0.05                                    # half a pixel: nothing to redraw
+    bar._repaint_if_moved()
+    assert updates == []
+    clock.t += 0.06
+    bar._repaint_if_moved()
+    assert updates == [1]
+    bar.stop()
+    assert not bar._paint.isActive()
+
+
+def test_timer_bar_check_interval_is_bounded(app, monkeypatch):
+    long_bar, short_bar = dc.TimerBar(90000), dc.TimerBar(500)
+    for bar in (long_bar, short_bar):
+        bar.resize(300, 3)
+        monkeypatch.setattr(bar, "devicePixelRatioF", lambda: 1.0)
+    assert long_bar._pixel_ms() == dc.BAR_MAX_MS
+    assert short_bar._pixel_ms() == dc.BAR_MIN_MS
+
+
+def test_timer_bar_pause_stops_the_repaint_checks(app):
+    clock = Clock()
+    bar = dc.TimerBar(5000, clock=clock)
+    bar.resize(100, 3)
+    bar.start()
+    assert bar._paint.isActive()
+    bar.pause()
+    assert not bar._paint.isActive()
+    bar.resume()
+    assert bar._paint.isActive()
+    bar.stop()
+
+
+def test_without_windows_animations_the_card_appears_and_goes_at_once(app, monkeypatch):
+    monkeypatch.setattr(dc, "ANIMATIONS", False)
+    card, *_ = make()
+    card.present()
+    assert card.isVisible()
+    assert card.card.pos() == dc.QPoint(0, 0) and card.windowOpacity() == 1.0
+    assert card._slide.state() != dc.QAbstractAnimation.Running
+    card.dismiss()
+    assert not card.isVisible()
+
+
+def test_warm_up_is_safe_to_call(app):
+    dc.warm_up()
+    dc.warm_up()
