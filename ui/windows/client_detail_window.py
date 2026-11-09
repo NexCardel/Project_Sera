@@ -25,7 +25,10 @@ try:
 except Exception:
     qta = None
 from automation import _AutofillBridge
-from ui.components.kit import MessageBox, Card, EmptyState, Key, LabelledAction, Pill, SettingRow, TextArea
+from ui.components.kit import (
+    MessageBox, Caption, Card, EmptyState, Hint, Key, KeyValueGrid, LabelledAction, ListRow, Pill, RowTitle,
+    ServiceIcon, SettingRow, TextArea, sentence_label,
+)
 from ui.utils.masking import mask_password
 from ui.utils.tokens import KIT as K, TOKENS as T
 
@@ -65,6 +68,12 @@ def _get_portal_accent_color(name: str) -> str:
     elif "pf" in n or "provident" in n:
         return T["mint"]
     return T["muted"]
+
+
+def _looks_like_code(value):
+    """IDs, PAN / GSTIN and numbers read best in the mono face; names and addresses do not."""
+    v = str(value).strip()
+    return bool(v) and " " not in v and any(c.isdigit() for c in v) and len(v) <= 24
 
 
 class ClickableLabel(QLabel):
@@ -135,16 +144,21 @@ class ClientDetailWindow(QWidget):
         name_row.addStretch(1)
         title_vbox.addLayout(name_row)
 
+        # the meta line under the name: proprietor, then the recent-activity pill (the mockup's .p-meta);
+        # on the name row the pill was squeezed to "Created ..." by Edit and ⋯ at 540 px
+        meta_row = QHBoxLayout()
+        meta_row.setContentsMargins(0, 0, 0, 0)
+        meta_row.setSpacing(T["s_2"])
         self.secondary_name_lbl = QLabel()
         self.secondary_name_lbl.setProperty("class", "EditorSub")
-        title_vbox.addWidget(self.secondary_name_lbl)
-
-        header.addLayout(title_vbox, stretch=1)
-
-        # the recent-activity pill (the mockup's "Autofilled today" pill)
+        meta_row.addWidget(self.secondary_name_lbl)
         self.activity_pill = Pill("", "emerald")
         self.activity_pill.hide()
-        header.addWidget(self.activity_pill, 0, Qt.AlignVCenter)
+        meta_row.addWidget(self.activity_pill, 0, Qt.AlignVCenter)
+        meta_row.addStretch(1)
+        title_vbox.addLayout(meta_row)
+
+        header.addLayout(title_vbox, stretch=1)
 
         self.edit_btn = LabelledAction("Edit", variant="soft", sm=True, icon="mdi.pencil-outline",
                                        tooltip="Edit this client")
@@ -346,7 +360,7 @@ class ClientDetailWindow(QWidget):
             self.scroll_layout.addWidget(card)
             return
 
-        hint = Key("Alt+1..9")
+        hint = Hint("\u24d8 Alt+1..9 \u00b7 Alt+Ctrl+1..9 for mode 2")
         hint.setToolTip(
             "Alt+1..9 runs primary autofill (Mode 1)\n"
             "Alt+Ctrl+1..9 runs secondary autofill (Mode 2, if set)\n"
@@ -365,21 +379,23 @@ class ClientDetailWindow(QWidget):
             has_shortcut = key_num <= 9
             mode_1 = automation.service_action_mode(s)
             mode_2 = automation.service_secondary_action_mode(s)
-
-            row = QWidget()
-            row_layout = QHBoxLayout(row)
-            row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.setSpacing(8)
-
-            icon_lbl = QLabel()
-            icon_lbl.setPixmap(qta.icon(_get_service_icon(s["name"]), color=_get_portal_accent_color(s["name"])).pixmap(QSize(16, 16)) if qta else QIcon().pixmap(QSize(16, 16)))
-            icon_lbl.setFixedSize(18, 18)
-            row_layout.addWidget(icon_lbl)
-            row_layout.addWidget(QLabel(s["name"]), stretch=1)
-
             slots = [(mode_1, f"Alt+{key_num}")]
             if mode_2 and mode_2 in action_specs and mode_2 != mode_1:
                 slots.append((mode_2, f"Alt+Ctrl+{key_num}"))
+
+            # the mockup's .svc row: icon tile, name over its modes, the actions, the key
+            row = ListRow(first=(i == 0))
+            row_layout = row.layout()
+            row_layout.addWidget(ServiceIcon(_get_service_icon(s["name"]), _get_portal_accent_color(s["name"])))
+
+            names = QVBoxLayout()
+            names.setContentsMargins(0, 0, 0, 0)
+            names.setSpacing(0)
+            names.addWidget(RowTitle(s["name"]))
+            mode_names = [action_specs[m][0] if len(slots) == 1 else action_specs[m][1] for m, _k in slots]
+            names.addWidget(Caption(" \u00b7 ".join(mode_names)))
+            row_layout.addLayout(names, stretch=1)
+
             for mode, keys in slots:
                 label, short, icon, fn = action_specs[mode]
                 btn = LabelledAction(
@@ -393,58 +409,63 @@ class ClientDetailWindow(QWidget):
                     sc = QShortcut(QKeySequence(keys), self)
                     sc.activated.connect(lambda svc=s, fn=fn: fn(svc))
                     self._service_shortcuts.append(sc)
+            if has_shortcut:
+                row_layout.addWidget(Key(f"Alt {key_num}"))
 
-            card.add_widget(row)
+            card.add_row(row)
 
         self.scroll_layout.addWidget(card)
 
+    def _value_label(self, shown, raw_val, label_name, is_secret, allow_qc, timeout_sec):
+        """The value of one field: click-to-copy when quick copy is on, plain text otherwise."""
+        if allow_qc:
+            val_label = ClickableLabel(shown)
+            val_label.clicked.connect(
+                lambda v=raw_val, n=label_name, sec=is_secret, t=timeout_sec: self._on_label_clicked(v, n, sec, t)
+            )
+            val_label.setCursor(Qt.PointingHandCursor)
+            val_label.setToolTip(f"Click to copy {label_name}")
+        else:
+            val_label = QLabel(shown)
+        val_label.setProperty("class", "RowValue")
+        return val_label
+
     def _add_identity_card(self, identity_cols, timeout_sec):
         card = Card("Identity")
+        grid = KeyValueGrid()
+        not_set = []
         for col in identity_cols:
             raw_val = self.client["values"].get(col["id"], "")
-            allow_qc = col.get("allow_quick_copy", True)
+            shown_label = sentence_label(col["label"])
             if not raw_val:
-                card.add_row(SettingRow(col["label"], control=self._hint("Not set")))
+                not_set.append(shown_label)
                 continue
-
-            if allow_qc:
-                val_label = ClickableLabel(raw_val)
-                val_label.clicked.connect(
-                    lambda v=raw_val, lbl_name=col["label"], is_sec=False, t=timeout_sec: self._on_label_clicked(v, lbl_name, is_sec, t)
-                )
-                val_label.setCursor(Qt.PointingHandCursor)
-                val_label.setToolTip(f"Click to copy {col['label']}")
-            else:
-                val_label = QLabel(raw_val)
-            val_label.setProperty("class", "RowValue")
-            controls = [val_label]
-            if allow_qc:
-                controls.append(self._copy_button(f"Copy {col['label']}", raw_val, col["label"], False, timeout_sec))
-            card.add_row(SettingRow(col["label"], control=controls))
+            allow_qc = col.get("allow_quick_copy", True)
+            val_label = self._value_label(raw_val, raw_val, col["label"], False, allow_qc, timeout_sec)
+            buttons = ([self._copy_button(f"Copy {col['label']}", raw_val, col["label"], False, timeout_sec)]
+                       if allow_qc else [])
+            grid.add_widget_field(shown_label, val_label, mono=_looks_like_code(raw_val), buttons=buttons)
+        grid.set_not_set(not_set)
+        card.add_row(grid)
         self.scroll_layout.addWidget(card)
 
     def _add_logins_card(self, security_cols, mask_mode, reveal_count, show_hide_btn_enabled, timeout_sec):
         card = Card("Logins")
+        where = "first" if mask_mode == "first_n" else "last"
+        card.add_action(Hint(f"Masked: {where} {reveal_count} characters shown \u00b7 "
+                             f"clipboard clears after {timeout_sec} s"))
+        grid = KeyValueGrid()
+        not_set = []
         for col in security_cols:
             raw_val = self.client["values"].get(col["id"], "")
-            allow_qc = col.get("allow_quick_copy", True)
+            shown_label = sentence_label(col["label"])
             if not raw_val:
-                card.add_row(SettingRow(col["label"], control=self._hint("Not set")))
+                not_set.append(shown_label)
                 continue
-
+            allow_qc = col.get("allow_quick_copy", True)
             masked_val = mask_password(raw_val, mask_mode, reveal_count)
-            if allow_qc:
-                val_label = ClickableLabel(masked_val)
-                val_label.clicked.connect(
-                    lambda v=raw_val, lbl_name=col["label"], is_sec=True, t=timeout_sec: self._on_label_clicked(v, lbl_name, is_sec, t)
-                )
-                val_label.setCursor(Qt.PointingHandCursor)
-                val_label.setToolTip(f"Click to copy {col['label']}")
-            else:
-                val_label = QLabel(masked_val)
-            val_label.setProperty("class", "RowValue")
-            controls = [val_label]
-
+            val_label = self._value_label(masked_val, raw_val, col["label"], True, allow_qc, timeout_sec)
+            buttons = []
             if show_hide_btn_enabled:
                 btn_show = LabelledAction(variant="ghost", sm=True, tooltip="Show / Hide Password")
                 btn_show.set_icon_only(True)
@@ -456,17 +477,18 @@ class ClientDetailWindow(QWidget):
                         self._set_eye_icon(btn_w, checked),
                     )
                 )
-                controls.append(btn_show)
-
+                buttons.append(btn_show)
             if allow_qc:
-                controls.append(self._copy_button("Copy Password", raw_val, col["label"], True, timeout_sec))
-
-            card.add_row(SettingRow(col["label"], control=controls))
+                buttons.append(self._copy_button("Copy Password", raw_val, col["label"], True, timeout_sec))
+            grid.add_widget_field(shown_label, val_label, mono=True, buttons=buttons)
+        grid.set_not_set(not_set)
+        card.add_row(grid)
         self.scroll_layout.addWidget(card)
 
     def _add_notes_card(self):
         card = Card("Notes")
-        self.notes_status_lbl = Pill("", tone="emerald")
+        # the mockup's muted "\u2713 Saved" line in the card header (was an emerald Pill)
+        self.notes_status_lbl = Hint("")
         self.notes_status_lbl.hide()
         card.add_action(self.notes_status_lbl)
 
@@ -714,7 +736,7 @@ class ClientDetailWindow(QWidget):
         if getattr(self, "_loading_notes", False):
             return
         if hasattr(self, "notes_status_lbl"):
-            self._set_notes_status("Saving...", "amber")
+            self._set_notes_status("Saving...", "muted")
         if hasattr(self, "_notes_timer"):
             self._notes_timer.start(500)
 
@@ -724,7 +746,7 @@ class ClientDetailWindow(QWidget):
         new_notes = self.notes_edit.toPlainText().strip()
         if self.client.get("notes") == new_notes:
             if hasattr(self, "notes_status_lbl"):
-                self._set_notes_status("Saved ✓", "emerald")
+                self._set_notes_status("✓ Saved", "muted")
             return
 
         self.db.update_client_notes(self.client["id"], new_notes)
@@ -735,7 +757,7 @@ class ClientDetailWindow(QWidget):
             detail="Auto-saved client notes"
         )
         if hasattr(self, "notes_status_lbl"):
-            self._set_notes_status("Saved ✓", "emerald")
+            self._set_notes_status("✓ Saved", "muted")
 
 
     def _on_label_clicked(self, val: str, label_name: str, is_secret: bool, timeout_sec: int):

@@ -407,7 +407,9 @@ def test_empty_fields_show_not_set_and_have_no_copy_button(world):
     win = make()
     win.load_client(ids["B"])
     texts = [l.text() for l in win.scroll_widget.findChildren(QLabel)]
-    assert texts.count("Not set") >= 1
+    # empty fields collapse into one "Not set: GSTIN, ..." line per card (P-9, the mockup's .notset)
+    notset = [t for t in texts if "Not set:" in t]
+    assert notset and "GSTIN" in notset[0]
     assert "Copy GSTIN" not in [b.toolTip() for b in win.scroll_widget.findChildren(QPushButton)]
     assert [b for b in win.scroll_widget.findChildren(QPushButton) if b.toolTip() == "Show / Hide Password"] == []
 

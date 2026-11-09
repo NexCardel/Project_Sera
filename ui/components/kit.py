@@ -302,10 +302,13 @@ def _action_qss(variant, sm, icon_only, chevron=False):
     # room on the right for the menu chevron (paint in LabelledAction.paintEvent)
     pad_r = pad + K["gap_chip"] + K["d_icon_s"] if chevron else pad
     size = T["f_s"] if sm else K["f_btn"]
+    # The theme guard: the dialog sheet's min-height 30 must not leak in, but "min-height: 0" is
+    # applied at polish time and undid setFixedHeight; pin the real height here instead.
+    h = K["h_sm"] if sm else T["h_ctl"]
     return (
         f"QPushButton {{ background: {bg}; border: 1px solid {bd}; border-radius: {T['r_m']}px;"
         f" color: {tx}; font-size: {size}px; font-weight: 600; padding: 0 {pad_r}px 0 {pad}px;"
-        f" min-height: 0px; max-height: {T['h_ctl']}px; }}"
+        f" min-height: {h}px; max-height: {h}px; }}"
         f"QPushButton::menu-indicator {{ image: none; width: 0px; }}"
         f"QPushButton:hover, QPushButton:pressed {{ background: {hbg}; border-color: {hbd}; }}"
         f"QPushButton:focus {{ border: 2px solid {T['mint']}; padding: 0 {max(pad - 1, 0)}px; }}"
@@ -446,11 +449,12 @@ _ICON_TONES = {
 
 
 @lru_cache(maxsize=None)
-def _icon_qss(variant):
+def _icon_qss(variant, sm=False):
     bg, bd, _ic, hbg, hbd = _ICON_TONES[variant]
+    side = K["h_ibtn_sm"] if sm else T["h_ctl"]
     return (
         f"QToolButton {{ background: {bg}; border: 1px solid {bd}; border-radius: {T['r_m']}px;"
-        f" padding: 0; min-height: 0px; max-height: {T['h_ctl']}px; }}"
+        f" padding: 0; min-height: {side}px; max-height: {side}px; }}"
         f"QToolButton:hover, QToolButton:pressed {{ background: {hbg}; border-color: {hbd}; }}"
         f"QToolButton:focus {{ border: 2px solid {T['mint']}; }}"
         f"QToolButton:disabled {{ background: {_rgba(bg, _DISABLED_ALPHA)};"
@@ -475,7 +479,7 @@ class IconButton(_ReasonMixin, QToolButton):
         self.setCursor(Qt.PointingHandCursor)
         self.setToolTip(tooltip)
         self.setAccessibleName(tooltip)
-        self.setStyleSheet(_icon_qss(variant))
+        self.setStyleSheet(_icon_qss(variant, sm))
         icon = _icon(icon, _ICON_TONES[variant][2])
         self.setIcon(icon if icon is not None else QIcon())
 
@@ -715,6 +719,8 @@ class KeyValueGrid(QWidget):
         self._grid.setContentsMargins(K["kv_pad_h"], K["kv_pad_top"], K["kv_pad_h"], 0)
         self._grid.setHorizontalSpacing(K["gap_kv_col"])
         self._grid.setVerticalSpacing(0)
+        self._grid.setColumnStretch(0, 1)
+        self._grid.setColumnStretch(1, 1)
         outer.addWidget(self._body)
         self._notset = QLabel(self)
         self._notset.setTextFormat(Qt.RichText)
@@ -725,6 +731,17 @@ class KeyValueGrid(QWidget):
         self._cells = []
 
     def add_field(self, label, value, *, mono=False, actions=()):
+        val = _ElideLabel(str(value))
+        buttons = []
+        for icon, tip, slot in actions:
+            b = IconButton(icon, tip, variant="plain", sm=True)
+            b.clicked.connect(slot)
+            buttons.append(b)
+        return self.add_widget_field(label, val, mono=mono, buttons=buttons)
+
+    def add_widget_field(self, label, value_widget, *, mono=False, buttons=()):
+        """Like add_field, but the caller owns the value label and the buttons (a click-to-copy
+        label, a checkable eye): the grid only places them and sets the value font."""
         cell = _KVCell(self._body)
         lay = QVBoxLayout(cell)
         lay.setContentsMargins(0, 0, 0, K["pad_kv_row"])
@@ -735,24 +752,45 @@ class KeyValueGrid(QWidget):
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(T["s_1"])
-        val = _ElideLabel(str(value), cell)
-        font = _px_font(val, K["f_kv_mono"] if mono else K["f_kv_value"])
+        value_widget.setParent(cell)
+        font = _px_font(value_widget, K["f_kv_mono"] if mono else K["f_kv_value"])
         if mono:
             font.setFamilies(["Consolas", "Cascadia Mono"])
             font.setStyleHint(QFont.Monospace)
-        val.setFont(font)
-        row.addWidget(val, 1)
-        for icon, tip, slot in actions:
-            b = IconButton(icon, tip, cell, variant="plain", sm=True)
-            b.clicked.connect(slot)
-            row.addWidget(b)
+        value_widget.setFont(font)
+        if isinstance(value_widget, QLabel) and not isinstance(value_widget, _ElideLabel):
+            value_widget.setWordWrap(True)          # long addresses wrap instead of widening the panel
+            value_widget.setMinimumWidth(0)
+        row.addWidget(value_widget, 1)
+        for b in buttons:
+            b.setParent(cell)
+            row.addWidget(b, 0, Qt.AlignTop)
         lay.addWidget(lab)
         lay.addLayout(row)
-        index = len(self._cells)
-        self._grid.addWidget(cell, index // 2, index % 2)
         self._cells.append(cell)
+        self._place(cell, len(self._cells) - 1)
         self._refresh_rules()
         return cell
+
+    def _columns(self):
+        return 1 if 0 < self.width() < K["w_kv_one_col"] else 2
+
+    def _place(self, cell, index):
+        cols = getattr(self, "_laid_cols", 2)
+        self._grid.addWidget(cell, index // cols, index % cols)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        cols = self._columns()
+        if cols != getattr(self, "_laid_cols", 2):
+            self._laid_cols = cols
+            for cell in self._cells:
+                self._grid.removeWidget(cell)
+            for i, cell in enumerate(self._cells):
+                self._place(cell, i)
+            for c in range(2):
+                self._grid.setColumnStretch(c, 1 if c < cols else 0)
+            self._refresh_rules()
 
     def clear(self):
         """Removes every field and the Not set line."""
@@ -763,9 +801,10 @@ class KeyValueGrid(QWidget):
         self._notset.setVisible(False)
 
     def _refresh_rules(self):
-        rows = (len(self._cells) + 1) // 2
+        cols = getattr(self, "_laid_cols", 2)
+        rows = (len(self._cells) + cols - 1) // cols
         for i, cell in enumerate(self._cells):
-            cell.set_rule(i // 2 < rows - 1)
+            cell.set_rule(i // cols < rows - 1)
 
     def set_not_set(self, labels):
         labels = [str(x) for x in labels if x]
@@ -3469,6 +3508,93 @@ class IconTile(QLabel):
             self.setPixmap(ic.pixmap(K["d_icon_l"], K["d_icon_l"]))
 
 
+class ServiceIcon(QLabel):
+    """The client panel's service tile (the mockup's .svc .ic): 28 px, radius 7, svc_ic_bg ground, a 16 px
+    icon in the portal's own colour."""
+
+    def __init__(self, icon, color, parent=None):
+        super().__init__(parent)
+        side = K["d_svc_ic"]
+        self.setFixedSize(side, side)
+        self.setAlignment(Qt.AlignCenter)
+        self.setStyleSheet(f"QLabel {{ background: {K['svc_ic_bg']}; border: none;"
+                           f" border-radius: {K['r_svc_ic']}px; }}")
+        ic = _icon(icon, color)
+        if ic is not None and not ic.isNull():
+            self.setPixmap(ic.pixmap(K["d_icon"], K["d_icon"]))
+
+
+class ListRow(QFrame):
+    """A full-width card row with a hairline above it (none on the first): the mockup's .svc rows,
+    padding 9 16, gap 10. layout() is its QHBoxLayout."""
+
+    def __init__(self, parent=None, *, first=False):
+        super().__init__(parent)
+        self.setObjectName("KitListRow")
+        top = "none" if first else f"1px solid {K['row_line']}"
+        self.setStyleSheet(f"QFrame#KitListRow {{ background: transparent; border: none; border-top: {top}; }}")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(T["s_4"], 9, T["s_4"], 9)
+        lay.setSpacing(10)
+
+
+class RowTitle(QLabel):
+    """The 13 px semibold name in a ListRow; may shrink (elided by the layout) on a narrow panel."""
+
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self.setFont(_px_font(self, 13, QFont.DemiBold))
+        self.setMinimumWidth(0)
+        self.setStyleSheet("QLabel { background: transparent; }")   # the theme's QLabel ground showed as a strip
+
+
+_HINT_TONES = {None: "muted", "muted": "muted", "emerald": "mint", "amber": "warn", "red": "warn"}
+
+
+class Hint(QLabel):
+    """A muted 11 px line for a card header (the mockup's "✓ Saved", "ⓘ Alt+1…9"). set_text / set_tone
+    keep the Pill API, so a status Pill can be swapped for a Hint."""
+
+    def __init__(self, text="", tone=None, parent=None):
+        super().__init__(text, parent)
+        self.setFont(_px_font(self, K["f_hint"]))
+        self.set_tone(tone)
+
+    def set_text(self, text):
+        self.setText(text)
+
+    def set_tone(self, tone):
+        key = _HINT_TONES.get(tone, "muted")
+        color = T.get(key) or T["muted"]
+        self.setStyleSheet(f"QLabel {{ color: {color}; background: transparent; }}")
+
+
+# Words that stay upper case when a schema label is sentence-cased (owner decision 5).
+_LABEL_ACRONYMS = frozenset({
+    "GSTIN", "GST", "PAN", "TAN", "DOB", "ID", "IT", "TDS", "UID", "CIN", "DIN", "LLP", "EPF", "ESI",
+    "ESIC", "IEC", "MSME", "PT", "OTP", "URL", "IFSC", "UAN", "PF", "MCA", "ROC", "ITR", "EVC", "DSC",
+    "TRACES", "HUF", "LLPIN", "UDYAM", "CA", "OK",
+})
+
+
+def sentence_label(text):
+    """NAME OF COMPANY -> Name of company; GSTIN, PAN, TAN and DOB (and other acronyms) stay. Labels
+    of five letters or fewer, and labels that are not all upper case, are shown as stored except that
+    underscores read as spaces (GST_Password -> GST Password)."""
+    raw = str(text or "")
+    letters = [c for c in raw if c.isalpha()]
+    if len(letters) <= 5 or raw != raw.upper():
+        return raw.replace("_", " ")
+    out = []
+    for i, word in enumerate(raw.replace("_", " ").split(" ")):
+        core = word.strip(".,:()/-")
+        if core.upper() in _LABEL_ACRONYMS:
+            out.append(word)
+        else:
+            out.append(word.capitalize() if i == 0 else word.lower())
+    return " ".join(out)
+
+
 @lru_cache(maxsize=None)
 def _dialog_qss(full):
     border = "none" if full else f"1px solid {K['dlg_line']}"
@@ -4211,7 +4337,8 @@ class NavItem(QPushButton):
         self._inset = int(edge_inset)
         self.setFixedHeight(K["h_nav"])
         # paints itself; the app sheet's QDialog QPushButton min-height would make it 40 px in a dialog
-        self.setStyleSheet("QPushButton { min-height: 0px; padding: 0px; border: none; background: transparent; }")
+        self.setStyleSheet(f"QPushButton {{ min-height: {K['h_nav']}px; max-height: {K['h_nav']}px; padding: 0px;"
+                           " border: none; background: transparent; }")
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.TabFocus)

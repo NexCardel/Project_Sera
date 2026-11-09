@@ -345,6 +345,8 @@ KIT = {
     "r_svc_ic": 7,
     "f_sub": 12,
     "d_ibtn_kv": 24,
+    "w_kv_one_col": 400,   # KeyValueGrid drops to one column below this width (narrow panel)
+    "f_hint": 11,
     "idchip_r": 8,
     "pad_idchip_h": 9,
     "pad_idchip_v": 3,
