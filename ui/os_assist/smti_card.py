@@ -7,12 +7,20 @@ SMTI Manual Assist as a docked desktop card (blueprint §4.4), the same look as 
 - Username: the worker finds the box (locate.find_fields) and fills it (fill.fill). Filled ->
   "✓  Username Injected" for 2 s; no box or not filled -> copied (not secret) and
   "📋  Copied Username (Ctrl+V)" for 2.5 s.
-- Password: filled -> the card goes; otherwise a secure copy (cleared after the clipboard-clear
-  seconds) and "📋  Copied Password (Ctrl+V)", then the card goes after 1.2 s.
+- Password: filled -> "✓  Password Injected", and the card goes once the late check passes;
+  otherwise a secure copy (cleared after the clipboard-clear seconds) and
+  "📋  Copied Password (Ctrl+V)", then the card goes after 1.2 s.
+- A press shows its result after fill's first check (about 0.15 s), not after the full 1.15 s:
+  the 1.0 s re-check runs on the worker afterwards (fill late_check="background"). If the page
+  drops the value by then, the card falls back to the copy, as if the fill had failed.
 - Flutter mode (TRACES host, or a page with no visible Edit until one is focused): the buttons are
-  hidden and two step cards shown; fill.FocusWatcher is polled on the worker every 200 ms and the
-  user ID, then the password, is typed into each new box staff click (§4.3). Nothing is clicked,
-  tabbed or submitted.
+  hidden and two step cards shown; fill.FocusWatcher is asked on the worker whenever the browser
+  reports a focus move (WinEvent, at once) and polled as a safety net (400 ms with events, 200 ms
+  without), and the user ID, then the password, is typed into each new box staff click (§4.3).
+  Nothing is clicked, tabbed or submitted.
+- Speed: the boxes are found once when the card shows (locate.warm_fields, which also wakes the
+  browser's accessibility tree) and reused by a press while still on the page; a press jumps the
+  worker's queue (worker.submit_urgent).
 
 The user ID and password live only in the base card's secrets and go with dismiss() (rule 4).
 All UIA work runs on the OS Assist worker; results come back to the Qt thread by a signal.
@@ -29,14 +37,16 @@ TIMEOUT_MS = 30000                    # the extension's SMTI duration
 INJECTED_MS, COPIED_USER_MS = 2000, 2500
 COPIED_PASS_DISMISS_MS = 1200
 FLUTTER_DONE_DISMISS_MS = 400
-FOCUS_POLL_MS = 200                   # fill.FocusWatcher.POLL_S
+FOCUS_POLL_MS = 200                   # fill.FocusWatcher.POLL_S (no window events)
+FOCUS_POLL_EVENTS_MS = 400            # safety net when focus events come from the hub
+FOCUS_RECHECK_MS = 80                 # after a focus event: once more, in case UIA lags the event
 FLUTTER_PROBE_MS = 1500               # look for boxes this long after the card shows ...
 FLUTTER_PROBE_TRIES = 3               # ... again while the page has no Document yet
 FLUTTER_HOSTS = ("tdscpc.gov.in", "traces")
 
 USER_TEXT, PASS_TEXT = "👤  Username", "🔑  Password"
 USER_DONE, USER_COPIED = "✓  Username Injected", "📋  Copied Username (Ctrl+V)"
-PASS_COPIED = "📋  Copied Password (Ctrl+V)"
+PASS_DONE, PASS_COPIED = "✓  Password Injected", "📋  Copied Password (Ctrl+V)"
 STEP1_TITLE, STEP1_DESC = ("👉 Step 1: Click the Username box",
                            "Click or tap inside the User ID box on the page. Sera will type it automatically!")
 STEP2_TITLE, STEP2_DESC = ("Step 2: Click the Password box",
@@ -55,13 +65,22 @@ def is_flutter_service(service) -> bool:
 
 
 # ----------------------------------------------------------------------------- worker jobs
-def _fill_job(hwnd: int, service, kind: str, text: str, user_sel, pass_sel) -> str:
+def _fill_job(hwnd: int, service, kind: str, text: str, user_sel, pass_sel):
+    """The outcome, or ("filled", late) where late is the Future of fill's 1.0 s re-check."""
     from core.os_assist import fill, locate
-    user_el, pass_el = locate.find_fields(hwnd, user_sel, pass_sel)
+    user_el, pass_el = locate.find_fields_cached(hwnd, user_sel, pass_sel, want=kind)
     el = user_el if kind == "user" else pass_el
     if el is None:
         return "nobox"
-    return fill.fill(hwnd, el, text, kind == "pass", service).outcome
+    res = fill.fill(hwnd, el, text, kind == "pass", service, late_check="background")
+    if res.outcome == "filled" and res.late is not None:
+        return ("filled", res.late)
+    return res.outcome
+
+
+def _warm_job(hwnd: int, user_sel, pass_sel) -> bool:
+    from core.os_assist import locate
+    return locate.warm_fields(hwnd, user_sel, pass_sel)
 
 
 def _edit_count_job(hwnd: int) -> int:
@@ -83,7 +102,11 @@ class WorkerFiller:
 
     def fill(self, hwnd: int, service, kind: str, text: str, user_sel, pass_sel):
         from core.os_assist import worker
-        return worker.submit(_fill_job, hwnd, service, kind, text, user_sel, pass_sel)
+        return worker.submit_urgent(_fill_job, hwnd, service, kind, text, user_sel, pass_sel)
+
+    def warm(self, hwnd: int, user_sel, pass_sel):
+        from core.os_assist import worker
+        return worker.submit(_warm_job, hwnd, user_sel, pass_sel)
 
     def edit_count(self, hwnd: int):
         from core.os_assist import worker
@@ -154,6 +177,7 @@ class SmtiCard(DockCard):
     """The OS SMTI card. `attach(browser_hwnd, service)` then `present()` (the launcher's job)."""
 
     _deliver = Signal(object)         # a callable run on the Qt thread (worker results)
+    _focus_event = Signal()           # from the WinEvent hub thread: a box in the browser took focus
 
     def __init__(self, service, user_id: str, password: str, client_id=None, client_name: str = "",
                  clear_seconds: Optional[int] = 30, timeout_ms: int = TIMEOUT_MS,
@@ -162,6 +186,8 @@ class SmtiCard(DockCard):
                  sck_handler: Optional[Callable[[dict], None]] = None, **kw):
         super().__init__(timeout_ms=timeout_ms, **kw)
         self._deliver.connect(self._run_delivered)          # queued: emitted on the worker thread
+        self._focus_event.connect(self._on_focus_event, Qt.QueuedConnection)
+        self._focus_again = False                # a focus event came while a focus job ran
         self.service = service
         self.hold_secret("user", user_id or "")
         self.hold_secret("pass", password or "")
@@ -317,21 +343,53 @@ class SmtiCard(DockCard):
         self._when_done(job, lambda outcome: self._pressed(kind, outcome))
 
     def _pressed(self, kind: str, outcome) -> None:
-        self._busy[kind] = False
+        late = None
+        if isinstance(outcome, tuple):
+            outcome, late = outcome
+        if late is None or self.is_dismissed:
+            self._busy[kind] = False                  # else busy until the late check is in
         if self.is_dismissed:
+            if late is not None:
+                late.cancel()
             return
         if kind == "user":
             if outcome == "filled":
                 self._set_btn(self.user_btn, "done", USER_DONE)
                 self._user_revert.start(INJECTED_MS)
             else:
-                self._copy("user")
-                self._set_btn(self.user_btn, "done", USER_COPIED)
-                self._user_revert.start(COPIED_USER_MS)
-            return
-        if outcome == "filled":
+                self._user_copied()
+        elif outcome == "filled" and late is None:
             self.dismiss("filled")
             return
+        elif outcome == "filled":
+            self._set_btn(self.pass_btn, "done", PASS_DONE)
+        else:
+            self._pass_copied()
+            return
+        if late is not None:
+            self._when_done(late, lambda verdict: self._late_checked(kind, verdict))
+
+    def _late_checked(self, kind: str, verdict) -> None:
+        """fill's 1.0 s re-check: "" = the value stayed. Anything else = treat it as not filled."""
+        self._busy[kind] = False
+        if self.is_dismissed:
+            return
+        ok = verdict == ""
+        if kind == "user":
+            if not ok:
+                self._user_copied()
+            return
+        if ok:
+            self.dismiss("filled")
+        else:
+            self._pass_copied()
+
+    def _user_copied(self) -> None:
+        self._copy("user")
+        self._set_btn(self.user_btn, "done", USER_COPIED)
+        self._user_revert.start(COPIED_USER_MS)
+
+    def _pass_copied(self) -> None:
         self._copy("pass")
         self._set_btn(self.pass_btn, "done", PASS_COPIED)
         QTimer.singleShot(COPIED_PASS_DISMISS_MS, lambda: self.dismiss("copied"))
@@ -349,8 +407,17 @@ class SmtiCard(DockCard):
     # -- Flutter steps ---------------------------------------------------------------------------
     def present(self) -> None:
         super().present()
+        if self.events_active:
+            self._focus_poll.setInterval(FOCUS_POLL_EVENTS_MS)
         if self.flutter and not self.is_dismissed:
             self._focus_poll.start()
+        if not self.flutter and not self.is_dismissed and self.browser_hwnd:
+            warm = getattr(self._filler, "warm", None)
+            if warm is not None:
+                try:
+                    self._when_done(warm(self.browser_hwnd, self._user_sel, self._pass_sel), lambda _r: None)
+                except Exception:
+                    pass
         if self._flutter_auto and not self.is_dismissed:
             QTimer.singleShot(FLUTTER_PROBE_MS, self._probe_flutter)
 
@@ -383,11 +450,25 @@ class SmtiCard(DockCard):
         if self._presented:                      # else present() starts it
             self._focus_poll.start()
 
+    def _focus_handler(self):
+        return self._focus_event.emit             # hub thread -> queued to the Qt thread
+
+    def _on_focus_event(self) -> None:
+        if not self.flutter or self.is_dismissed or self._step >= 2:
+            return
+        if self._focus_job is not None:
+            self._focus_again = True              # looked at again as soon as that job ends
+            return
+        self._poll_focus()
+        QTimer.singleShot(FOCUS_RECHECK_MS, self._poll_focus)
+
     def _poll_focus(self) -> None:
         if self.is_dismissed or self._step >= 2:
             self._focus_poll.stop()
             return
-        if self._focus_job is not None or self.hidden_reason or not self.browser_hwnd:
+        if self._focus_job is not None:
+            return
+        if self.hidden_reason or not self.browser_hwnd:
             return
         kind = "user" if self._step == 0 else "pass"
         try:
@@ -400,7 +481,12 @@ class SmtiCard(DockCard):
 
     def _stepped(self, kind: str, outcome) -> None:
         self._focus_job = None
-        if self.is_dismissed or outcome is None or self._step != (0 if kind == "user" else 1):
+        again, self._focus_again = self._focus_again, False
+        if self.is_dismissed or self._step != (0 if kind == "user" else 1):
+            return
+        if outcome is None:
+            if again:
+                self._poll_focus()
             return
         filled = outcome == "filled"
         if not filled:

@@ -16,6 +16,11 @@ before the write), reports with handle_fill_result and shows the chip. One fill 
 service (`busy`, hwnd in place of tab:frame). An OS SMTI/MECP card open on a window keeps SCA quiet
 there (assist lock).
 
+Event-driven while armed (core/os_assist/win_events): a window coming to the front, and in the
+browser in front a title change, a focus move or a box's value changing (the id being typed or
+pasted), probe at once instead of waiting for the next tick; the 0.6 s tick stays as the safety
+net. The hooks exist only while an arm is live (no arm -> no hooks, no UIA).
+
 The extension acts on an `input` event; a probe sees a state, so a box is acted on when its match
 appears (or the arm is new), not on every tick - a refused or failed fill is not retried until the
 id is typed again. The password lives only in the pending fill (memory) and is dropped on fill,
@@ -26,7 +31,7 @@ import ctypes
 import time
 from typing import Callable, Dict, List, Optional
 
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 
 import sca_protocol
 from core.os_assist import fill, locate, worker
@@ -228,13 +233,18 @@ class ScaEngine(QObject):
     """Lives on the Qt thread (handle_password_request reads the vault there); UIA runs on the worker."""
 
     _deliver = Signal(object)
+    _hub_event = Signal(bool)         # from the WinEvent hub thread; True = the foreground changed
 
     def __init__(self, watcher, submit: Callable = None, probe: Callable = None, filler: Callable = None,
                  host_of: Callable = None, card_factory: Callable = None, chip_factory: Callable = None,
-                 locked: Callable[[], set] = None, now: Callable[[], float] = None, parent=None):
+                 locked: Callable[[], set] = None, now: Callable[[], float] = None, parent=None,
+                 events=None):
+        """events: the WinEvent hub; default win_events.default() in the app, none when a test
+        injects `submit` (pass one to test the events)."""
         super().__init__(parent)
         self.watcher = watcher
         self._submit = submit or worker.submit
+        self._submit_now = submit or worker.submit_urgent    # the click path jumps the probe queue
         self._probe = probe or probe_job
         self._fill = filler or fill_job
         self._host_of = host_of or host_job
@@ -254,6 +264,17 @@ class ScaEngine(QObject):
         self._timer = QTimer(self)
         self._timer.setInterval(TICK_MS)
         self._timer.timeout.connect(self.tick)
+        if events is None and submit is None:
+            from core.os_assist import win_events
+            events = win_events.default()
+        self._events = events
+        self._fg_token = None            # the global foreground hook
+        self._pid_token = None           # focus / title / value hooks of the browser in front
+        self._pid = 0
+        self._event_pending = False      # a queued _hub_event not run yet (coalesces typing)
+        self._fg_pending = False
+        self._again = False              # an event came while a probe ran: probe again after it
+        self._hub_event.connect(self._on_hub_event, Qt.QueuedConnection)
 
     # -- arm ------------------------------------------------------------------------------------
     @property
@@ -270,6 +291,7 @@ class ScaEngine(QObject):
         self.arm_data = dict(arm, fills=0)
         self.allowed = list(allowed_domains or [])
         self._timer.start()
+        self._start_events()
         return True
 
     def disarm(self, why: str = "IDLE") -> None:
@@ -278,6 +300,7 @@ class ScaEngine(QObject):
         self._drop()
         self.arm_data = None
         self._timer.stop()
+        self._stop_events()
 
     def _drop(self) -> None:
         self.busy.clear()
@@ -313,6 +336,81 @@ class ScaEngine(QObject):
             self._deliver.emit(lambda: fn(result))
         fut.add_done_callback(done)
 
+    # -- window events --------------------------------------------------------------------------
+    def _start_events(self) -> None:
+        if self._events is None or self._fg_token is not None:
+            return
+        from core.os_assist import win_events as we
+        try:
+            self._fg_token = self._events.watch([(we.EVENT_SYSTEM_FOREGROUND, we.EVENT_SYSTEM_FOREGROUND)],
+                                                0, self._hub_cb)
+        except Exception:
+            self._fg_token = None
+        self._rehook_pid()
+
+    def _stop_events(self) -> None:
+        for token in (self._fg_token, self._pid_token):
+            if token is not None and self._events is not None:
+                try:
+                    self._events.unwatch(token)
+                except Exception:
+                    pass
+        self._fg_token = self._pid_token = None
+        self._pid = 0
+        self._again = False
+
+    def _rehook_pid(self) -> None:
+        """Hook the browser in front (focus, title, value). Qt thread: watch() waits on the hub."""
+        if self._events is None or self.arm_data is None:
+            return
+        from core.os_assist import win_events as we
+        try:
+            fg = int(ctypes.windll.user32.GetForegroundWindow() or 0)
+            pid = we.window_pid(fg) if fg and locate._is_browser(fg) else 0
+        except Exception:
+            pid = 0
+        if pid == self._pid:
+            return
+        if self._pid_token is not None:
+            self._events.unwatch(self._pid_token)
+            self._pid_token = None
+        self._pid = pid
+        if pid:
+            try:
+                self._pid_token = self._events.watch(
+                    [(we.EVENT_OBJECT_FOCUS, we.EVENT_OBJECT_FOCUS),
+                     (we.EVENT_OBJECT_NAMECHANGE, we.EVENT_OBJECT_NAMECHANGE),
+                     (we.EVENT_OBJECT_VALUECHANGE, we.EVENT_OBJECT_VALUECHANGE)], pid, self._hub_cb)
+            except Exception:
+                self._pid_token = None
+
+    def _hub_cb(self, event, _hwnd, _id_object, _id_child) -> None:
+        """Hub thread: only flags and one queued signal."""
+        from core.os_assist import win_events as we
+        if event == we.EVENT_SYSTEM_FOREGROUND:
+            self._fg_pending = True
+        if not self._event_pending:
+            self._event_pending = True
+            self._hub_event.emit(True)
+
+    def _on_hub_event(self, _flag: bool) -> None:
+        self._event_pending = False
+        if self.arm_data is None:
+            return
+        if self._fg_pending:
+            self._fg_pending = False
+            self._rehook_pid()
+        self.poke()
+
+    def poke(self) -> None:
+        """Probe now (an event said something changed); after the running probe if one is."""
+        if self.arm_data is None:
+            return
+        if self._probe_job is not None:
+            self._again = True
+            return
+        self.tick()
+
     # -- tick -----------------------------------------------------------------------------------
     def tick(self) -> None:
         a = self._live()
@@ -321,8 +419,8 @@ class ScaEngine(QObject):
         arm_id = a["arm_id"]
         for key, p in list(self._pending.items()):
             self._tick_fill(key, p)
-        if self.arm_data is not a or self._probe_job is not None:
-            return
+        if self.arm_data is not a or self._probe_job is not None or self._pending:
+            return                                     # a granted fill owns the worker
         job = self._probe_job = self._submit(self._probe, list(a.get("services") or []), list(self.allowed),
                                              list(a.get("candidate_uids") or []))
         self._later(job, lambda r, j=job: self._on_probe(arm_id, j, r))
@@ -330,6 +428,9 @@ class ScaEngine(QObject):
     def _on_probe(self, arm_id, job, result) -> None:
         if self._probe_job is job:
             self._probe_job = None
+            if self._again:
+                self._again = False
+                QTimer.singleShot(0, self.poke)       # what changed during it is looked at next
         a = self.arm_data
         if a is None or a["arm_id"] != arm_id or not result:
             return
@@ -419,7 +520,7 @@ class ScaEngine(QObject):
             self.busy.add(key)
             self._request(b, service, hwnd, host, b.get("matched_uid") or "", key, True)
 
-        self._later(self._submit(self._host_of, hwnd), with_host)
+        self._later(self._submit_now(self._host_of, hwnd), with_host)
         return "host-check"
 
     # -- password ---------------------------------------------------------------------------------
@@ -449,7 +550,7 @@ class ScaEngine(QObject):
         if self._now() > p["deadline"]:
             self._end_fill(key, p, "failed", "no visible password field")
             return
-        job = p["job"] = self._submit(self._fill, p["hwnd"], _card_service(p["service"]), p["password"], p["selector"])
+        job = p["job"] = self._submit_now(self._fill, p["hwnd"], _card_service(p["service"]), p["password"], p["selector"])
         self._later(job, lambda r: self._on_fill(key, p, r))
 
     def _on_fill(self, key: str, p: dict, result) -> None:

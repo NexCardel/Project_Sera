@@ -267,3 +267,76 @@ def test_focus_watcher_reports_each_edit_once_and_skips_address_bar(env):
     kb.front = 9
     env.uia.focus = Box()
     assert w.poll() is None                      # browser not in front
+
+
+# ----------------------------------------------------------------------------- late check in the background
+class LaterKeys(Keys):
+    """A keyboard whose later() runs nothing until the test says so (no real timer or worker)."""
+
+    def __init__(self, box=None, **kw):
+        super().__init__(box, **kw)
+        self.slept, self.queued = [], []
+
+    def sleep(self, s):
+        self.slept.append(s)
+
+    def later(self, seconds, fn):
+        from concurrent.futures import Future
+        fut = Future()
+        self.queued.append((seconds, fn, fut))
+        return fut
+
+    def run_later(self):
+        for _s, fn, fut in self.queued:
+            fut.set_result(fn())
+
+
+def test_background_returns_after_the_first_check(env):
+    box = Box("ok")
+    kb = LaterKeys(box)
+    res = fill.fill(HWND, box, "AB12", False, SERVICE, keyboard=kb, late_check="background")
+    assert (res.outcome, res.method) == ("filled", "setvalue")
+    assert kb.slept == [0.15]                                     # not the 1.0 s check
+    assert [round(s, 2) for s, _f, _u in kb.queued] == [0.85]     # the re-check, 1.0 s after the write
+    assert not res.late.done()
+    kb.run_later()
+    assert res.late.result() == ""
+
+
+def test_background_late_check_reports_a_value_the_page_dropped(env):
+    box = Box("ok")
+    kb = LaterKeys(box)
+    res = fill.fill(HWND, box, "AB12", False, SERVICE, keyboard=kb, late_check="background")
+    assert res.outcome == "filled"
+    box.value = ""                                                # the page reset the box
+    kb.run_later()
+    assert res.late.result().startswith("mismatch") and "(at 1.0s)" in res.late.result()
+
+
+def test_background_late_check_keeps_only_the_password_length(env):
+    box = Box("ok", password=True)
+    kb = LaterKeys(box)
+    res = fill.fill(HWND, box, "s3cret-fake", True, SERVICE, keyboard=kb, late_check="background")
+    assert res.outcome == "filled"
+    _s, fn, _f = kb.queued[0]
+    held = [c.cell_contents for c in (fn.__closure__ or ()) if isinstance(c.cell_contents, str)]
+    assert "s3cret-fake" not in held
+    kb.run_later()
+    assert res.late.result() == ""
+
+
+def test_background_first_check_failure_still_falls_back_to_keys(env):
+    box = Box("ignored")
+    env.uia.focus = box
+    kb = LaterKeys(box)
+    res = fill.fill(HWND, box, "AB12", False, SERVICE, keyboard=kb, late_check="background")
+    assert (res.outcome, res.method) == ("filled", "keys")
+    assert res.late is not None and kb.typed == 1
+
+
+def test_wait_mode_is_unchanged(env):
+    box = Box("ok")
+    kb = LaterKeys(box)
+    res = fill.fill(HWND, box, "AB12", False, SERVICE, keyboard=kb)
+    assert res.outcome == "filled" and res.late is None
+    assert kb.slept == [0.15, 1.0] and kb.queued == []

@@ -5,12 +5,15 @@ Qt thread or SGT's shared reader (core/vsdc/vsdc_uia_text). A UIA element a job 
 opaque handle to the caller: hand it back into another job, never call it on another thread.
 """
 
+import itertools
 import queue
 import threading
 from concurrent.futures import Future
 from typing import Any, Callable, Dict, Optional
 
 CT_EDIT, CT_DOCUMENT = 50004, 50030
+
+PRIO_URGENT, PRIO_NORMAL, PRIO_STOP = 0, 1, 9
 
 _local = threading.local()
 
@@ -54,21 +57,30 @@ class Uia:
 
 class Worker:
     def __init__(self) -> None:
-        self._q: "queue.Queue[Optional[tuple]]" = queue.Queue()
+        self._q: "queue.PriorityQueue" = queue.PriorityQueue()
+        self._seq = itertools.count()
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
 
     def submit(self, fn: Callable, *args) -> Future:
+        return self._put(PRIO_NORMAL, fn, args)
+
+    def submit_urgent(self, fn: Callable, *args) -> Future:
+        """Runs before any job still waiting (the one running is not interrupted): a click the
+        user is waiting on must not queue behind a background page probe."""
+        return self._put(PRIO_URGENT, fn, args)
+
+    def _put(self, prio: int, fn: Callable, args: tuple) -> Future:
         fut: Future = Future()
         with self._lock:
             if self._thread is None or not self._thread.is_alive():
                 # Each thread gets its own queue, so a stop() racing a submit() can never leave
                 # two worker threads draining one queue.
-                self._q = queue.Queue()
+                self._q = queue.PriorityQueue()
                 self._thread = threading.Thread(target=self._run, args=(self._q,), name="os-assist-uia",
                                                 daemon=True)
                 self._thread.start()
-            self._q.put((fut, fn, args))
+            self._q.put((prio, next(self._seq), (fut, fn, args)))
         return fut
 
     def stop(self) -> None:
@@ -76,14 +88,14 @@ class Worker:
             thread, q = self._thread, self._q
             self._thread = None
         if thread is not None and thread.is_alive():
-            q.put(None)
+            q.put((PRIO_STOP, next(self._seq), None))
             thread.join(timeout=2.0)
 
-    def _run(self, q: "queue.Queue[Optional[tuple]]") -> None:
+    def _run(self, q: "queue.PriorityQueue") -> None:
         _local.uia = None
         _local.is_worker = True
         while True:
-            job = q.get()
+            job = q.get()[2]
             if job is None:
                 return
             fut, fn, args = job
@@ -116,6 +128,10 @@ _default = Worker()
 
 def submit(fn: Callable, *args) -> Future:
     return _default.submit(fn, *args)
+
+
+def submit_urgent(fn: Callable, *args) -> Future:
+    return _default.submit_urgent(fn, *args)
 
 
 def stop() -> None:

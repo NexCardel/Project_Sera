@@ -164,3 +164,18 @@ def test_worker_runs_on_own_thread_and_stops():
     worker.stop()
     assert worker.submit(lambda: 7).result(timeout=5) == 7
     worker.stop()
+
+
+def test_worker_urgent_job_jumps_the_queue():
+    import threading
+    from core.os_assist import worker
+    w = worker.Worker()
+    gate, order = threading.Event(), []
+    first = w.submit(gate.wait, 5)
+    slow = w.submit(lambda: order.append("normal"))
+    fast = w.submit_urgent(lambda: order.append("urgent"))
+    gate.set()
+    for f in (first, slow, fast):
+        f.result(timeout=5)
+    w.stop()
+    assert order == ["urgent", "normal"]

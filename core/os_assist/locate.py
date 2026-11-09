@@ -184,3 +184,50 @@ def find_fields(hwnd: int, username_selector: Optional[str] = None,
             user_i = texts[0] if texts else None
     return (seen[user_i][0] if user_i is not None else None,
             seen[pass_i][0] if pass_i is not None else None)
+
+
+# ----------------------------------------------------------------------------- found-box cache
+# (hwnd, user selector, pass selector) -> (user_el, pass_el, found at). Worker thread only, like
+# every UIA element. Found once when a card shows (warm_fields), so a button press goes straight to
+# the fill instead of walking the page again. A cached box is used only while it still reads as
+# visible (a box of a page that went away reads size 0); anything else -> a fresh find.
+FIELD_CACHE_S = 120.0
+_field_cache: dict = {}
+
+
+def _still_there(el) -> bool:
+    return el is not None and visible(describe(el))
+
+
+def find_fields_cached(hwnd: int, username_selector: Optional[str] = None,
+                       password_selector: Optional[str] = None, want: str = "") -> Tuple[Any, Any]:
+    """find_fields, from the cache when the box asked for (`want` "user" / "pass"; "" = both)
+    is cached and still there."""
+    import time
+    key = (int(hwnd or 0), username_selector or "", password_selector or "")
+    hit = _field_cache.get(key)
+    if hit is not None and time.monotonic() - hit[2] < FIELD_CACHE_S:
+        user_el, pass_el = hit[0], hit[1]
+        needed = [el for k, el in (("user", user_el), ("pass", pass_el)) if want in ("", k)]
+        if needed and all(_still_there(el) for el in needed):
+            return user_el, pass_el
+    user_el, pass_el = find_fields(hwnd, username_selector, password_selector)
+    for k in [k for k in _field_cache if k[0] == key[0]]:
+        del _field_cache[k]                       # one entry per window: no stale page's boxes kept
+    if user_el is not None or pass_el is not None:
+        _field_cache[key] = (user_el, pass_el, time.monotonic())
+    return user_el, pass_el
+
+
+def warm_fields(hwnd: int, username_selector: Optional[str] = None,
+                password_selector: Optional[str] = None) -> bool:
+    """Find and cache the boxes now (a card just showed). It also wakes the browser's
+    accessibility tree, so the first press does not pay for building it. True if any box found."""
+    user_el, pass_el = find_fields_cached(hwnd, username_selector, password_selector)
+    return user_el is not None or pass_el is not None
+
+
+def forget_fields(hwnd: int = 0) -> None:
+    """Drop the cached boxes of that window (0 = all)."""
+    for k in [k for k in _field_cache if not hwnd or k[0] == hwnd]:
+        del _field_cache[k]

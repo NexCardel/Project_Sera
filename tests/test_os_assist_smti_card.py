@@ -357,3 +357,70 @@ def test_no_secret_left_on_the_card_after_dismiss(app):
     assert not card.has_secrets()
     for v in vars(card).values():
         assert v != FAKE_PASSWORD and v != FAKE_USER
+
+
+# ----------------------------------------------------------------------------- fill's late check
+def test_username_shows_injected_at_once_and_stays_when_the_late_check_passes(app):
+    card, filler, copies, *_ = make()
+    late = Future()
+    filler.fill_answers.append(("filled", late))
+    card.user_btn.click()
+    assert card.user_btn.text() == "✓  Username Injected"     # before the late check is in
+    card.user_btn.click()
+    assert len(filler.fills) == 1                               # busy until it is
+    late.set_result("")
+    app.processEvents()
+    assert card.user_btn.text() == "✓  Username Injected" and copies == []
+    filler.fill_answers.append("filled")
+    card.user_btn.click()
+    assert len(filler.fills) == 2                               # free again
+    card.dismiss()
+
+
+def test_username_late_failure_falls_back_to_copy(app):
+    card, filler, copies, *_ = make()
+    late = Future()
+    filler.fill_answers.append(("filled", late))
+    card.user_btn.click()
+    late.set_result("mismatch (0 chars) (at 1.0s)")
+    app.processEvents()
+    assert card.user_btn.text() == "📋  Copied Username (Ctrl+V)"
+    assert copies == [(FAKE_USER, False, None)]
+    card.dismiss()
+
+
+def test_password_shows_injected_then_goes_when_the_late_check_passes(app):
+    card, filler, copies, *_ = make()
+    reasons = []
+    card.dismissed.connect(reasons.append)
+    late = Future()
+    filler.fill_answers.append(("filled", late))
+    card.pass_btn.click()
+    assert card.pass_btn.text() == "✓  Password Injected" and not card.is_dismissed
+    late.set_result("")
+    app.processEvents()
+    assert reasons == ["filled"] and not card.has_secrets() and copies == []
+
+
+def test_password_late_failure_is_securely_copied(app):
+    card, filler, copies, *_ = make(clear_seconds=45)
+    reasons = []
+    card.dismissed.connect(reasons.append)
+    late = Future()
+    filler.fill_answers.append(("filled", late))
+    card.pass_btn.click()
+    late.set_result("empty (at 1.0s)")
+    app.processEvents()
+    assert copies == [(FAKE_PASSWORD, True, 45)]
+    assert card.pass_btn.text() == "📋  Copied Password (Ctrl+V)"
+    wait(1300)
+    assert reasons == ["copied"] and not card.has_secrets()
+
+
+def test_dismiss_cancels_a_pending_late_check(app):
+    card, filler, copies, *_ = make()
+    late = Future()
+    filler.fill_answers.append(("filled", late))
+    card.pass_btn.click()
+    card.dismiss("close")
+    assert late.cancelled() and copies == []

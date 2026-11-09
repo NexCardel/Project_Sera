@@ -8,11 +8,15 @@ The docked, no-focus base window every OS Assist card is built on (blueprint §4
   leaves the browser focused.
 - `attach(browser_hwnd, service)` makes the browser window its owner (GWLP_HWNDPARENT): above that
   browser only, minimises with it.
-- While presented, a 100 ms tick follows the browser's GetWindowRect and docks the card top-right
-  of the page area (top 18 px, right 24 px, as the in-page card). The page rect and the address-bar
-  host come from the UIA worker (locate.page_rect / host_matches_service), asked at most every
-  500 ms, never on the Qt thread. Hidden while the browser is minimised or the host stops matching
-  the service (shown again when it matches; the timer keeps running); dismissed when it closes.
+- While presented, the card follows the browser's GetWindowRect and docks top-right of the page
+  area (top 18 px, right 24 px, as the in-page card). The page rect and the address-bar host come
+  from the UIA worker (locate.page_rect / host_matches_service), never on the Qt thread. Hidden
+  while the browser is minimised or the host stops matching the service (shown again when it
+  matches; the timer keeps running); dismissed when it closes.
+- Event-driven (core/os_assist/win_events.WindowWatch): the browser's move / resize / minimise /
+  close events re-dock at once, every frame of a drag; a title change (tab switch, navigation) asks
+  the worker for the host straight away, and its answer is applied the moment it is in. The tick
+  (250 ms with events, 100 ms without) and the 500 ms probe stay as the safety net.
 - Shared pieces: slide-in from the right, `TimerBar`, header with badge + ✎ + ✕, and `dismissed`,
   emitted after every secret the card holds has been dropped; `wire_sck_edit` points ✎ at the SCK
   widget (D3).
@@ -34,7 +38,8 @@ from ui.utils.ui_scale import running_scale
 
 Rect = Tuple[int, int, int, int]                 # (left, top, right, bottom), physical pixels
 
-TICK_MS = 100
+TICK_MS = 100                                    # no window events (hooks unavailable)
+TICK_EVENTS_MS = 250                             # safety net when the window events are on
 PROBE_EVERY_S = 0.5
 TOP_PX, RIGHT_PX = 18, 24                        # the in-page card's `top: 18px; right: 24px`
 SLIDE_MS, FADE_MS = 380, 320
@@ -270,6 +275,7 @@ class DockCard(QWidget):
 
     dismissed = Signal(str)           # reason: "close" | "timeout" | "browser_closed" | the caller's
     edit_requested = Signal()         # ✎ -> the SCK widget for this client and service (D3)
+    _window_event = Signal()          # from the WinEvent hub thread (queued): re-dock now
 
     BADGE = "⚡ Sera Assist"
     ACCENT = "#2E9B5F"
@@ -285,7 +291,7 @@ class DockCard(QWidget):
 
     def __init__(self, badge: Optional[str] = None, timeout_ms: Optional[int] = None,
                  locator=None, win: Optional[Win32] = None,
-                 clock: Callable[[], float] = time.monotonic, parent=None):
+                 clock: Callable[[], float] = time.monotonic, parent=None, events=None):
         super().__init__(parent)
         self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowDoesNotAcceptFocus)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
@@ -307,12 +313,17 @@ class DockCard(QWidget):
         self._probe_job = None
         self._last_probe = float("-inf")
         self.hidden_reason = ""       # "" | "minimised" | "host"
+        self._events = events         # the WinEvent hub (None: win_events.default())
+        self._watch = None            # win_events.WindowWatch while presented
+        self._event_pending = False   # a queued _window_event not run yet (coalesces a drag's events)
+        self._probe_now = False       # a title changed: probe at the next follow, whatever the gap
 
         self._build(badge or self.BADGE, timeout_ms)
 
         self._tick = QTimer(self)
         self._tick.setInterval(TICK_MS)
         self._tick.timeout.connect(self._follow)
+        self._window_event.connect(self._on_window_event, Qt.QueuedConnection)
 
         self._slide = QPropertyAnimation(self.card, b"pos", self)
         self._slide.setDuration(self.SLIDE_IN_MS or SLIDE_MS)
@@ -487,8 +498,55 @@ class DockCard(QWidget):
         self.refit()
         if self.timer is not None:
             self.timer.start()
+        self._start_watch()
         self._tick.start()
         self._follow()
+
+    # -- window events (hub thread -> Qt thread) ------------------------------------------------
+    def _start_watch(self) -> None:
+        if not self.browser_hwnd:
+            return
+        try:
+            from core.os_assist import win_events
+            self._watch = win_events.WindowWatch(self.browser_hwnd, on_move=self._hub_move,
+                                                 on_title=self._hub_title, on_focus=self._focus_handler(),
+                                                 hub=self._events)
+        except Exception:
+            self._watch = None
+        if self._watch is not None and self._watch.active:
+            self._tick.setInterval(TICK_EVENTS_MS)
+        else:
+            self._watch = None
+
+    @property
+    def events_active(self) -> bool:
+        return self._watch is not None
+
+    def _focus_handler(self) -> Optional[Callable[[], None]]:
+        """A subclass returns a hub-thread callable to hear focus moves inside the browser."""
+        return None
+
+    def _hub_move(self) -> None:
+        if not self._event_pending:
+            self._event_pending = True
+            self._window_event.emit()
+
+    def _hub_title(self) -> None:
+        self._probe_now = True
+        self._hub_move()
+
+    def _on_window_event(self) -> None:
+        self._event_pending = False
+        if self._presented and not self._dismissed:
+            self._follow()
+
+    def _stop_watch(self) -> None:
+        watch, self._watch = self._watch, None
+        if watch is not None:
+            try:
+                watch.close()
+            except Exception:
+                pass
 
     def _follow(self) -> None:
         if self._dismissed:
@@ -512,14 +570,21 @@ class DockCard(QWidget):
 
     def _ask_probe(self) -> None:
         now = self._clock()
-        if self._probe_job is not None or now - self._last_probe < PROBE_EVERY_S:
+        if self._probe_job is not None:
+            return                                   # a title change during it: asked again after
+        if not self._probe_now and now - self._last_probe < PROBE_EVERY_S:
             return
+        self._probe_now = False
         self._last_probe = now
         try:
             self._probe_job = self._locator.probe(self.browser_hwnd, self.service)
         except Exception:
             self._probe_job = None
             self._host_ok = False
+            return
+        job = self._probe_job
+        if self.events_active and hasattr(job, "add_done_callback"):
+            job.add_done_callback(lambda _f: self._hub_move())     # apply the answer the moment it is in
 
     def _collect_probe(self, wr: Optional[Rect]) -> None:
         job = self._probe_job
@@ -585,6 +650,7 @@ class DockCard(QWidget):
             return
         self._dismissed = True
         self.clear_secrets()
+        self._stop_watch()
         self._tick.stop()
         if self.timer is not None:
             self.timer.stop()

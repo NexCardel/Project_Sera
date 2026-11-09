@@ -7,6 +7,11 @@ host (locate.window_for_host, each look a job on the UIA worker; the wait itself
 worker), then shows the card on the Qt main thread, attached to that window. No window in time ->
 on_error with a clear message.
 
+The wait is event-driven (core/os_assist/win_events): a browser window coming to the front or a
+browser title changing (the new tab appearing, its page loading) ends a wait at once, so the card
+docks as soon as the tab is there. FIRST_LOOK_S and POLL_S are now only the longest waits, the
+safety net when no event comes.
+
 One live card per kind: a new launch dismisses the old card at once (its secrets go with it) and a
 launch still waiting is superseded. User ID and password live only in the waiting closure and then
 in the card's secrets; never logged. clipboard_watch.suppress_client stays the caller's job (Client
@@ -23,11 +28,55 @@ from core.os_assist import locate, worker
 
 KINDS = ("smti", "mecp")
 WAIT_S = 20.0                     # how long a launch waits for the portal's browser window
-FIRST_LOOK_S = 1.0                # let the new tab take the front before the first look (D4)
-POLL_S = 0.5
+FIRST_LOOK_S = 1.0                # longest wait for the new tab to take the front before the first look (D4)
+POLL_S = 0.5                      # longest wait between looks; a browser event ends it early
+SETTLE_S = 0.05                   # after an event, let the address bar catch up with the title
 LOOK_TIMEOUT_S = 5.0              # one window_for_host job that hangs counts as "not yet"
 SMTI_TIMEOUT_MS = 30000           # the extension's SMTI duration (injectManualAssist)
 MECP_TIMEOUT_MS = 90000           # injectMECP's expiresMs
+
+
+class _Wake:
+    """Ends a launch wait early: any window coming to the front, or a title change of a browser
+    window that is open now. No hooks (tests, not Windows) -> a plain timed wait."""
+
+    def __init__(self, hub=None) -> None:
+        self.event = threading.Event()
+        self._hub = hub
+        self._tokens: list = []
+        if hub is None:
+            return
+        from core.os_assist import win_events as we
+        try:
+            self._tokens.append(hub.watch([(we.EVENT_SYSTEM_FOREGROUND, we.EVENT_SYSTEM_FOREGROUND)], 0,
+                                          self._event))
+            pids = {we.window_pid(h) for h in locate.browser_windows()} - {0}
+            for pid in pids:
+                self._tokens.append(hub.watch([(we.EVENT_OBJECT_NAMECHANGE, we.EVENT_OBJECT_NAMECHANGE)],
+                                              pid, self._event))
+        except Exception:
+            pass
+
+    def _event(self, event, hwnd, id_object, id_child) -> None:
+        from core.os_assist import win_events as we
+        if event == we.EVENT_SYSTEM_FOREGROUND or we.is_window_event(id_object, id_child):
+            self.event.set()
+
+    def wait(self, seconds: float) -> bool:
+        """True when an event ended the wait (then it is re-armed)."""
+        if self.event.wait(seconds):
+            self.event.clear()
+            time.sleep(SETTLE_S)
+            return True
+        return False
+
+    def close(self) -> None:
+        for t in self._tokens:
+            try:
+                self._hub.unwatch(t)
+            except Exception:
+                pass
+        self._tokens.clear()
 
 
 def _get(service, key, default=None):
@@ -97,13 +146,16 @@ def _default_card_factory(kind: str, service, user_id: str, password: str, clien
 class Launcher:
     def __init__(self, opener: Callable[[str, Optional[str]], None] = None,
                  finder: Callable[[str], int] = None, card_factory=None,
-                 sleep: Callable[[float], None] = time.sleep,
+                 sleep: Optional[Callable[[float], None]] = None,
                  clock: Callable[[], float] = time.monotonic,
-                 spawn: Callable[[Callable[[], None]], None] = None) -> None:
+                 spawn: Callable[[Callable[[], None]], None] = None, events=None) -> None:
+        """sleep: a test's fake clock; without it the waits are event-driven (events: the WinEvent
+        hub, default win_events.default())."""
         self._opener = opener or _default_opener
         self._finder = finder or _default_finder
         self._factory = card_factory or _default_card_factory
         self._sleep = sleep
+        self._events = events
         self._clock = clock
         self._spawn = spawn or (lambda fn: threading.Thread(target=fn, name="os-assist-launch",
                                                             daemon=True).start())
@@ -123,6 +175,24 @@ class Launcher:
             self._qt = _QtCall()
             self._qt.moveToThread(app.thread())
         self._qt.call.emit(fn)
+
+    def _wake(self) -> Optional[_Wake]:
+        if self._sleep is not None:
+            return None
+        hub = self._events
+        if hub is None:
+            from core.os_assist import win_events
+            hub = win_events.default()
+        try:
+            return _Wake(hub)
+        except Exception:
+            return _Wake(None)
+
+    def _pause(self, wake: Optional[_Wake], seconds: float) -> None:
+        if wake is None:
+            (self._sleep or time.sleep)(seconds)
+        else:
+            wake.wait(seconds)
 
     def _current(self, kind: str, gen: int) -> bool:
         with self._lock:
@@ -147,13 +217,14 @@ class Launcher:
         creds = {"user": user_id or "", "pass": password or ""}
 
         def _wait() -> None:
+            wake = self._wake()                       # hooked before the tab opens: its first title counts
             try:
                 try:
                     self._opener(url, browser)
                 except Exception:
                     pass
                 deadline = self._clock() + WAIT_S
-                self._sleep(FIRST_LOOK_S)
+                self._pause(wake, FIRST_LOOK_S)
                 while self._current(kind, gen):
                     hwnd = self._finder(url)
                     if hwnd:
@@ -163,11 +234,13 @@ class Launcher:
                         return
                     if self._clock() >= deadline:
                         break
-                    self._sleep(POLL_S)
+                    self._pause(wake, POLL_S)
                 if self._current(kind, gen) and on_error:
                     on_error(timeout_message(service))
             finally:
                 creds.clear()
+                if wake is not None:
+                    wake.close()
 
         self._spawn(_wait)
 
@@ -189,23 +262,28 @@ class Launcher:
         browser = str(_get(service, "browser", "") or "").strip().lower() or None
 
         def _wait() -> None:
+            wake = self._wake()
             try:
-                self._opener(url, browser)
-            except Exception:
-                pass
-            deadline = self._clock() + WAIT_S
-            self._sleep(FIRST_LOOK_S)
-            while True:
-                found = self._finder(url)
-                if found:
-                    self._on_qt(lambda: self._show_scc(found, service, pan, rows, client_name, client_id,
-                                                       attempt_id, on_error))
-                    return
-                if self._clock() >= deadline:
-                    break
-                self._sleep(POLL_S)
-            if on_error:
-                on_error(timeout_message(service))
+                try:
+                    self._opener(url, browser)
+                except Exception:
+                    pass
+                deadline = self._clock() + WAIT_S
+                self._pause(wake, FIRST_LOOK_S)
+                while True:
+                    found = self._finder(url)
+                    if found:
+                        self._on_qt(lambda: self._show_scc(found, service, pan, rows, client_name, client_id,
+                                                           attempt_id, on_error))
+                        return
+                    if self._clock() >= deadline:
+                        break
+                    self._pause(wake, POLL_S)
+                if on_error:
+                    on_error(timeout_message(service))
+            finally:
+                if wake is not None:
+                    wake.close()
 
         self._spawn(_wait)
         return True

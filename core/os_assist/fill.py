@@ -7,15 +7,17 @@ or SendInput. Runs on the OS Assist worker thread. Never logs or keeps a value: 
 import ctypes
 import ctypes.wintypes as wt
 import logging
+import threading
 import time
+from concurrent.futures import Future
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, Callable, List, Optional
 
 from core.os_assist import locate, worker
 
 log = logging.getLogger("os_assist.fill")
 
-VERIFY_AFTER_S = (0.15, 1.0)
+VERIFY_AFTER_S = (0.15, 1.0)        # first check, then again after the page had time to reset the value
 CT_EDIT = 50004
 _ADDRESS_WORDS = ("address", "search", "url")       # the browser's own address bar
 
@@ -27,6 +29,9 @@ class FillResult:
     outcome: str            # filled | failed | refused
     method: str = ""        # setvalue | keys | ""
     reason: str = ""
+    # fill(..., late_check="background") only: the 1.0 s re-check, still running when "filled" is
+    # returned. Resolves to "" (the value stayed) or the reason it did not.
+    late: Optional[Future] = None
 
 
 # ----------------------------------------------------------------------------- keyboard (SendInput)
@@ -79,6 +84,32 @@ class Keyboard:
 
     def sleep(self, seconds: float) -> None:
         time.sleep(seconds)
+
+    def later(self, seconds: float, fn: Callable[[], str]) -> Future:
+        """fn() as a job on the OS Assist worker after `seconds`, without holding the worker
+        meanwhile. A cancel before it starts drops it."""
+        out: Future = Future()
+
+        def _go() -> None:
+            if not out.set_running_or_notify_cancel():
+                return
+            try:
+                inner = worker.submit(fn)
+            except Exception as e:
+                out.set_exception(e)
+                return
+
+            def _done_inner(f) -> None:
+                try:
+                    out.set_result(f.result())
+                except BaseException as e:
+                    out.set_exception(e)
+            inner.add_done_callback(_done_inner)
+
+        t = threading.Timer(seconds, _go)
+        t.daemon = True
+        t.start()
+        return out
 
     def type_text(self, text: str, hwnd: int) -> bool:
         """Ctrl+A, Delete, then each character as a Unicode key press. False if the window changed."""
@@ -148,14 +179,47 @@ def _check(el, length: int, text: Optional[str], is_password: bool) -> str:
     return f"masked, length {len(got)} vs {length}"
 
 
-def _verify(el, text: str, is_password: bool, kb) -> str:
+def _verify(el, text: str, is_password: bool, kb, background: bool = False):
+    """(verdict, late). Blocking: every check in VERIFY_AFTER_S, late None. Background: the first
+    check only; the later ones run on the worker afterwards (late: a Future of "" or the reason).
+    A password is never kept for the late check, only its length."""
+    first, rest = VERIFY_AFTER_S[0], VERIFY_AFTER_S[1:]
     out = ""
-    for wait in VERIFY_AFTER_S:
+    for wait in (VERIFY_AFTER_S if not background else (first,)):
         kb.sleep(wait)
         out = _check(el, len(text), None if is_password else text, is_password)
         if not out.startswith("ok"):
-            return f"{out} (at {wait}s)"
-    return out
+            return f"{out} (at {wait}s)", None
+    if not background or not rest:
+        return out, None
+    length, want = len(text), None if is_password else text
+
+    def _late_check() -> str:
+        verdict = ""
+        for wait in rest:
+            got = _check(el, length, want, is_password)
+            if not got.startswith("ok"):
+                verdict = f"{got} (at {wait}s)"
+                break
+        if verdict:
+            log.info("%s  late-failed  %s", "pass" if is_password else "user", verdict)
+        return verdict
+
+    return out, _schedule(kb, rest[0] - first, _late_check)
+
+
+def _schedule(kb, seconds: float, fn: Callable[[], str]) -> Future:
+    """kb.later when the keyboard has it; a fake without it runs fn now (after kb.sleep)."""
+    later = getattr(kb, "later", None)
+    if later is not None:
+        return later(seconds, fn)
+    kb.sleep(seconds)
+    fut: Future = Future()
+    try:
+        fut.set_result(fn())
+    except BaseException as e:
+        fut.set_exception(e)
+    return fut
 
 
 def _done(is_password: bool, res: FillResult) -> FillResult:
@@ -173,23 +237,30 @@ def _refused(service) -> FillResult:
     return FillResult("refused", "", "address bar is no longer the service's login page")
 
 
-def _type_and_verify(hwnd: int, el, text: str, is_password: bool, service, kb) -> FillResult:
+def _type_and_verify(hwnd: int, el, text: str, is_password: bool, service, kb,
+                     background: bool = False) -> FillResult:
     if not locate.host_matches_service(hwnd, service):
         return _refused(service)
     if not kb.type_text(text, hwnd):
         return FillResult("failed", "keys", "window changed while typing")
-    verdict = _verify(el, text, is_password, kb)
+    verdict, late = _verify(el, text, is_password, kb, background)
     if verdict.startswith("ok"):
-        return _ok("keys", verdict)
+        res = _ok("keys", verdict)
+        res.late = late
+        return res
     return FillResult("failed", "keys", verdict)
 
 
 # ----------------------------------------------------------------------------- fill
 def fill(hwnd: int, element, text: str, is_password: bool, service, method: str = "auto",
-         keyboard=None) -> FillResult:
+         keyboard=None, late_check: str = "wait") -> FillResult:
     """Put `text` in `element`: SetValue first, SendInput keys if it did not take.
-    method: auto | setvalue (never types) | keys."""
+    method: auto | setvalue (never types) | keys.
+    late_check: "wait" = every check in VERIFY_AFTER_S before returning (about 1.15 s);
+    "background" = return after the first check (about 0.15 s) with the rest in result.late, so a
+    card can show the result at once (SMTI buttons)."""
     kb = _kb(keyboard)
+    background = late_check == "background"
     notes: List[str] = []
     if method in ("auto", "setvalue"):
         if not locate.host_matches_service(hwnd, service):
@@ -202,9 +273,11 @@ def fill(hwnd: int, element, text: str, is_password: bool, service, method: str 
                 notes.append("read-only")
             else:
                 vp.SetValue(text)
-                verdict = _verify(element, text, is_password, kb)
+                verdict, late = _verify(element, text, is_password, kb, background)
                 if verdict.startswith("ok"):
-                    return _done(is_password, _ok("setvalue", verdict))
+                    res = _ok("setvalue", verdict)
+                    res.late = late
+                    return _done(is_password, res)
                 notes.append(verdict)
         except Exception as e:
             notes.append(f"SetValue error {type(e).__name__}")
@@ -222,7 +295,7 @@ def fill(hwnd: int, element, text: str, is_password: bool, service, method: str 
     kb.sleep(0.15)
     if not _same(_focused(), element):
         return _done(is_password, FillResult("failed", "keys", "box did not take focus"))
-    res = _type_and_verify(hwnd, element, text, is_password, service, kb)
+    res = _type_and_verify(hwnd, element, text, is_password, service, kb, background)
     if res.outcome == "failed" and notes:
         res.reason = f"{'; '.join(notes)}; keys: {res.reason}"
     return _done(is_password, res)
