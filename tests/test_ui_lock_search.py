@@ -363,6 +363,64 @@ def test_row_actions_are_admin_only_and_act_on_the_current_client(world):
     assert add == [1]
 
 
+def test_fine_tune_company_regular_all_count_and_one_sidebar_button(world):
+    db, ids, win = world
+    from ui.windows.search_window import _column_spec
+    assert _column_spec({"label": "NAME OF COMPANY", "field_name": "name_of_company"})["kind"] == "text"
+    win._update_counts(16, "", None)
+    assert win.chip_bar.chip("all").count() == 16
+    win._update_counts(3, "", "x")            # another preset leaves the All count alone
+    assert win.chip_bar.chip("all").count() == 16
+    win.set_sidebar_collapsed(False)
+    assert win.btn_toggle_sidebar.isHidden()
+    win.set_sidebar_collapsed(True)
+    assert not win.btn_toggle_sidebar.isHidden()
+
+
+def test_selection_stays_cheap(world, monkeypatch):
+    """Hover repaints only the rows it leaves and enters; one click updates the selection bar once
+    and does not reload its stylesheet when it already shows a selection."""
+    db, ids, win = world
+    t = win.results_table
+    rows_updated = []
+    monkeypatch.setattr(t, "_update_row", lambda r: rows_updated.append(r))
+    t._set_hover(0, None)
+    t._set_hover(1, None)
+    assert set(rows_updated) <= {-1, 0, 1}
+
+    bar = win.selection_bar
+    restyles = []
+    real_restyle = bar._restyle
+    monkeypatch.setattr(bar, "_restyle", lambda: (restyles.append(1), real_restyle()))
+    updates = []
+    real_update = win._update_selection_bar
+    monkeypatch.setattr(win, "_update_selection_bar", lambda *a: (updates.append(1), real_update()))
+    t.setCurrentCell(0, 1)
+    assert bar.has_selection()
+    first = len(restyles)
+    updates.clear()
+    t.setCurrentCell(1, 1)              # selectionChanged + currentChanged: one bar update
+    assert len(updates) == 1
+    assert len(restyles) == first       # still "has selection": no stylesheet reload
+
+
+def test_cell_range_is_outlined_once_round_its_edge(world):
+    from PySide6.QtCore import QItemSelection, QItemSelectionModel
+    db, ids, win = world
+    t = win.results_table
+    if t.rowCount() < 3 or t.columnCount() < 3:
+        pytest.skip("needs a 3 x 3 grid")
+    m, sm = t.model(), t.selectionModel()
+    sm.select(QItemSelection(m.index(0, 1), m.index(2, 2)), QItemSelectionModel.ClearAndSelect)
+    d = t.itemDelegate()
+    # (top, bottom, left, right): corners carry two sides, the middle of the range none
+    assert d._range_edges(m.index(0, 1)) == (True, False, True, False)
+    assert d._range_edges(m.index(1, 1)) == (False, False, True, False)
+    assert d._range_edges(m.index(2, 2)) == (False, True, False, True)
+    assert sm.rowIntersectsSelection(1, t.rootIndex())
+    assert t.horizontalHeader().parentWidget() is t
+
+
 def test_toolbar_buttons_have_tooltips_and_sidebar_button_signals(world):
     db, ids, win = world
     fired = []

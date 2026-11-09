@@ -43,12 +43,35 @@ def test_width_comes_from_the_token(sidebar):
 
 
 def test_the_real_logo_is_drawn_from_the_svg(sidebar):
-    logo = sidebar.findChild(type(sidebar.profile_name), "SidebarLogo")
-    pix = logo.pixmap()
-    assert pix is not None and not pix.isNull()
-    image = pix.toImage()
+    logo = sidebar.logo
+    assert logo.objectName() == "SidebarLogo" and logo._renderer is not None
+    image = logo.grab().toImage()
     centre = image.pixelColor(image.width() // 2, int(image.height() * 0.62))
-    assert centre.alpha() > 200 and centre.green() > centre.red()   # the evergreen mark, not the initials
+    assert centre.green() > 120 and centre.green() > centre.red()   # the evergreen mark, not the initials
+
+
+def test_the_logo_keeps_its_shape(sidebar):
+    """Drawn on paint with the SVG's aspect kept: the mark is about 0.77 as wide as it is tall, not stretched."""
+    image = sidebar.logo.grab().toImage()
+    pts = [(x, y) for y in range(image.height()) for x in range(image.width())
+           if image.pixelColor(x, y).green() > 120 and image.pixelColor(x, y).red() < 100]
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    ratio = (max(xs) - min(xs) + 1) / (max(ys) - min(ys) + 1)
+    assert 0.68 < ratio < 0.86
+
+
+def test_profile_label_shows_the_role(sidebar):
+    sidebar.set_admin_mode(False)
+    assert sidebar.profile_name.text() == "Staff"
+    sidebar.set_admin_mode(True)
+    assert sidebar.profile_name.text() == "Admin"
+    sidebar.set_admin_mode(False)
+
+
+def test_footer_rows_are_transparent():
+    from ui.components.kit import sidebar_qss
+    assert "QWidget#SidebarPadRow" in sidebar_qss()
 
 
 def test_brand_name_is_not_truncated(sidebar):
@@ -205,6 +228,17 @@ def test_toggle_button_folds_the_shell_sidebar():
     shell = AppShell()
     shell.sidebar.btn_toggle_sidebar.click()
     assert shell.sidebar_collapsed and shell._sidebar_user_toggled
+
+
+def test_shell_reports_collapse_so_only_one_sidebar_button_shows():
+    shell = AppShell()
+    seen = []
+    shell.sidebar_collapsed_changed.connect(seen.append)
+    shell.toggle_sidebar()
+    shell.toggle_sidebar()
+    assert seen == [True, False]
+    src = (Path(__file__).resolve().parent.parent / "main.py").read_text(encoding="utf-8")
+    assert "self.shell.sidebar_collapsed_changed.connect(self.search_win.set_sidebar_collapsed)" in src
 
 
 def test_the_four_shell_shortcuts_stay_wired_in_main():

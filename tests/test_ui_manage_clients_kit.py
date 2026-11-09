@@ -111,16 +111,16 @@ def test_editor_header_text_is_available_as_a_tooltip_when_squeezed(world):
     assert win.editor_title.toolTip() == win.editor_title.text()
     assert win.editor_sub.toolTip() == win.editor_sub.text()
 
-def test_list_column_is_360_wide_and_300_in_compact(world):
+def test_list_column_is_440_wide_and_300_in_compact(world):
     from ui.utils.tokens import KIT
     db, ids, win = world
-    assert win._left_host.width() == KIT["w_mc_list"] == 360
+    assert win._left_host.width() == KIT["w_mc_list"] == 440
     win.apply_width_mode("compact")
     S.pump()
     assert win._left_host.width() == KIT["w_mc_list_c"] == 300
     win.apply_width_mode("wide")
     S.pump()
-    assert win._left_host.width() == 360
+    assert win._left_host.width() == 440
 
 
 def test_cards_are_two_columns_at_1366_and_one_when_narrow(world):

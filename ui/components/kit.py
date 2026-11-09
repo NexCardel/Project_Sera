@@ -370,6 +370,8 @@ class LabelledAction(_ReasonMixin, QPushButton):
         return self._icon_only
 
     def set_swatch(self, colour):
+        if colour is not None and self._swatch is not None and colour == self._swatch:
+            return          # same colour: keep the icon (rebuilding it on every grid click is wasted work)
         self._swatch = colour
         self._apply_icon()
 
@@ -2372,7 +2374,7 @@ class SelectionBar(QFrame):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._empty_hint = hint
         self._compact = False
-        self._has_selection = False
+        self._has_selection = None      # unset until the first set_has_selection lays the bar out
         self._who_text = ""
         self._actions = []
 
@@ -2424,7 +2426,10 @@ class SelectionBar(QFrame):
             )
 
     def set_has_selection(self, has: bool):
-        self._has_selection = bool(has)
+        has = bool(has)
+        if getattr(self, "_has_selection", None) is has:
+            return          # setStyleSheet re-polishes every button in the bar (~6 ms): only on a real flip
+        self._has_selection = has
         self.hint_label.setVisible(not self._has_selection)
         self.active_container.setVisible(self._has_selection)
         self._restyle()
@@ -2623,6 +2628,7 @@ _GRID_TONES = {
         "foot": K["grid_foot_bg"], "foot_line": T["g_line"], "btn_bg": K["white"],
         "btn_line": K["grid_btn_line"], "btn_tx": K["grid_btn_tx"], "btn_hover": T["g_hover"],
         "svc_tx": K["grid_btn_tx"], "cb_bg": K["white"], "cb_line": K["grid_btn_line"],
+        "range_bg": K["grid_range_bg"], "range_line": K["grid_range_line"], "rownum_bg": K["grid_rownum_bg"],
     },
     "dark": {
         "bg": T["panel"], "alt": K["dgrid_alt"], "hover": K["dgrid_hover"], "sel": K["dgrid_sel"],
@@ -2632,6 +2638,7 @@ _GRID_TONES = {
         "foot": T["panel"], "foot_line": T["line"], "btn_bg": K["btn_bg"], "btn_line": T["line2"],
         "btn_tx": T["text2"], "btn_hover": T["hover"], "svc_tx": T["text2"], "cb_bg": K["btn_bg"],
         "cb_line": T["line3"],
+        "range_bg": K["dgrid_sel"], "range_line": T["emline"], "rownum_bg": K["dgrid_alt"],
     },
     "list": {
         "bg": "transparent", "alt": None, "hover": K["list_hover"], "sel": K["list_sel"],
@@ -2640,6 +2647,7 @@ _GRID_TONES = {
         "head_line": T["line"], "wrap": T["line"], "foot": T["card"], "foot_line": T["line"],
         "btn_bg": K["btn_bg"], "btn_line": T["line2"], "btn_tx": T["text2"], "btn_hover": T["hover"],
         "svc_tx": T["text2"], "cb_bg": K["btn_bg"], "cb_line": T["line3"],
+        "range_bg": K["list_sel"], "range_line": T["line"], "rownum_bg": K["list_hover"],
     },
 }
 
@@ -2719,10 +2727,10 @@ class GridDelegate(QStyledItemDelegate):
         """Checkable with a state set (QTableWidgetItem is user-checkable by default, like Qt itself)."""
         return bool(index.flags() & Qt.ItemIsUserCheckable) and index.data(Qt.CheckStateRole) is not None
 
-    def _content_rect(self, rect, index):
+    def _content_rect(self, rect, index, has_check=None):
         pad = self._pad()
         r = rect.adjusted(pad, 0, -pad, -1)
-        if self._has_check(index):
+        if self._has_check(index) if has_check is None else has_check:
             r.setLeft(r.left() + K["d_cell_cb"] + T["s_2"])
         return r
 
@@ -2805,12 +2813,25 @@ class GridDelegate(QStyledItemDelegate):
         selected = bool(option.state & QStyle.State_Selected)
         painter.save()
 
+        cells = view.selectionBehavior() == QAbstractItemView.SelectItems
+        cell_cursor = bool(cells and option.state & QStyle.State_HasFocus)
+        # Spreadsheet-style ranges (cell selection): one soft tint, tinted hairlines inside the range,
+        # a single outline round its edge and a clear active cell; row-select tables keep the edge bar.
+        edges = self._range_edges(index) if (cells and selected) else None
+        rownum = (cells and not selected and self._kind(index) == "num"
+                  and view.horizontalHeader().visualIndex(index.column()) == 0
+                  and view.selectionModel().rowIntersectsSelection(row, index.parent()))
+
         highlight = _as_brush(index.data(Qt.BackgroundRole))
         if highlight is not None:           # the cell-format engine's fill wins (.grid td.hl)
             painter.fillRect(rect, highlight)
         else:
-            if selected:
-                fill = pal["sel"]
+            if cell_cursor:
+                fill = pal["bg"] if pal["bg"] != "transparent" else pal["range_bg"]
+            elif selected:
+                fill = pal["range_bg"] if cells else pal["sel"]
+            elif rownum:
+                fill = pal["rownum_bg"]
             elif row == getattr(view, "_hover_row", -1):
                 fill = pal["hover"]
             elif pal["alt"] and row % 2:
@@ -2820,21 +2841,17 @@ class GridDelegate(QStyledItemDelegate):
             if fill != "transparent":
                 painter.fillRect(rect, QColor(fill))
         if not (self.tone == "list" and row == index.model().rowCount() - 1):
-            painter.fillRect(QRect(rect.left(), rect.bottom(), rect.width(), 1), QColor(pal["line"]))
-        if selected and self._selection_starts(index):
+            line = pal["range_line"] if edges is not None else pal["line"]
+            painter.fillRect(QRect(rect.left(), rect.bottom(), rect.width(), 1), QColor(line))
+        if selected and not cells and self._selection_starts(index):
             painter.fillRect(QRect(rect.left(), rect.top(), K["w_sel_edge"], rect.height()), QColor(T["em"]))
-        cell_cursor = (option.state & QStyle.State_HasFocus
-                       and view.selectionBehavior() == QAbstractItemView.SelectItems)
-        if (selected and highlight is not None) or cell_cursor:
-            painter.setPen(QPen(QColor(T["em"])))
-            painter.setBrush(Qt.NoBrush)
-            painter.drawRect(rect.adjusted(0, 0, -1, -2))
 
         painter.setRenderHint(QPainter.Antialiasing)
-        if self._has_check(index):
+        has_check = self._has_check(index)      # once per cell: it was asked twice (flags + data lookups)
+        if has_check:
             self._paint_check(painter, self._check_rect(rect), _is_checked(index.data(Qt.CheckStateRole)),
                               bool(index.flags() & Qt.ItemIsEnabled))
-        cr = self._content_rect(rect, index)
+        cr = self._content_rect(rect, index, has_check)
 
         actions = index.data(ROLE_ACTIONS)
         services = index.data(ROLE_SERVICES)
@@ -2849,8 +2866,54 @@ class GridDelegate(QStyledItemDelegate):
         elif tag:
             self._paint_tag(painter, option, cr, *tag)
         else:
-            self._paint_text(painter, option, index, cr, selected, highlight)
+            self._paint_text(painter, option, index, cr, selected, highlight,
+                             ink=QColor(T["em"]) if rownum else None)
+        # outlines go on top of the content
+        em = QColor(T["em"])
+        if edges is not None:
+            w = K["w_range_edge"]
+            top, bottom, left, right = edges
+            if top:
+                painter.fillRect(QRect(rect.left(), rect.top(), rect.width(), w), em)
+            if bottom:
+                painter.fillRect(QRect(rect.left(), rect.bottom() + 1 - w, rect.width(), w), em)
+            if left:
+                painter.fillRect(QRect(rect.left(), rect.top(), w, rect.height()), em)
+            if right:
+                painter.fillRect(QRect(rect.right() + 1 - w, rect.top(), w, rect.height()), em)
+        if cell_cursor:
+            w = K["w_cell_cursor"]
+            painter.fillRect(QRect(rect.left(), rect.top(), rect.width(), w), em)
+            painter.fillRect(QRect(rect.left(), rect.bottom() + 1 - w, rect.width(), w), em)
+            painter.fillRect(QRect(rect.left(), rect.top(), w, rect.height()), em)
+            painter.fillRect(QRect(rect.right() + 1 - w, rect.top(), w, rect.height()), em)
         painter.restore()
+
+    def _neighbour_column(self, column, step):
+        """The next shown column to the left (step -1) or right (+1) on screen, or None."""
+        view = self._view
+        header = view.horizontalHeader()
+        v = header.visualIndex(column) + step
+        while 0 <= v < header.count():
+            col = header.logicalIndex(v)
+            if not view.isColumnHidden(col):
+                return col
+            v += step
+        return None
+
+    def _range_edges(self, index):
+        """(top, bottom, left, right): the sides of this selected cell that face an unselected cell,
+        so the outline runs once round the whole range instead of round every cell."""
+        view = self._view
+        sm = view.selectionModel()
+        model = index.model()
+        row, col = index.row(), index.column()
+
+        def sel(r, c):
+            return c is not None and 0 <= r < model.rowCount() and sm.isSelected(model.index(r, c, index.parent()))
+
+        return (not sel(row - 1, col), not sel(row + 1, col),
+                not sel(row, self._neighbour_column(col, -1)), not sel(row, self._neighbour_column(col, 1)))
 
     def _text_colour(self, index, selected):
         fg = _as_brush(index.data(Qt.ForegroundRole))
@@ -2862,11 +2925,11 @@ class GridDelegate(QStyledItemDelegate):
         kind = self._kind(index)
         return QColor(pal["mute"] if kind == "num" else pal["mono"] if kind == "mono" else pal["text"])
 
-    def _paint_text(self, painter, option, index, cr, selected, highlight):
+    def _paint_text(self, painter, option, index, cr, selected, highlight, ink=None):
         text = str(index.data(Qt.DisplayRole) if index.data(Qt.DisplayRole) is not None else "")
         text = text.replace("\n", " ")
         font = self._text_font(option, index, selected)
-        colour = self._text_colour(index, selected)
+        colour = ink if ink is not None else self._text_colour(index, selected)
         if highlight is not None and _as_brush(index.data(Qt.ForegroundRole)) is None:
             # A fill without a text colour: dark ink on a light fill, light ink on a dark one.
             colour = QColor(T["g_text"] if highlight.color().lightness() > 140 else T["text"])
@@ -3158,6 +3221,13 @@ class _GridHeader(QHeaderView):
         painter.setPen(QColor(pal["head_text"]))
         painter.drawText(r, Qt.AlignLeft | Qt.AlignVCenter,
                          QFontMetrics(font).elidedText(self.section_text(logical), Qt.ElideRight, max(r.width(), 0)))
+        view = self.parentWidget()
+        if (isinstance(view, QAbstractItemView) and view.selectionBehavior() == QAbstractItemView.SelectItems
+                and view.selectionModel() is not None
+                and view.selectionModel().columnIntersectsSelection(logical, view.rootIndex())):
+            # columns the cell range covers get an emerald underline (spreadsheet column cue)
+            w = K["w_cell_cursor"]
+            painter.fillRect(QRect(rect.left(), rect.bottom() + 1 - w, rect.width(), w), QColor(T["em"]))
         if self.isSortIndicatorShown() and self.sortIndicatorSection() == logical:
             painter.setRenderHint(QPainter.Antialiasing)
             painter.setPen(Qt.NoPen)
@@ -3315,6 +3385,25 @@ class DataGrid(QTableWidget):
         self.tone = None
         self.set_tone(tone)
 
+    def selectionChanged(self, selected, deselected):
+        """Qt repaints only the cells whose state changed, but a range's outline and the lit row
+        numbers also live in the cells around it: repaint the rows spanned (plus one either side)."""
+        super().selectionChanged(selected, deselected)
+        if self.selectionBehavior() != QAbstractItemView.SelectItems:
+            return
+        rows = [r for sel in (selected, deselected) for rng in sel for r in (rng.top(), rng.bottom())]
+        if not rows:
+            return
+        top = max(0, min(rows) - 1)
+        bottom = min(self.rowCount() - 1, max(rows) + 1)
+        y0 = self.rowViewportPosition(top)
+        y1 = self.rowViewportPosition(bottom) + self.rowHeight(bottom)
+        vp = self.viewport()
+        y0, y1 = max(0, y0), min(vp.height(), y1)
+        if y1 > y0:
+            vp.update(QRect(0, y0, vp.width(), y1 - y0))
+        self.horizontalHeader().viewport().update()   # the selected columns' underline
+
     def set_tone(self, tone):
         if tone not in _GRID_TONES:
             raise ValueError(f"unknown DataGrid tone: {tone}")
@@ -3407,10 +3496,18 @@ class DataGrid(QTableWidget):
         self._hover_pos = pos
         if row != old:
             self._hover_row = row
-            self.viewport().update()
-        elif row >= 0:
-            self.viewport().update(QRect(0, self.rowViewportPosition(row), self.viewport().width(),
-                                         self.rowHeight(row)))
+            # only the row left and the row entered change: a whole-viewport repaint here cost ~87 ms
+            # per row crossed with 120 Python-painted cells, and clicks queued behind it
+            self._update_row(old)
+        self._update_row(row)
+
+    def _update_row(self, row):
+        if row is None or row < 0 or row >= self.rowCount():
+            return
+        y = self.rowViewportPosition(row)
+        if y < 0 and y + self.rowHeight(row) <= 0:
+            return
+        self.viewport().update(QRect(0, y, self.viewport().width(), self.rowHeight(row)))
 
     def viewportEvent(self, event):
         kind = event.type()
@@ -3536,6 +3633,11 @@ class GridFrame(QFrame):
         if self.footer is not None:
             self.footer.set_tone(tone)
         bg = pal["bg"] if pal["bg"] != "transparent" else T["card"]
+        if pal["head"] != "transparent":
+            # At fractional scales (125 %) the 1 px border and the 1 px margin do not land on the same
+            # device pixels; the frame's own background shows in the gap. Painting it the border colour
+            # keeps that sliver part of the border instead of a white ring around the dark header.
+            bg = pal["wrap"]
         self.setStyleSheet(f"QFrame#KitGridFrame {{ background: {bg}; border: 1px solid {pal['wrap']};"
                            f" border-radius: {T['r_l']}px; }}")
 
@@ -4589,6 +4691,7 @@ def sidebar_qss():
     """Style sheet of the shell sidebar frame (#Sidebar): surface, brand, admin row, staff row, version.
     The app theme paints every plain QWidget, so each container carries its own transparent rule."""
     transparent = ("QWidget#SidebarBrand, QWidget#SidebarAdminRow, QWidget#SidebarProfileRow,"
+                   " QWidget#SidebarPadRow,"
                    " QWidget#SidebarScrollContent, QWidget#SidebarGroup,"
                    " QScrollArea#SidebarScroll, QScrollArea#SidebarScroll > QWidget > QWidget"
                    " { background: transparent; border: none; }")

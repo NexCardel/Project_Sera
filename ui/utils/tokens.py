@@ -195,6 +195,12 @@ KIT = {
     # data grid (.gridwrap, .grid, .gfoot, .gp, .gpill, .cellbtns; .gridwrap.dark; table.dt)
     "grid_wrap_line": "#333333",
     "grid_head_rule": "#1D2822",
+    # cell-range selection (spreadsheet style): soft tint, tinted hairlines, one outline, active cell box
+    "grid_range_bg": "#E4F5EB",
+    "grid_range_line": "#CBE8D7",
+    "grid_rownum_bg": "#EDF8F1",
+    "w_range_edge": 1,
+    "w_cell_cursor": 2,
     "grid_sel_tx": "#0B2A1A",
     "grid_mono_tx": "#33433A",
     "grid_hl_bg": "#FFF3CD",
@@ -354,7 +360,7 @@ KIT = {
     "pad_idchip_v": 3,
     # tracker pager, Manage Clients (.mc, .ed-hd .av), Settings (.stack, .set-main)
     "w_pager_sel": 72,
-    "w_mc_list": 360,
+    "w_mc_list": 440,
     "w_mc_list_c": 300,
     "gap_mc": 14,
     "w_stack": 820,

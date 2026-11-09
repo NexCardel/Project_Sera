@@ -2121,6 +2121,9 @@ class SeraApp:
         self.search_win.toast_requested.connect(self.shell.show_alert)
         self.search_win.action_alert_requested.connect(self.shell.show_action_alert)
         self.search_win.toggle_sidebar_requested.connect(self.shell.toggle_sidebar)
+        # one sidebar button at a time: the page's own appears only while the sidebar is collapsed
+        self.shell.sidebar_collapsed_changed.connect(self.search_win.set_sidebar_collapsed)
+        self.search_win.set_sidebar_collapsed(self.shell.sidebar_collapsed)
         
         self.detail_win.back_requested.connect(self._show_search_from_detail)
         # the panel's Edit and ⋯ menu run the same handlers as the All Clients grid

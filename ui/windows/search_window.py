@@ -80,7 +80,8 @@ def _column_spec(col):
     if words & {"ph", "phone", "mobile", "contact"}:
         return dict(kind="num", width=104, minimum=90, compact_hidden=True, priority=1)
     if any(k in key for k in ("company", "trade", "firm", "business")):
-        return dict(kind="strong", stretch=3, minimum=130, max_share=0.34)
+        # regular weight like the mockup; only the selected row reads heavier
+        return dict(kind="text", stretch=3, minimum=130, max_share=0.34)
     if any(k in key for k in ("name", "client", "proprietor")):
         return dict(kind="text", stretch=2, minimum=110, max_share=0.28)
     if "email" in key:
@@ -167,6 +168,7 @@ class SearchWindow(WidthAware, QWidget):
         self.btn_toggle_sidebar = IconButton("mdi.dock-left", "Toggle Sidebar (Ctrl+B)")
         self.btn_toggle_sidebar.clicked.connect(self.toggle_sidebar_requested.emit)
         self.page_header.add_leading(self.btn_toggle_sidebar)
+        self.btn_toggle_sidebar.setVisible(False)   # the sidebar has its own; shown when it collapses
 
         self.btn_columns = LabelledAction(
             "Columns", variant="secondary", icon="mdi.view-column-outline", chevron=True,
@@ -294,8 +296,8 @@ class SearchWindow(WidthAware, QWidget):
         self.results_table.installEventFilter(self)
         self.results_table.verticalScrollBar().valueChanged.connect(self._on_scroll_changed)
         self.results_table.horizontalScrollBar().valueChanged.connect(self._on_scroll_changed)
-        self.results_table.selectionModel().selectionChanged.connect(self._update_selection_bar)
-        self.results_table.selectionModel().currentChanged.connect(self._update_selection_bar)
+        self.results_table.selectionModel().selectionChanged.connect(self._on_selection_signal)
+        self.results_table.selectionModel().currentChanged.connect(self._on_selection_signal)
 
         from PySide6.QtGui import QKeySequence, QShortcut
         self.copy_shortcut = QShortcut(QKeySequence.Copy, self.results_table)
@@ -703,11 +705,23 @@ class SearchWindow(WidthAware, QWidget):
             self.results_table.horizontalHeader().setSectionsClickable(True)
             self.results_table.setUpdatesEnabled(True)
 
+    def set_sidebar_collapsed(self, collapsed):
+        """The title-row sidebar button shows only while the sidebar (which has its own) is collapsed."""
+        self.btn_toggle_sidebar.setVisible(bool(collapsed))
+
     def _update_counts(self, shown, text, svc_val):
         word = "client" if shown == 1 else "clients"
         self.page_header.set_count(f"{shown} {word}")
         filtered = bool(text) or svc_val is not None
         self.grid_footer.set_count(f"{shown} {word} shown" if filtered else f"{shown} {word}")
+        # the All chip carries its result count (mockup "All 16"); other presets leave it as it was
+        if svc_val is None:
+            all_chip = self.chip_bar.chip("all")
+            if all_chip is not None and all_chip.count() != shown:
+                all_chip.set_count(shown)
+                # the badge widened the chip: let the row lay out first, then re-check what fits
+                self.chip_bar.updateGeometry()
+                QTimer.singleShot(0, self.chip_bar, self.chip_bar._fit)   # cancelled if the bar is gone
 
     # ---- Columns menu: a second editor for the per-column "show on this screen" flag
     def _flag_field(self):
@@ -802,9 +816,20 @@ class SearchWindow(WidthAware, QWidget):
         item = t.item(row, 0)
         return f"Client {item.data(Qt.UserRole)}" if item is not None else ""
 
+    def _on_selection_signal(self, *_):
+        """selectionChanged and currentChanged both fire on one click: update the bar once per real
+        change (same rows and same current cell = nothing for the bar to redraw)."""
+        cur = self.results_table.currentIndex()
+        key = (tuple(self._selected_rows()), cur.row(), cur.column())
+        if key == getattr(self, "_selection_bar_key", None):
+            return
+        self._update_selection_bar()
+        self._selection_bar_key = key
+
     def _update_selection_bar(self, *_):
         if not hasattr(self, "selection_bar"):
             return
+        self._selection_bar_key = None      # a direct call (grid reload, formatting) always redraws
         rows = self._selected_rows()
         if not rows:
             # Nothing selected: only the hint shows; the actions are off too (Delete was always clickable).

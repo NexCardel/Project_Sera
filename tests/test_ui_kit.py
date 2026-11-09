@@ -946,10 +946,24 @@ def test_grid_paints_zebra_selection_edge_and_highlight(app):
     x0 = g.visualRect(g.model().index(0, 1)).center().x()
     assert _pixel(g, x0, g.rowViewportPosition(0) + 5) == TOKENS["g_bg"]
     assert _pixel(g, x0, g.rowViewportPosition(3) + 5) == TOKENS["g_alt"]      # zebra
-    assert _pixel(g, x0, g.rowViewportPosition(1) + 5) == TOKENS["g_sel"]      # mint selection
-    assert _pixel(g, 1, g.rowViewportPosition(1) + 5) == TOKENS["em"]          # emerald edge
-    assert _pixel(g, x0, g.rowViewportPosition(2) + 5) == "#123456"            # highlight wins over selection
-    assert _pixel(g, x0, g.rowViewportPosition(2)) == TOKENS["em"]             # ...with an emerald outline
+    # cell selection is spreadsheet style: a soft range tint, one emerald outline round the range
+    assert _pixel(g, x0, g.rowViewportPosition(1) + 5) == KIT["grid_range_bg"]  # range tint
+    assert _pixel(g, 0, g.rowViewportPosition(1) + 5) == TOKENS["em"]           # range's left edge
+    assert _pixel(g, x0, g.rowViewportPosition(1)) == TOKENS["em"]              # range's top edge
+    assert _pixel(g, x0, g.rowViewportPosition(2) + 5) == "#123456"             # highlight wins over selection
+    bottom = g.rowViewportPosition(2) + g.rowHeight(2) - 1
+    assert _pixel(g, x0, bottom) == TOKENS["em"]                                # ...inside the range's outline
+
+
+def test_row_select_tables_keep_the_mint_row_and_edge_bar(app):
+    g = _grid()
+    g.setFocusPolicy(Qt.NoFocus)
+    g.setSelectionBehavior(g.SelectionBehavior.SelectRows)
+    g.selectRow(1)
+    QApplication.processEvents()
+    x0 = g.visualRect(g.model().index(0, 1)).center().x()
+    assert _pixel(g, x0, g.rowViewportPosition(1) + 5) == TOKENS["g_sel"]
+    assert _pixel(g, 1, g.rowViewportPosition(1) + 5) == TOKENS["em"]
 
 
 def test_grid_hover_row(app):

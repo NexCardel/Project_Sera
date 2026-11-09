@@ -4,7 +4,7 @@ except Exception:
     qta = None
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal, QSize, QTimer
+from PySide6.QtCore import Qt, Signal, QSize, QTimer, QRectF
 from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
@@ -25,23 +25,46 @@ _LOGO_DIR = Path(__file__).resolve().parent.parent.parent / "assets" / "logo"
 _SYNC_IDLE_TEXT = "Auto-sync active"
 
 
-def _logo_pixmap(side: int, ratio: float):
-    """The Sera mark from sera_mark.svg, drawn crisp at `ratio`; None when it cannot be drawn."""
-    svg = _LOGO_DIR / "sera_mark.svg"
-    try:
-        from PySide6.QtSvg import QSvgRenderer
-        renderer = QSvgRenderer(str(svg))
-        if not renderer.isValid():
-            return None
-        pix = QPixmap(int(side * ratio), int(side * ratio))
-        pix.setDevicePixelRatio(ratio)
-        pix.fill(Qt.transparent)
-        painter = QPainter(pix)
-        renderer.render(painter)
-        painter.end()
-        return pix
-    except Exception:
-        return None
+class _LogoMark(QWidget):
+    """The Sera mark, drawn from sera_mark.svg on every paint so it is sharp at whatever scale the
+    window really lands on (a bitmap made while the sidebar is built guesses the scale and gets
+    stretched by Qt afterwards). Aspect ratio is kept; sera_icon.png, then "PS", are the fallbacks."""
+
+    def __init__(self, side, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(side, side)
+        self._renderer = None
+        self._png = None
+        try:
+            from PySide6.QtSvg import QSvgRenderer
+            renderer = QSvgRenderer(str(_LOGO_DIR / "sera_mark.svg"))
+            if renderer.isValid():
+                renderer.setAspectRatioMode(Qt.KeepAspectRatio)
+                self._renderer = renderer
+        except Exception:
+            self._renderer = None
+        if self._renderer is None:
+            png = _LOGO_DIR / "sera_icon.png"
+            if png.exists():
+                self._png = QPixmap(str(png))
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        if self._renderer is not None:
+            self._renderer.render(p, QRectF(self.rect()))
+        elif self._png is not None and not self._png.isNull():
+            pix = self._png.scaled(self.size() * self.devicePixelRatioF(), Qt.KeepAspectRatio,
+                                   Qt.SmoothTransformation)
+            pix.setDevicePixelRatio(self.devicePixelRatioF())
+            x = (self.width() - pix.width() / pix.devicePixelRatio()) / 2
+            y = (self.height() - pix.height() / pix.devicePixelRatio()) / 2
+            p.drawPixmap(int(x), int(y), pix)
+        else:
+            p.setPen(Qt.white)
+            p.drawText(self.rect(), Qt.AlignCenter, "PS")
+        p.end()
 
 
 def _safe_qta_icon(icon_name, color=None):
@@ -102,18 +125,9 @@ class Sidebar(QFrame):
         brand_layout.setContentsMargins(4, 0, 4, 10)
         brand_layout.setSpacing(KIT["gap_brand"])
 
-        logo = QLabel()
+        logo = _LogoMark(KIT["d_logo"])
         logo.setObjectName("SidebarLogo")
-        logo.setAlignment(Qt.AlignCenter)
-        logo.setFixedSize(KIT["d_logo"], KIT["d_logo"])
-        pix = _logo_pixmap(KIT["d_logo"], self.devicePixelRatioF() or 1.0)
-        if pix is None:
-            png = _LOGO_DIR / "sera_icon.png"
-            pix = QPixmap(str(png)).scaled(KIT["d_logo"], KIT["d_logo"], Qt.KeepAspectRatio, Qt.SmoothTransformation) if png.exists() else None
-        if pix is not None:
-            logo.setPixmap(pix)
-        else:
-            logo.setText("PS")
+        self.logo = logo
 
         names = QVBoxLayout()
         names.setContentsMargins(0, 0, 0, 0)
@@ -225,6 +239,7 @@ class Sidebar(QFrame):
         self.profile_name.setObjectName("SidebarProfileName")
         profile_layout.addWidget(profile)
         profile_layout.addWidget(self.profile_name, stretch=1)
+        self._show_profile_name()
         self.profile_row.installEventFilter(self)
         self._pad_row(self.profile_row)
         self.main_layout.addSpacing(8)
@@ -311,10 +326,18 @@ class Sidebar(QFrame):
         self.toggle_admin.blockSignals(True)
         self.toggle_admin.setChecked(active)
         self.toggle_admin.blockSignals(False)
+        self._show_profile_name()
 
+    def _show_profile_name(self):
+        """The label beside the avatar: a name given through set_user_name, else the role (mockup "Admin")."""
+        if hasattr(self, "profile_name"):
+            role = "Admin" if self._admin_mode else "Staff"
+            self.set_user_name(getattr(self, "_user_name", None) or role, remember=False)
 
-    def set_user_name(self, user_name: str):
+    def set_user_name(self, user_name: str, remember: bool = True):
         """Show the signed-in staff label without allowing it to overflow the sidebar."""
+        if remember:
+            self._user_name = user_name
         available_width = max(60, SIDEBAR_WIDTH - 2 * KIT["pad_sb_h"] - KIT["d_avatar"] - 20)
         self.profile_name.setText(
             self.profile_name.fontMetrics().elidedText(user_name or "Staff", Qt.ElideRight, available_width)
@@ -331,6 +354,8 @@ class Sidebar(QFrame):
     def _pad_row(self, widget):
         """Adds a widget to the sidebar column with the sidebar's side padding."""
         row = QWidget()
+        # named so sidebar_qss() keeps it transparent (the app theme paints unnamed QWidgets grey)
+        row.setObjectName("SidebarPadRow")
         lay = QHBoxLayout(row)
         lay.setContentsMargins(KIT["pad_sb_h"], 0, KIT["pad_sb_h"], 0)
         lay.setSpacing(0)

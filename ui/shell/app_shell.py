@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import QHBoxLayout, QLayout, QSizePolicy, QStackedWidget, QWidget, QGraphicsBlurEffect, QGraphicsOpacityEffect
-from PySide6.QtCore import QPropertyAnimation, QEasingCurve, QEvent, Qt
+from PySide6.QtCore import QPropertyAnimation, QEasingCurve, QEvent, Qt, Signal
 
 
 from ui.shell.sidebar import SIDEBAR_WIDTH, Sidebar
@@ -11,6 +11,9 @@ SIDEBAR_AUTO_EXPAND_ABOVE = 1060     # wider than this again (the gap stops it f
 
 
 class AppShell(QWidget):
+    # True while the sidebar is collapsed: pages show their own sidebar button only then
+    sidebar_collapsed_changed = Signal(bool)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Aman Associates — SERA Workspace")
@@ -161,6 +164,7 @@ class AppShell(QWidget):
         self.sidebar_anim.setEndValue(0)
         self.sidebar_collapsed = True
         self.sidebar_anim.start()
+        self.sidebar_collapsed_changed.emit(True)
 
     def expand_sidebar(self):
         """Expand sidebar to target width (SIDEBAR_WIDTH)."""
@@ -173,6 +177,7 @@ class AppShell(QWidget):
                 self.sidebar.setMinimumWidth(self.sidebar_target_width)
         self.sidebar_anim.finished.connect(_on_expand_finished)
         self.sidebar_anim.start()
+        self.sidebar_collapsed_changed.emit(False)
 
     def show_alert(self, message: str, level: str = "success", duration: int = 3000):
         """Displays a non-blocking bottom-left Sera Alert notification."""
