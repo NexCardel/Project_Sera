@@ -12,6 +12,8 @@ from PySide6.QtCore import Qt, QTimer, QPropertyAnimation
 from PySide6.QtGui import QCursor, QGuiApplication
 from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout, QWidget
 
+from ui.utils.tokens import TOKENS as T
+
 DURATION_MS = 9000
 WIDTH = 380
 MARGIN = 24
@@ -49,11 +51,16 @@ class ScaNoticePopup(QWidget):
         self.level = ""
 
     def _style(self, level: str) -> None:
-        accent = "#D29922" if level in ("warning", "error") else "#2E9B5F"
+        # kit colours (the Toast's card with a tone edge): amber for warnings, mint otherwise
+        warn = level in ("warning", "error")
+        accent = T["warn"] if warn else T["mint"]
+        edge = T["warnline"] if warn else T["emline"]
         self._card.setStyleSheet(
-            f"#scaNoticeCard {{ background:#111814; border:1.5px solid {accent}; border-radius:12px; }}"
-            f"#scaNoticeBadge {{ color:{accent}; font-size:10px; font-weight:700; letter-spacing:1px; }}"
-            "#scaNoticeText { color:#FFFFFF; font-size:12.5px; }")
+            f"#scaNoticeCard {{ background:{T['card']}; border:1px solid {edge};"
+            f" border-left:3px solid {accent}; border-radius:{T['r_l']}px; }}"
+            f"#scaNoticeBadge {{ color:{accent}; font-size:{T['f_xs']}px; font-weight:700; letter-spacing:1px;"
+            " background: transparent; }"
+            f"#scaNoticeText {{ color:{T['text']}; font-size:{T['f_s']}px; background: transparent; }}")
 
     def show_notice(self, text: str, level: str = "warning") -> None:
         self.level = level

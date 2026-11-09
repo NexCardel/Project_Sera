@@ -2430,9 +2430,15 @@ class UnsavedBar(QFrame):
     discard_clicked = Signal()
     save_clicked = Signal()
 
-    def __init__(self, parent=None, *, reserved_space=False):
+    def __init__(self, parent=None, *, reserved_space=False, overlay=False):
+        """reserved_space: keeps its height in the layout when clean (no jump, but an empty band).
+        overlay: not in a layout; floats over the top of its parent while dirty (place it with
+        place_over(rect)) and is hidden when clean, so the page has no empty band and no jump."""
         super().__init__(parent)
         self.setObjectName("KitUnsavedBar")
+        self._overlay = overlay
+        if overlay:
+            reserved_space = True
         self.setFixedHeight(K["h_unsaved"])
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._count = 0
@@ -2473,6 +2479,11 @@ class UnsavedBar(QFrame):
     def count(self):
         return self._count
 
+    def place_over(self, rect):
+        """overlay mode: the strip of the parent the bar floats over (a QRect)."""
+        self.setGeometry(rect.x(), rect.y(), rect.width(), K["h_unsaved"])
+        self.raise_()
+
     def is_dirty(self):
         return self._count > 0
 
@@ -2482,7 +2493,9 @@ class UnsavedBar(QFrame):
         self.label.setText(text)
         is_dirty = self._count > 0
         if self._reserved_space:
-            self.setVisible(True)
+            self.setVisible(is_dirty if self._overlay else True)
+            if self._overlay and is_dirty:
+                self.raise_()
             self.icon_label.setVisible(is_dirty)
             self.label.setVisible(is_dirty)
             self.discard_btn.setVisible(is_dirty)

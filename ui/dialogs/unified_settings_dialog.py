@@ -12,7 +12,7 @@ Audit Log and CSV Import are intentionally kept as separate dialogs.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal, QSize, QObject
+from PySide6.QtCore import Qt, Signal, QSize, QObject, QEvent, QRect
 from PySide6.QtGui import QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -257,13 +257,13 @@ class UnifiedSettingsDialog(QDialog):
         pv = QVBoxLayout(pane)
         pv.setContentsMargins(0, 0, 0, 0)
         pv.setSpacing(0)
-        self._unsaved = UnsavedBar(reserved_space=True)
+        # the unsaved bar floats over the top of the page while there are changes: no empty band
+        # above every page when clean, and nothing jumps when the first change is made
+        self._unsaved = UnsavedBar(pane, overlay=True)
         self._unsaved.discard_clicked.connect(self._on_discard)
         self._unsaved.save_clicked.connect(self._on_save_settings)
-        bar_wrap = QHBoxLayout()
-        bar_wrap.setContentsMargins(TOKENS["s_5"], TOKENS["s_3"], TOKENS["s_5"], 0)
-        bar_wrap.addWidget(self._unsaved)
-        pv.addLayout(bar_wrap)
+        self._unsaved_pane = pane
+        pane.installEventFilter(self)
         self._stack = QStackedWidget()
         pv.addWidget(self._stack, 1)
         row.addWidget(pane, 1)
@@ -271,6 +271,12 @@ class UnifiedSettingsDialog(QDialog):
         body.setAlignment(hub, Qt.AlignmentFlag(0))
 
         self._build_footer()
+
+    def eventFilter(self, obj, event):
+        if obj is getattr(self, "_unsaved_pane", None) and event.type() in (QEvent.Resize, QEvent.Show):
+            side, top = TOKENS["s_5"], TOKENS["s_3"]
+            self._unsaved.place_over(QRect(side, top, max(0, obj.width() - 2 * side), 0))
+        return super().eventFilter(obj, event)
 
     def _build_nav_panel(self) -> QWidget:
         panel = QFrame()
