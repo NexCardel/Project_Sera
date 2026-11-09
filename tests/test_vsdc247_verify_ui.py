@@ -8,6 +8,9 @@ VSDC247_verify flagged rows.
 import pytest
 from PySide6.QtWidgets import QApplication
 from ui.windows.tracker_dump_window import TrackerDumpWindow, _passes_source_filter
+from ui.utils.tokens import TOKENS as _T
+
+VERIFY_TINT = _T["purpledim"].lower()   # the overhaul moved the literal #241633 onto the token
 
 
 @pytest.fixture(scope="module")
@@ -113,9 +116,9 @@ def test_tracker_dump_raw_highlight(qapp, monkeypatch):
     assert client_item is not None
     assert filing_item is not None
 
-    # Check background tint is set to purple tint (#241633)
+    # Check background tint is set to the kit's purple tint (purpledim)
     bg_color = client_item.background().color().name().lower()
-    assert bg_color == "#241633"
+    assert bg_color == VERIFY_TINT
     assert "Seen only by OCR — SGT missed it" in client_item.toolTip()
 
     # Row 1: SGT row
@@ -123,7 +126,7 @@ def test_tracker_dump_raw_highlight(qapp, monkeypatch):
     assert sgt_client_item is not None
     assert "Seen only by OCR" not in sgt_client_item.toolTip()
     # Should not have the verify purple background
-    assert sgt_client_item.background().color().name().lower() != "#241633"
+    assert sgt_client_item.background().color().name().lower() != VERIFY_TINT
 
 
 def test_tracker_dump_grouped_highlight(qapp):
@@ -160,5 +163,5 @@ def test_tracker_dump_grouped_highlight(qapp):
 
     client_item = win.table.item(0, win.COL_CLIENT)
     assert client_item is not None
-    assert client_item.background().color().name().lower() == "#241633"
+    assert client_item.background().color().name().lower() == VERIFY_TINT
     assert "Seen only by OCR — SGT missed it" in client_item.toolTip()

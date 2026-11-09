@@ -6,7 +6,7 @@ import unittest
 from database import SeraDatabase
 from security import generate_and_save_salt, derive_key_hex
 from clipboard_watch import ClipboardWatchService, Arm
-from ui.dialogs.audit_log_dialog import _get_action_badge_style
+from ui.dialogs.audit_log_dialog import _get_action_badge as _get_action_badge_style  # renamed in the redesign; same labels
 from ui.services.alert_service import ActionAlertFormatter
 
 

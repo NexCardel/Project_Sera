@@ -179,7 +179,7 @@ class DRSConfigDialog(QDialog):
         frame.add_footer_spacer()
         self.btn_close = frame.add_action("Close", icon="mdi.close")
         self.btn_close.clicked.connect(self.accept)
-        self.btn_save = frame.add_action("Save and refresh", variant="primary", icon="mdi.content-save-check-outline",
+        self.btn_save = frame.add_action("Save and refresh", variant="primary", icon="mdi.content-save-outline",
                                          tooltip="Save this arrangement and rebuild the workbook now")
         self.btn_save.clicked.connect(self._on_save_and_refresh)
 
