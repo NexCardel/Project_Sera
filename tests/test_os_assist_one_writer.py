@@ -4,7 +4,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SKIP_DIRS = {"venv", ".build_venv", "backups", ".restore_points", "build", "dist", "tests",
-             ".git", "__pycache__", "node_modules"}
+             ".git", "__pycache__", "node_modules",
+             # packaging output: bundled libraries (comtypes' generated wrappers call SetValue)
+             "package_build", "package_dist", "installer_output", "tmp_pytest", "temp_cache"}
 ALLOWED = (Path("core/os_assist/fill.py"), Path("tools/pre_dev/os_assist"))
 FORBIDDEN = ("SetValue(", "SendInput", ".SetFocus(")
 

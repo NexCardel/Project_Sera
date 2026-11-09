@@ -36,6 +36,15 @@ def _sca_log_in_tmp(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _assist_engine_from_tmp(monkeypatch, tmp_path):
+    """automation.assist_engine() reads the test's own empty settings.ini (so: 'extension'), never
+    the real ~/AmanAssociates_Sera/settings.ini - with the owner's 'assist_engine = os' there, SCA
+    arms went to the OS engine and the SCA UID tests failed on this PC only. Tests that need the
+    OS engine patch assist_engine or _settings_ini_path themselves."""
+    monkeypatch.setattr("automation._settings_ini_path", lambda: tmp_path / "settings.ini")
+
+
+@pytest.fixture(autouse=True)
 def _reconciliation_log_in_tmp(monkeypatch, tmp_path):
     """The accountant reconciliation log (core/vsdc/vsdc247_reconciler) goes to the test's own
     folder, never to the real ~/AmanAssociates_Sera/logs/gst_reconciliation.txt."""
