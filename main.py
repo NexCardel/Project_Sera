@@ -642,6 +642,14 @@ class SeraApp:
         self.bridge.sck_save_password_received.connect(self._handle_sck_save_password)
         self.bridge.sck_widget_closed_received.connect(self._handle_sck_widget_closed)
         self.bridge.sck_edit_requested.connect(self._handle_sck_edit_requested)
+        from ui.os_assist import dock_card as _os_dock_card     # ✎ on OS Assist cards (D3)
+        _os_dock_card.set_sck_edit_handler(self._handle_sck_edit_requested)
+        from core.os_assist import launcher as _os_launcher     # OS SMTI/MECP copies clear after this
+        _os_launcher.set_clear_seconds_provider(lambda: self.db.get_setting("clipboard_clear_seconds", "30"))
+        import automation as _automation                        # SCA engine switch (blueprint §4.7)
+        _automation.add_engine_listener(self._on_assist_engine_changed)
+        if _automation.assist_engine() == "os":                 # first OS card: no 0.1-0.3 s font search
+            QTimer.singleShot(8000, _os_dock_card.warm_up)
         self.bridge.sck_candidate_received.connect(self._handle_sck_candidate)
         self.bridge.sck_outcome_received.connect(self._handle_sck_outcome)
         self.bridge.extension_settings_updated_received.connect(self._handle_extension_settings_updated)
@@ -794,8 +802,22 @@ class SeraApp:
             if to_set:
                 self.db.set_settings_bulk(to_set)
                 print(f"[main] Persisted updated extension settings from popup: {to_set}")
+                from automation import assist_engine
+                if assist_engine() == "os":
+                    self._sync_extension_settings()      # the popup must not turn the extension's SCA back on
         except Exception as e:
             print(f"[main] Error handling extension_settings_updated: {e}")
+
+    def _on_assist_engine_changed(self, engine: str):
+        """Settings -> Assist engine switched (no restart): the extension's SCA goes off in OS mode and
+        gets the user's setting back on Extension; an OS SCA arm is dropped when leaving OS."""
+        if engine != "os":
+            from core.os_assist import sca_engine
+            sca_engine.disarm_all("ENGINE")
+        else:
+            from ui.os_assist import dock_card
+            QTimer.singleShot(1000, dock_card.warm_up)
+        self._sync_extension_settings()
 
     def _get_extension_settings_payload(self) -> dict:
         """Packages current services and settings for the extension."""
@@ -811,12 +833,12 @@ class SeraApp:
                 clip_secs = max(5, min(int(self.db.get_setting("clipboard_clear_seconds", "30")), 300))
             except (ValueError, TypeError):
                 clip_secs = 30
-            from automation import allowed_portal_domains
+            from automation import allowed_portal_domains, assist_engine
             return {
                 "status": "ok",
                 "allowed_domains": allowed_portal_domains(svcs),
                 "clipboard_clear_seconds": clip_secs,
-                "sca_enabled": sca_en,
+                "sca_enabled": sca_en and assist_engine() != "os",   # OS engine: the desktop does SCA
                 "sca_mode": sca_mode,
                 "sca_max_uses": sca_max,
                 "allowed_services": svcs,
@@ -845,7 +867,7 @@ class SeraApp:
         """SCA v2: the extension asks for one portal password after the client's id was entered
         on that portal. clipboard_watch decides; the answer goes back only on the socket that
         asked (WSBridge.reply), never to every connected browser."""
-        reply = self.clipboard_watcher.handle_password_request(msg)
+        reply = self.clipboard_watcher.handle_extension_password_request(msg)
         self.bridge.reply(msg, reply)
 
     def _show_sca_popup(self, text: str, level: str = "warning") -> None:
@@ -1368,7 +1390,8 @@ class SeraApp:
         self._scc_card = SccCard(
             self.db,
             open_card=lambda service, pan, rows, title, client_id, attempt_id, **opts:
-                automation.send_scc_card(service, pan, rows, title, client_id, attempt_id, **opts),
+                automation.send_scc_card(service, pan, rows, title, client_id, attempt_id,
+                                         hwnd=self._scc_card.attempt_hwnd(attempt_id), **opts),
             close_card=automation.close_scc_card,
             suppress=clipboard_watch.suppress_client, release=clipboard_watch.release_client,
             on_closed=lambda att: opener.close(att.hwnd),
@@ -1387,6 +1410,11 @@ class SeraApp:
         watcher = getattr(self, "clipboard_watcher", None)
         if watcher is not None:
             watcher.scc_ledger = self._scc_card.note_clipboard
+        from ui.os_assist import mecp_card as _os_mecp_card
+        handlers = {"scc_row_worked": self._handle_scc_row_worked, "scc_row_none": self._handle_scc_row_none,
+                    "scc_card_closed": self._handle_scc_card_closed}
+        _os_mecp_card.set_scc_hooks(send=lambda msg: handlers[msg.get("type")](msg),
+                                    ledger=self._scc_card.note_clipboard)
         self._scc_parts = [opener, self._scc_outcome]
         return self._scc_parts
 

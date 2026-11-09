@@ -134,13 +134,119 @@ def autofill_login(service: dict, user_id: str, password: str, client_id: int, o
 
 
 def trigger_manual_assist(service: dict, user_id: str, password: str, client_id: int, on_error=None):
-    """Open the portal and ask the companion extension to show SMTI Manual Assist."""
+    """Open the portal and ask the companion extension to show SMTI Manual Assist
+    (OS engine: a docked Sera card fills the boxes instead)."""
+    if assist_engine() == "os":
+        _launch_os_card("smti", service, user_id, password, client_id, on_error)
+        return
     _send_to_extension(service, user_id, password, client_id, on_error, mode="manual_assist")
 
 
 def trigger_mecp(service: dict, user_id: str, password: str, client_id: int, on_error=None):
-    """Open the portal and ask the companion extension to show the MECP floating card widget."""
+    """Open the portal and ask the companion extension to show the MECP floating card widget
+    (OS engine: the same card as a docked Sera window)."""
+    if assist_engine() == "os":
+        _launch_os_card("mecp", service, user_id, password, client_id, on_error)
+        return
     _send_to_extension(service, user_id, password, client_id, on_error, mode="mecp")
+
+
+def _launch_os_card(kind: str, service: dict, user_id: str, password: str, client_id, on_error=None):
+    from core.os_assist import launcher
+    launcher.launch(kind, service, user_id, password, client_id,
+                    service.get("_client_name", service.get("name", "Client")), on_error)
+
+
+def _settings_ini_path() -> Path:
+    return Path.home() / "AmanAssociates_Sera" / "settings.ini"
+
+
+_engine_listeners: list = []
+
+
+def _read_ini_text(path: Path):
+    """(text, encoding) of settings.ini; ('', 'utf-8') when missing. A file that is not UTF-8 is
+    read as latin-1, which writes every byte back unchanged."""
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return "", "utf-8"
+    for enc in ("utf-8-sig" if raw.startswith(b"\xef\xbb\xbf") else "utf-8", "latin-1"):
+        try:
+            return raw.decode(enc), enc
+        except UnicodeDecodeError:
+            continue
+    return "", "utf-8"
+
+
+def assist_engine() -> str:
+    """'extension' (default) or 'os': who fills SMTI, MECP and SCA. Read fresh, so a switch needs no restart."""
+    try:
+        import configparser
+        cfg = configparser.ConfigParser(interpolation=None, strict=False)
+        cfg.read_string(_read_ini_text(_settings_ini_path())[0])
+        if cfg.get("Automation", "assist_engine", fallback="extension").strip().lower() == "os":
+            return "os"
+    except Exception:
+        pass
+    return "extension"
+
+
+def set_assist_engine(engine: str) -> str:
+    """Saves the engine to settings.ini and tells the listeners when it changed. Returns the saved value.
+    Only the assist_engine line changes: the same file holds the MCL_Columns seed (case-sensitive
+    labels) and comments, which a configparser rewrite would lower-case or drop."""
+    import re
+    engine = "os" if str(engine).strip().lower() == "os" else "extension"
+    previous = assist_engine()
+    path = _settings_ini_path()
+    text, enc = _read_ini_text(path)
+    line_new = f"assist_engine = {engine}"
+    out, in_auto, done = [], False, False
+
+    def end_of_section():                    # before the section's trailing blank lines
+        i = len(out)
+        while i and not out[i - 1].strip():
+            i -= 1
+        out.insert(i, line_new)
+
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("[") and s.endswith("]"):
+            if in_auto and not done:
+                end_of_section()
+                done = True
+            in_auto = s[1:-1] == "Automation"
+        elif in_auto and re.match(r"assist_engine\s*[=:]", s, re.IGNORECASE):
+            if not done:
+                out.append(line_new)
+                done = True
+            continue
+        out.append(line)
+    if in_auto and not done:
+        end_of_section()
+    elif not done:
+        out += ([""] if out and out[-1].strip() else []) + ["[Automation]", line_new]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(out) + "\n", encoding=enc)
+    if engine != previous:
+        for listener in list(_engine_listeners):
+            try:
+                listener(engine)
+            except Exception:
+                pass
+    return engine
+
+
+def add_engine_listener(callback) -> None:
+    """callback(engine) runs after the engine changes; no restart needed."""
+    if callback not in _engine_listeners:
+        _engine_listeners.append(callback)
+
+
+def remove_engine_listener(callback) -> None:
+    if callback in _engine_listeners:
+        _engine_listeners.remove(callback)
 
 
 def open_in_default_browser(url: str, preferred_browser: Optional[str] = None):
@@ -226,7 +332,7 @@ def _extension_payload(service: dict, user_id: str, password: str, client_id, mo
 
 
 def send_scc_card(service: dict, pan: str, rows: list, client_name: str, client_id, attempt_id: str,
-                  open_tab: bool = False, on_error=None) -> bool:
+                  open_tab: bool = False, on_error=None, hwnd: int = 0) -> bool:
     """SCC-U: shows the MECP card's SCC mode in the portal tab that is already open (the extension
     never navigates or opens a tab for it). Sent to every connected browser - only one that has
     the portal open shows it. No retry and no browser launch: SGT just saw the page, so a browser
@@ -236,6 +342,10 @@ def send_scc_card(service: dict, pan: str, rows: list, client_name: str, client_
     from ui import ws_bridge
     if not rows:
         return False
+    if assist_engine() == "os":
+        from core.os_assist import launcher
+        return launcher.launch_scc(service, pan, rows, client_name, client_id, attempt_id,
+                                   hwnd=hwnd, open_tab=open_tab, on_error=on_error)
     svc = {**service, "_client_name": client_name}
     payload = _extension_payload(svc, pan, "", client_id, "mecp", scc_mode=True, scc_combos=rows, attempt_id=attempt_id)
     if open_tab:
@@ -250,6 +360,9 @@ def send_scc_card(service: dict, pan: str, rows: list, client_name: str, client_
 
 def close_scc_card(attempt_id: str) -> bool:
     """SCC-U: asks the browser to take the SCC card of this attempt down (a save, or the attempt ended)."""
+    if assist_engine() == "os":
+        from ui.os_assist import mecp_card
+        return mecp_card.close_card(attempt_id)
     from ui import ws_bridge
     bridge = ws_bridge.get_active_bridge()
     if not bridge or not attempt_id:
@@ -262,6 +375,9 @@ def update_scc_card(attempt_id: str, failed: list, next_label, message: str, sto
     (locked out) greys every row and highlights none. Step 5: `ask` (a list, maybe empty) = the card
     asks which row worked, highlighting those and offering "None - I typed my own". Row labels only -
     never a password."""
+    if assist_engine() == "os":
+        from ui.os_assist import mecp_card
+        return mecp_card.update_card(attempt_id, failed, next_label, message, stop, ask)
     from ui import ws_bridge
     bridge = ws_bridge.get_active_bridge()
     if not bridge or not attempt_id:
@@ -439,14 +555,16 @@ def arm_sca(arm_request: dict, attempts_s: int = 35):
 
 
 def update_extension_settings(sca_enabled: bool = True, sca_mode: str = "autofill", allowed_services: Optional[list[dict]] = None, sca_max_uses: int = 1, clipboard_clear_seconds: Optional[int] = None):
-    """Sends immediate setting updates to every connected browser's background.js."""
+    """Sends immediate setting updates to every connected browser's background.js. With the OS
+    engine, SCA is the desktop's (core/os_assist/sca_engine): the extension's SCA is always sent off,
+    whatever the caller passed, so it can't fill as well; back on Extension the user's setting goes."""
     from ui import ws_bridge
 
     allowed_domains = allowed_portal_domains(allowed_services)
 
     payload = {
         "type": "update_settings",
-        "sca_enabled": sca_enabled,
+        "sca_enabled": bool(sca_enabled) and assist_engine() != "os",
         "sca_mode": sca_mode,
         "sca_max_uses": max(1, min(int(sca_max_uses), 20)),
         "allowed_domains": allowed_domains,

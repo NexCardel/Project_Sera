@@ -232,9 +232,24 @@ def test_leaving_and_coming_back_reports_again():
     w.tick(); w.tick()
     r.url = "https://other.example/"
     assert w.tick() is False
+    assert w.tick() is False                           # LEAVE_READS (2) reads away: left
     r.url = LINK
     w.tick(); w.tick()
     assert len(uids) == 2
+
+
+def test_one_odd_address_bar_read_does_not_end_the_visit():
+    """2026-11-09: one read off the page (3 ms later back on it) ended the visit, re-reported the UID
+    and re-armed, so the SCA card slid out and in again."""
+    r = FakeReader(one_page())
+    w, uids, _ = watcher(r, fp_of(one_page(), 2))
+    w.tick(); w.tick()
+    assert len(uids) == 1
+    r.url = ""                                         # the bar read came back empty once
+    w.tick()
+    r.url = LINK
+    w.tick(); w.tick(); w.tick()
+    assert len(uids) == 1 and w._visit is not None
 
 
 def test_page_one_of_a_two_page_login_is_not_read_as_the_uid_page():
@@ -628,7 +643,7 @@ def test_sca_log_records_each_step_and_never_a_uid(svc_db, tmp_path, monkeypatch
         watch, uids, _ = watcher(r, fp_of(two_page(), 1, "EMAIL"))
         watch.tick(); watch.tick()
         r.url = "https://other.example/"
-        watch.tick()
+        watch.tick(); watch.tick()                                # LEAVE_READS reads away: left
         w.handle_source_uid(a, uids[0][1])
         w.handle_source_uid(a, "ZZZZZ9999Z")
         text = log.read_text(encoding="utf-8")
