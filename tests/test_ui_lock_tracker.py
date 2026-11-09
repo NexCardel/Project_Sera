@@ -425,10 +425,10 @@ def test_right_click_menu_lists_the_actions_for_the_row_and_view(make_window, mo
     _right_click(win, 0)
     _right_click(win, 1)
     assert shown == [
-        ["Inspect Client Container", "Notes & Media", "Delete Container"],
-        ["Inspect Client Container", "Notes & Media", "+ Create Client", "Delete Container"],
-        ["View Raw Payload", "Notes & Media", "Delete Record"],
-        ["View Raw Payload", "Notes & Media", "+ Create Client", "Delete Record"],
+        ["Inspect Client Container", "Notes && Media", "Delete Container"],
+        ["Inspect Client Container", "Notes && Media", "+ Create Client", "Delete Container"],
+        ["View Raw Payload", "Notes && Media", "Delete Record"],
+        ["View Raw Payload", "Notes && Media", "+ Create Client", "Delete Record"],
     ]
 
 
@@ -439,8 +439,8 @@ def test_kebab_menu_lists_create_and_delete(make_window, monkeypatch):
     win._on_grid_action(1, W.COL_ACTIONS, "more")
     win.cmb_view_mode.setCurrentIndex(1)
     win._on_grid_action(0, W.COL_ACTIONS, "more")
-    assert shown == [["Notes & Media", "Delete Container"], ["Notes & Media", "+ Create Client", "Delete Container"],
-                     ["Notes & Media", "Delete Record"]]
+    assert shown == [["Notes && Media", "Delete Container"], ["Notes && Media", "+ Create Client", "Delete Container"],
+                     ["Notes && Media", "Delete Record"]]
 
 
 def test_delete_container_asks_first_and_removes_only_that_container(make_window, monkeypatch):

@@ -1299,19 +1299,25 @@ class PayloadInspectorDialog(QDialog):
             empty = QLabel("No client details in this capture.")
             empty.setObjectName("KitEmpty")
             client_card.add_widget(empty)
-        cards_row.addWidget(client_card, stretch=3)
+        # Top-aligned: a taller card beside it must never stretch this one and spread its fields apart.
+        cards_row.addWidget(client_card, 3, Qt.AlignTop)
 
         if sgt_i_info:
             sgti_card = Card("SGT-I — advisory, read-only")
             sgti_card.setToolTip("SGT Intelligence's own facts about this row (route, explanation, second "
                                   "opinion). They sit beside the Core's captured values and never replace "
                                   "them (blueprint 14.2 rule 4).")
-            sgti_text = QLabel(json.dumps(sgt_i_info, indent=2, sort_keys=True, ensure_ascii=False))
+            # A scrolling box with a capped height: this JSON runs to hundreds of lines on a client
+            # with many captures, and as a plain label it made the Overview several screens long.
+            sgti_json = json.dumps(sgt_i_info, indent=2, sort_keys=True, ensure_ascii=False)
+            sgti_text = TextArea()
+            sgti_text.setReadOnly(True)
             sgti_text.setFont(QFont("Consolas", 10))
-            sgti_text.setWordWrap(True)
-            sgti_text.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            sgti_text.setPlainText(sgti_json)
+            line_h = QFontMetrics(sgti_text.font()).lineSpacing()
+            sgti_text.setFixedHeight(min(220, line_h * (sgti_json.count("\n") + 1) + 28))
             sgti_card.add_widget(sgti_text)
-            cards_row.addWidget(sgti_card, stretch=2)
+            cards_row.addWidget(sgti_card, 2, Qt.AlignTop)
 
         sum_layout.addLayout(cards_row)
 
@@ -1421,7 +1427,7 @@ class PayloadInspectorDialog(QDialog):
 
         btn_copy = frame.add_action("Copy Container Summary", variant="secondary")
 
-        btn_notes = frame.add_action("Notes & Media", variant="secondary", icon="mdi.note-text-outline")
+        btn_notes = frame.add_action("Notes && Media", variant="secondary", icon="mdi.note-text-outline")
         btn_notes.clicked.connect(self._open_notes_dialog)
 
         def _on_tab_changed(idx):
@@ -2481,7 +2487,7 @@ class TrackerDumpWindow(QWidget):
         if is_grouped:
             act_inspect = menu.addAction(_safe_qta_icon("mdi.eye", T["mint"]), "Inspect Client Container")
             act_inspect.triggered.connect(lambda: self._show_container_dialog(item))
-            act_notes = menu.addAction(_safe_qta_icon("mdi.note-text-outline", K["blue_tx"]), "Notes & Media")
+            act_notes = menu.addAction(_safe_qta_icon("mdi.note-text-outline", K["blue_tx"]), "Notes && Media")
             act_notes.triggered.connect(lambda: self._show_notes_dialog(item, is_grouped=True))
             if item.get('is_unassigned'):
                 act_create = menu.addAction(_safe_qta_icon("mdi.account-plus", T["em2"]), "+ Create Client")
@@ -2491,7 +2497,7 @@ class TrackerDumpWindow(QWidget):
         else:
             act_inspect = menu.addAction(_safe_qta_icon("mdi.code-json", T["mint"]), "View Raw Payload")
             act_inspect.triggered.connect(lambda: self._show_payload_dialog(item))
-            act_notes = menu.addAction(_safe_qta_icon("mdi.note-text-outline", K["blue_tx"]), "Notes & Media")
+            act_notes = menu.addAction(_safe_qta_icon("mdi.note-text-outline", K["blue_tx"]), "Notes && Media")
             act_notes.triggered.connect(lambda: self._show_notes_dialog(item, is_grouped=False))
             if item.get('is_unassigned') or not item.get('client_id'):
                 act_create = menu.addAction(_safe_qta_icon("mdi.account-plus", T["em2"]), "+ Create Client")
@@ -2933,7 +2939,7 @@ class TrackerDumpWindow(QWidget):
         else:
             needs_create = item.get('is_unassigned') or not item.get('client_id')
 
-        act_notes = menu.addAction(_safe_qta_icon("mdi.note-text-outline", K["blue_tx"]), "Notes & Media")
+        act_notes = menu.addAction(_safe_qta_icon("mdi.note-text-outline", K["blue_tx"]), "Notes && Media")
         act_notes.triggered.connect(lambda: self._show_notes_dialog(item, is_grouped))
 
         if needs_create:
