@@ -1,7 +1,8 @@
 # SDIS rework experiments: progress and open problems
 
-Last updated: 2026-10-17 (experiment 4, container shapes over the whole page, plus the table and geometry
-measurements: section 6.7). This file is written to be read **on its own**: it does not assume access to the
+Last updated: 2026-11-13 (experiment 5, the three finders run on the recorder corpus: section 6.8, not
+yet reviewed by the owner). Before that: 2026-10-17 (experiment 4, container shapes over the whole page,
+plus the table and geometry measurements: section 6.7). This file is written to be read **on its own**: it does not assume access to the
 repository. File names are given only so that the owner can find things; a reader does not need to open
 them. It holds no client values (counts, shapes and pixel numbers only).
 
@@ -344,6 +345,68 @@ clicks the values to capture.
 - Measure `LIKE` from the gap in the members' text ratios.
 - Fix the three table gaps.
 - Draft the picker Part.
+
+### 6.8 Experiment 5: the three finders on the recorder corpus (2026-11-13)
+
+**Not reviewed by the owner yet.** Nothing in `core/` or in the pre-dev tools was changed. The scripts
+are in `docs/sdis_experiments/scripts/corpus/` (they write only to the git-ignored `output/` folder).
+
+**The corpus.** The production recorder's files on the office PC (`<Sera data>/sdis/corpus/`, two
+devices): **17,609 reads, 25 page links**. The experiments before this one never used it; they used
+`key_probe` captures only.
+- GST returns dashboard: 8,932 reads, 10 sessions, **8 clients** (by GSTIN). GSTR-1: 8 clients. B2B
+  summary: 16 identity sets.
+- Gaps: GST only (no ITR page at all), Chrome only (15 Firefox reads, all of the login page), **two days
+  only** (10 and 11 Oct). Nothing recorded since 11 Oct; the cause was not checked.
+
+**Format gap between corpus records and the pre-dev tools.** A corpus node holds `parent`, `depth`,
+`ctype`, `name`, `rect`, `role` and sometimes `aid`, `grid`, `value`. It has **no class names**, no
+`type_name`, and the automation id is under `aid`, not `id`. So:
+- `keys.flatten` gives numeric types; `cards.py` and `arrange.py` compare type names, and the tree
+  finder returns **0 groups on every corpus read** until type names are added;
+- the "strict shape" of experiment 4 (types, ids, classes) is **types only** on production reads.
+
+**Sample.** Per (link, session) the first 12 distinct page structures: 703 reads. Type names were
+added from `ctype` before running. Top-level groups only.
+
+| Finder | Dashboard reads with every tile isolated and nothing else (23 reads with tiles, 7 clients) | Tiles isolated (of 86) | Sets proposed per dashboard read (median) |
+|---|---|---|---|
+| Shape (exp. 4) | 21 | 84 | 1 |
+| Tree (exp. 2) | 21 | 86 | 5 |
+| Arrangement (exp. 3) | 0 | 42 | 4 |
+
+- Truth for this check only: the on-screen form-code texts (one per tile).
+- The 2 misses are reads showing **one tile**. Nothing repeats there, so no repetition finder can work.
+- Feeding `aid` as the id changes nothing on the dashboard.
+- Cost per read: shape 15 ms, tree 13 ms, arrangement 34 ms.
+
+**`LIKE` cannot be measured.** Over 1,821 repeated disjoint shapes the min/max text ratio has no clear
+gap (widest: 0.909 to 1.0, then 0.054 wide). The true tile sets sit at **0.667**. `LIKE` from 0 to 0.5
+gives the same dashboard result; 0.75 loses every tile. By rule 3 it should be removed, not tuned.
+
+**The name statistic (ρ, R) fails with one period.** On the dashboard the two due dates are shown for
+7 of 8 clients, exactly as often as the form codes, and like them are distinct within a page.
+Recurrence across clients cannot tell a name from a shared due date until several periods exist.
+
+**Direction proposed (owner to decide): propose, pick, prove.**
+- **Propose:** the shape finder (types only, no `LIKE`), with the tree finder as a second witness. The
+  arrangement only lines up slots inside records already found.
+- **Pick:** the owner clicks the value on a rendered page and marks the key slot. This takes ρ/R, name
+  ties (13, 14), label vs value outside groups (11) and P15 out of the statistics. A click-to-pick tool
+  exists since 2026-11-07 for SCA (`core/sca/uid_picker.py`); how much can be reused was not checked.
+- **Prove:** before a rule is saved it is run over the whole corpus (reads and clients hit), in place
+  of fixtures written by the method's author (P21).
+- A saved rule recognises a record by its shape even when the page shows one.
+
+**Not solved by this:** Firefox tiles with no wrapper (7, 8: no Firefox dashboard read in the corpus),
+hover popups (15), furniture by day (P5), ITR pages (none in the corpus; the ITR-4 form result of
+experiment 4 relied on ids).
+
+**Next, waiting for the owner:**
+1. A pre-dev adapter so the tools read corpus records (type names, `aid`), then re-measure on all reads.
+2. Find out why recording stopped after 11 Oct.
+3. Decide whether the recorder should store class names.
+4. Write the picker as a blueprint Part before any build.
 
 ## 7. Other open SDIS problems (outside the cards work)
 
