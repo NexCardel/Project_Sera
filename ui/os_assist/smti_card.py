@@ -10,7 +10,8 @@ SMTI Manual Assist as a docked desktop card (blueprint §4.4), the same look as 
 - Password: filled -> "✓  Password Injected", and the card goes once the late check passes;
   otherwise a secure copy (cleared after the clipboard-clear seconds) and
   "📋  Copied Password (Ctrl+V)", then the card goes after 1.2 s.
-- A press shows its result after fill's first check (about 0.15 s), not after the full 1.15 s:
+- A press shows its result after fill's first check (the value is there and stayed, about
+  0.05 s), not after the full 1 s:
   the 1.0 s re-check runs on the worker afterwards (fill late_check="background"). If the page
   drops the value by then, the card falls back to the copy, as if the fill had failed.
 - Flutter mode (TRACES host, or a page with no visible Edit until one is focused): the buttons are
@@ -18,6 +19,9 @@ SMTI Manual Assist as a docked desktop card (blueprint §4.4), the same look as 
   reports a focus move (WinEvent, at once) and polled as a safety net (400 ms with events, 200 ms
   without), and the user ID, then the password, is typed into each new box staff click (§4.3).
   Nothing is clicked, tabbed or submitted.
+- A press is answered in the same frame: the button takes its pressed look ("busy") at once, and
+  if the result is not in after WORKING_AFTER_MS (the keys fallback, a busy worker) it reads
+  "⏳  Injecting…" until it is.
 - Speed: the boxes are found once when the card shows (locate.warm_fields, which also wakes the
   browser's accessibility tree) and reused by a press while still on the page; a press jumps the
   worker's queue (worker.submit_urgent).
@@ -36,6 +40,7 @@ from ui.os_assist.dock_card import DockCard, css_px, wire_sck_edit
 TIMEOUT_MS = 30000                    # the extension's SMTI duration
 INJECTED_MS, COPIED_USER_MS = 2000, 2500
 COPIED_PASS_DISMISS_MS = 1200
+WORKING_AFTER_MS = 90                 # a press not answered by then shows WORKING_TEXT
 FLUTTER_DONE_DISMISS_MS = 400
 FOCUS_POLL_MS = 200                   # fill.FocusWatcher.POLL_S (no window events)
 FOCUS_POLL_EVENTS_MS = 400            # safety net when focus events come from the hub
@@ -45,6 +50,7 @@ FLUTTER_PROBE_TRIES = 3               # ... again while the page has no Document
 FLUTTER_HOSTS = ("tdscpc.gov.in", "traces")
 
 USER_TEXT, PASS_TEXT = "👤  Username", "🔑  Password"
+WORKING_TEXT = "⏳  Injecting…"
 USER_DONE, USER_COPIED = "✓  Username Injected", "📋  Copied Username (Ctrl+V)"
 PASS_DONE, PASS_COPIED = "✓  Password Injected", "📋  Copied Password (Ctrl+V)"
 STEP1_TITLE, STEP1_DESC = ("👉 Step 1: Click the Username box",
@@ -212,6 +218,11 @@ class SmtiCard(DockCard):
         self._user_revert = QTimer(self)
         self._user_revert.setSingleShot(True)
         self._user_revert.timeout.connect(lambda: self._set_btn(self.user_btn, "primary", USER_TEXT))
+        self._working = {}
+        for kind in ("user", "pass"):
+            t = self._working[kind] = QTimer(self)
+            t.setSingleShot(True)
+            t.timeout.connect(lambda k=kind: self._show_working(k))
         self._focus_poll = QTimer(self)
         self._focus_poll.setInterval(FOCUS_POLL_MS)
         self._focus_poll.timeout.connect(self._poll_focus)
@@ -276,6 +287,9 @@ class SmtiCard(DockCard):
             QPushButton#btn:hover {{ background: #1B3D2B; border-color: #2E9B5F; color: #FFFFFF; }}
             QPushButton#btn[state="primary"] {{ background: #2E9B5F; border-color: #34B76D; color: #FFFFFF; }}
             QPushButton#btn[state="primary"]:hover {{ background: #34B76D; }}
+            QPushButton#btn[state="busy"], QPushButton#btn[state="busy"]:hover {{
+                background: #257E4D; border-color: #2E9B5F; color: #D9F5E6;
+            }}
             QPushButton#btn[state="done"] {{ background: #102B1E; border-color: #2E9B5F; color: #4CF9B7; }}
             QPushButton#btn[state="warn"] {{ border-color: #E8A040; color: #F5C97A; }}
             QFrame#step {{
@@ -301,8 +315,9 @@ class SmtiCard(DockCard):
         """
 
     def _set_btn(self, btn: QPushButton, state: str, text: str) -> None:
-        """The extension's setBtn: "done" | "warn" | anything else = primary."""
-        btn.setProperty("state", state if state in ("done", "warn") else "primary")
+        """The extension's setBtn: "done" | "warn" | anything else = primary; "busy" = pressed,
+        the result not in yet."""
+        btn.setProperty("state", state if state in ("done", "warn", "busy") else "primary")
         btn.setText(text)
         _repolish(btn)
 
@@ -335,6 +350,12 @@ class SmtiCard(DockCard):
         if self.timer is not None:
             self.timer.reset()
         self._busy[kind] = True
+        btn = self.user_btn if kind == "user" else self.pass_btn
+        if kind == "user":
+            self._user_revert.stop()
+        # seen in this frame, before the worker answers
+        self._set_btn(btn, "busy", USER_TEXT if kind == "user" else PASS_TEXT)
+        self._working[kind].start(WORKING_AFTER_MS)
         try:
             job = self._filler.fill(self.browser_hwnd, self.service, kind, self.secret(kind) or "",
                                     self._user_sel, self._pass_sel)
@@ -342,7 +363,13 @@ class SmtiCard(DockCard):
             job = "failed"
         self._when_done(job, lambda outcome: self._pressed(kind, outcome))
 
+    def _show_working(self, kind: str) -> None:
+        btn = self.user_btn if kind == "user" else self.pass_btn
+        if not self.is_dismissed and btn.property("state") == "busy":
+            btn.setText(WORKING_TEXT)
+
     def _pressed(self, kind: str, outcome) -> None:
+        self._working[kind].stop()
         late = None
         if isinstance(outcome, tuple):
             outcome, late = outcome

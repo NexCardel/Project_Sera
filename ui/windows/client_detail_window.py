@@ -374,6 +374,13 @@ class ClientDetailWindow(QWidget):
             automation.ACTION_MECP: ("MECP Manual Copy", "Copy login", "mdi.content-copy", self._launch_manual_copy),
         }
 
+        # one colour per action so the buttons read at a glance: green autofill, blue assist, amber copy
+        action_variants = {
+            automation.ACTION_AUTOFILL: "primary",
+            automation.ACTION_SMTI: "info",
+            automation.ACTION_MECP: "warn",
+        }
+
         for i, s in enumerate(services):
             key_num = i + 1
             has_shortcut = key_num <= 9
@@ -399,7 +406,7 @@ class ClientDetailWindow(QWidget):
             for mode, keys in slots:
                 label, short, icon, fn = action_specs[mode]
                 btn = LabelledAction(
-                    short, variant="primary" if mode == automation.ACTION_AUTOFILL else "secondary",
+                    short, variant=action_variants.get(mode, "secondary"),
                     icon=icon, sm=True,
                     tooltip=f"{label}: {s['name']}" + (f" ({keys})" if has_shortcut else ""),
                 )

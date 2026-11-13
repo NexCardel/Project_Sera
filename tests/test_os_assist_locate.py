@@ -153,6 +153,76 @@ def test_window_for_host_foreground_first(monkeypatch):
         worker.bind(None)
 
 
+LOGIN = "https://services.gst.gov.in/services/login"
+
+
+def _windows(monkeypatch, urls, password_on=(), front=0, exes=None):
+    """Fake browser windows: hwnd -> address bar; `password_on` = windows showing a password box."""
+    worker.bind(SimpleNamespace(url=lambda h: urls[h]))
+    monkeypatch.setattr(locate, "browser_windows", lambda: list(urls))
+    monkeypatch.setattr(locate, "_is_browser", lambda h: h in urls)
+    monkeypatch.setattr(locate, "_proc_name", lambda h: (exes or {}).get(h, "chrome.exe"))
+    monkeypatch.setattr(locate.user32, "GetForegroundWindow", lambda: front, raising=False)
+    monkeypatch.setattr(locate, "find_fields_cached",
+                        lambda h, us=None, ps=None, want="": (None, "box" if h in password_on else None))
+
+
+def test_login_window_is_the_one_on_the_login_link(monkeypatch):
+    _windows(monkeypatch, {1: "https://x.example.com/", 2: "services.gst.gov.in/services/login/?a=1"})
+    try:
+        assert locate.login_window(LOGIN) == 2
+    finally:
+        worker.bind(None)
+
+
+def test_login_window_is_the_one_showing_a_password_box(monkeypatch):
+    _windows(monkeypatch, {1: "https://services.gst.gov.in/services/auth/dashboard",
+                           2: "https://services.gst.gov.in/services/relogin"}, password_on={2})
+    try:
+        assert locate.login_window(LOGIN) == 2
+    finally:
+        worker.bind(None)
+
+
+def test_a_logged_in_page_of_the_portal_is_never_a_login_window(monkeypatch):
+    _windows(monkeypatch, {1: "https://services.gst.gov.in/services/auth/dashboard"})
+    try:
+        assert locate.login_window(LOGIN) == 0
+        assert locate.window_for_host(LOGIN) == 1          # the portal is open, just not on its login page
+    finally:
+        worker.bind(None)
+
+
+def test_login_window_tells_single_page_portal_pages_apart_by_fragment(monkeypatch):
+    link = "https://eportal.incometax.gov.in/iec/foservices/#/login"
+    _windows(monkeypatch, {1: "eportal.incometax.gov.in/iec/foservices/#/dashboard",
+                           2: "eportal.incometax.gov.in/iec/foservices/#/login"})
+    try:
+        assert locate.login_window(link) == 2
+    finally:
+        worker.bind(None)
+
+
+def test_login_window_front_window_wins_and_other_portals_are_skipped(monkeypatch):
+    _windows(monkeypatch, {1: LOGIN, 2: LOGIN, 3: "https://eportal.incometax.gov.in/login"},
+             password_on={3}, front=2)
+    try:
+        assert locate.login_window(LOGIN) == 2
+        assert locate.login_window("") == 0
+    finally:
+        worker.bind(None)
+
+
+def test_login_window_keeps_to_the_service_browser(monkeypatch):
+    _windows(monkeypatch, {1: LOGIN, 2: LOGIN}, exes={1: "chrome.exe", 2: "msedge.exe"})
+    try:
+        assert locate.login_window(LOGIN, browser="edge") == 2
+        assert locate.login_window(LOGIN, browser="firefox") == 0
+        assert locate.login_window(LOGIN, browser="system_default") == 1
+    finally:
+        worker.bind(None)
+
+
 def test_worker_runs_on_own_thread_and_stops():
     import threading
     fut = worker.submit(lambda a, b: (a + b, threading.current_thread().name), 1, 2)

@@ -8,6 +8,7 @@ import json
 import re
 import functools
 import time
+from typing import Optional
 
 
 def _drops_mcl_cache(method):

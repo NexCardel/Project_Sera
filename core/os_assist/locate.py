@@ -9,6 +9,7 @@ import ctypes.wintypes as wt
 import os
 import re
 from typing import Any, List, Optional, Tuple
+from urllib.parse import urlparse
 
 from core.os_assist import worker
 from core.vsdc.vsdc_router import BROWSER_EXE_NAMES
@@ -82,6 +83,57 @@ def window_for_host(host_or_url: str) -> int:
     ordered = ([fg] if _is_browser(fg) else []) + [h for h in browser_windows() if h != fg]
     for hwnd in ordered:
         if host_matches(_host_of(read_url(hwnd)), want):
+            return hwnd
+    return 0
+
+
+_BROWSER_EXE = {"chrome": "chrome.exe", "firefox": "firefox.exe", "edge": "msedge.exe"}
+
+
+def _page_key(text: str) -> str:
+    """host + path + #fragment of an address (no scheme, no `www.`, no query, no trailing `/`),
+    lower case. The fragment stays: on a single-page portal it is what tells the login page from
+    the pages behind it."""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    try:
+        p = urlparse(text if "://" in text else f"https://{text}")
+        host = (p.hostname or "").lower().rstrip(".")
+    except Exception:
+        return ""
+    if not host:
+        return ""
+    if host.startswith("www."):
+        host = host[4:]
+    frag = p.fragment.rstrip("/")
+    return (host + p.path.rstrip("/") + (f"#{frag}" if frag else "")).lower()
+
+
+def login_window(login_url: str, username_selector: Optional[str] = None,
+                 password_selector: Optional[str] = None, browser: Optional[str] = None) -> int:
+    """A browser window already showing that portal's LOGIN page, the one in front first; 0 when
+    none. Login page = the address bar is on the login link itself, or the page shows a password
+    box (the extension's rule, background.js _findLoginTab). A window on any other page of the
+    portal (someone logged in) never counts. `browser` (chrome / firefox / edge): only that
+    browser's windows. Only the tab showing in each window is seen."""
+    want = _host_of(login_url)
+    if not want:
+        return 0
+    key = _page_key(login_url)
+    exe = _BROWSER_EXE.get((browser or "").strip().lower())
+    fg = int(user32.GetForegroundWindow() or 0)
+    ordered = ([fg] if _is_browser(fg) else []) + [h for h in browser_windows() if h != fg]
+    for hwnd in ordered:
+        if exe and _proc_name(hwnd) != exe:
+            continue
+        shown = read_url(hwnd)
+        if not host_matches(_host_of(shown), want):
+            continue
+        if key and _page_key(shown) == key:
+            return hwnd
+        _user, pass_el = find_fields_cached(hwnd, username_selector, password_selector, want="pass")
+        if pass_el is not None:
             return hwnd
     return 0
 

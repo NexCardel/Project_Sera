@@ -112,6 +112,67 @@ def test_opens_the_login_page_and_docks_the_card_to_the_found_window(app):
     card.dismiss("close")
 
 
+def test_a_window_already_on_the_login_page_is_reused_without_a_new_tab(app):
+    lc, opened, looks, made, clock = make_launcher(found=0)
+    asked = []
+    lc._reuser = lambda service: asked.append(service) or BROWSER
+    lc.launch("smti", SERVICE, FAKE_USER, FAKE_PASSWORD, 42, "Fictional Traders")
+    assert asked == [SERVICE] and opened == [] and looks == []
+    assert clock.t == 1000.0                          # no wait for a tab that was never opened
+    card = made[0][1]
+    assert card.browser_hwnd == BROWSER and card.secret("pass") == FAKE_PASSWORD
+    card.dismiss("close")
+
+
+def test_no_login_page_window_opens_a_new_tab(app):
+    lc, opened, looks, made, _ = make_launcher()
+    lc._reuser = lambda service: 0
+    lc.launch("mecp", SERVICE, FAKE_USER, FAKE_PASSWORD, 42)
+    assert opened == [(SERVICE["login_page_link"], None)] and len(looks) == 1 and made
+    lc.dismiss("mecp")
+
+
+def test_a_failing_reuse_look_opens_a_new_tab(app):
+    lc, opened, _, made, _ = make_launcher()
+    lc._reuser = mock.Mock(side_effect=OSError("uia gone"))
+    lc.launch("smti", SERVICE, FAKE_USER, FAKE_PASSWORD, 42)
+    assert len(opened) == 1 and made
+    lc.dismiss("smti")
+
+
+def test_default_reuser_asks_locate_and_brings_the_window_to_the_front(app):
+    seen, fronted = [], []
+
+    class Done:
+        def __init__(self, value):
+            self.value = value
+
+        def result(self, timeout=None):
+            return self.value
+
+    def submit(fn, *args):
+        seen.append((fn, args))
+        return Done(BROWSER)
+
+    with mock.patch.object(la.worker, "submit", submit), \
+            mock.patch.object(la, "_bring_to_front", fronted.append):
+        assert la._default_reuser({**SERVICE, "browser": "Edge"}) == BROWSER
+        assert seen == [(la.locate.login_window, (SERVICE["login_page_link"], "#user", "#pass", "edge"))]
+        assert fronted == [BROWSER]
+        with mock.patch.object(la.worker, "submit", lambda fn, *a: Done(0)):
+            assert la._default_reuser(SERVICE) == 0
+        assert fronted == [BROWSER]
+
+
+def test_a_launcher_with_its_own_finder_never_looks_at_real_windows(app):
+    with mock.patch.object(la, "_default_reuser") as real:
+        lc, opened, *_ = make_launcher()
+        lc.launch("mecp", SERVICE, FAKE_USER, FAKE_PASSWORD, 42)
+    real.assert_not_called()
+    assert len(opened) == 1
+    lc.dismiss("mecp")
+
+
 def test_service_browser_is_passed_to_the_opener(app):
     lc, opened, *_ = make_launcher()
     lc.launch("mecp", {**SERVICE, "browser": "Edge"}, FAKE_USER, FAKE_PASSWORD, 42)

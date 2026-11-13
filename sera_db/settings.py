@@ -6,6 +6,8 @@ Split out of database.py; methods are unchanged. Mixed into SeraDatabase.
 
 import re
 
+import sync_schema
+
 
 class SettingsMixin:
 

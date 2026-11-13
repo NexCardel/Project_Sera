@@ -41,7 +41,7 @@ from ui.dialogs.service_manager_dialog import ServiceManagerDialog
 from ui.components.kit import (
     MessageBox,
     ROLE_PILL, ROLE_SERVICES, ROLE_SUB, Banner, Card, Checkbox, Chip, ChipBar, DataGrid, DialogFrame,
-    FieldLabel, GridFooter, GridFrame, Input, LabelledAction, PageHeader, SectionLabel, SelectionBar,
+    FieldLabel, GridFooter, GridFrame, IconButton, Input, LabelledAction, PageHeader, SectionLabel, SelectionBar,
     Select, TextArea, set_page_margins, Avatar, Caption, sentence_label,
 )
 from ui.utils.dynamic_form_widgets import make_input_widget, read_input_widget, set_input_widget_value
@@ -256,6 +256,7 @@ class AdminPinDialog(QDialog):
 
 class AdminWindow(WidthAware, QWidget):
     back_requested = Signal()
+    toggle_sidebar_requested = Signal()
     request_slide_panel = Signal(QWidget, str)
     toast_requested = Signal(str, int)
     action_alert_requested = Signal(str, str)
@@ -279,6 +280,10 @@ class AdminWindow(WidthAware, QWidget):
         self._activity_timer.start()
         self._build_ui()
 
+    def set_sidebar_collapsed(self, collapsed):
+        """The title-row sidebar button shows only while the sidebar is collapsed."""
+        self.btn_toggle_sidebar.setVisible(bool(collapsed))
+
     def _build_ui(self):
         layout = QVBoxLayout(self)
         set_page_margins(layout)
@@ -289,6 +294,11 @@ class AdminWindow(WidthAware, QWidget):
 
         self.page_header = PageHeader("Manage Clients")
         self.count_label = self.page_header.count_label
+        # sidebar toggle: shown only while the sidebar (which has its own button) is collapsed
+        self.btn_toggle_sidebar = IconButton("mdi.dock-left", "Toggle Sidebar (Ctrl+B)")
+        self.btn_toggle_sidebar.clicked.connect(self.toggle_sidebar_requested.emit)
+        self.page_header.add_leading(self.btn_toggle_sidebar)
+        self.btn_toggle_sidebar.setVisible(False)
         back_btn = LabelledAction("", variant="secondary", icon="mdi.arrow-left", tooltip="Back to Search (Esc)")
         back_btn.set_icon_only(True)
         back_btn.clicked.connect(self.back_requested.emit)

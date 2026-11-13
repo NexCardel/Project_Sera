@@ -174,13 +174,20 @@ def host_job(hwnd: int) -> str:
 
 def fill_job(hwnd: int, service: dict, password: str, selector: str, foreground=None):
     """The password box of that window, filled (fill.fill checks the host right before the write).
-    None while there is nothing to fill yet: window not in front, another site, no visible box."""
+    None while there is nothing to fill yet: window not in front, another site, no visible box.
+    The box found when the card showed (warm_job) is used while it is still on the page, and the
+    result comes back after fill's first check: its 1.0 s re-check is in result.late."""
     if int((foreground or _foreground)() or 0) != hwnd or not locate.host_matches_service(hwnd, service):
         return None
-    _user, box = locate.find_fields(hwnd, None, selector or None)
+    _user, box = locate.find_fields_cached(hwnd, None, selector or None, want="pass")
     if box is None:
         return None
-    return fill.fill(hwnd, box, password, True, service)
+    return fill.fill(hwnd, box, password, True, service, late_check="background")
+
+
+def warm_job(hwnd: int, selector: str) -> bool:
+    """Find and keep the password box now (a card just showed), so Inject does not walk the page."""
+    return locate.warm_fields(hwnd, None, selector or None)
 
 
 # ----------------------------------------------------------------------------- assist lock
@@ -248,6 +255,7 @@ class ScaEngine(QObject):
         self._probe = probe or probe_job
         self._fill = filler or fill_job
         self._host_of = host_of or host_job
+        self._warm = warm_job if submit is None else None    # none when a test injects `submit`
         self._card_factory = card_factory or _default_card
         self._chip_factory = chip_factory or _default_chip
         self._locked = locked or assist_hwnds
@@ -308,12 +316,13 @@ class ScaEngine(QObject):
         self._seen.clear()
         self._uid_page_done = False
         self._probe_job = None
-        for p in self._pending.values():
+        pending = list(self._pending.values())
+        self._pending.clear()                          # first: a cancelled job's callback finds nothing
+        for p in pending:
             p.pop("password", None)
             job = p.get("job")
             if job is not None:
                 job.cancel()                           # still queued: nothing is typed after a disarm
-        self._pending.clear()
 
     def _live(self) -> Optional[dict]:
         a = self.arm_data
@@ -504,6 +513,11 @@ class ScaEngine(QObject):
         card.inject_requested.connect(
             lambda arm_id, service_id, h=hwnd, cid=a.get("client_id"): self.on_widget_fill(arm_id, service_id, h, cid))
         card.dismissed.connect(lambda _r, h=hwnd, c=card: self.cards.pop(h, None) if self.cards.get(h) is c else None)
+        if self._warm is not None:
+            try:
+                self._submit(self._warm, hwnd, service.get("password_selector") or "")
+            except Exception:
+                pass
 
     # -- onWidgetFill ---------------------------------------------------------------------------
     def on_widget_fill(self, arm_id, service_id, hwnd: int, client_id=None) -> str:
@@ -569,10 +583,38 @@ class ScaEngine(QObject):
         p["job"] = None
         if result is None:
             return                                     # no box yet: the next tick looks again
-        if result.outcome == "filled":
+        if result.outcome != "filled":
+            self._end_fill(key, p, "failed", result.reason or result.outcome)
+            return
+        late = getattr(result, "late", None)
+        if late is None:
+            self._end_fill(key, p, "filled", "")
+            return
+        # The value is in the box: say so now. The fill is reported and counted once fill's
+        # 1.0 s re-check is in (a page that dropped the value by then = failed).
+        p.pop("password", None)
+        p["job"] = late                                # _drop cancels it; _tick_fill leaves it alone
+        self._show_chip(p)
+        self._later(late, lambda verdict: self._on_late(key, p, verdict))
+
+    def _on_late(self, key: str, p: dict, verdict) -> None:
+        if self._pending.get(key) is not p:
+            return                                     # disarmed or replaced meanwhile
+        p["job"] = None
+        if verdict == "":
             self._end_fill(key, p, "filled", "")
         else:
-            self._end_fill(key, p, "failed", result.reason or result.outcome)
+            self._end_fill(key, p, "failed", verdict or "the re-check did not run")
+
+    def _show_chip(self, p: dict) -> None:
+        a = self.arm_data
+        if p.get("chip") or a is None or a["arm_id"] != p["arm_id"]:
+            return
+        p["chip"] = True
+        try:
+            self._chip_factory(a, p["service"], p["hwnd"])
+        except Exception as e:
+            print(f"[SCA] OS engine: chip error {type(e).__name__}")
 
     def _end_fill(self, key: str, p: dict, outcome: str, reason: str) -> None:
         self._pending.pop(key, None)
@@ -583,10 +625,7 @@ class ScaEngine(QObject):
         self._report(p["arm_id"], p["service"], outcome, reason)
         if outcome != "filled" or a is None or a["arm_id"] != p["arm_id"]:
             return
-        try:
-            self._chip_factory(a, p["service"], p["hwnd"])
-        except Exception as e:
-            print(f"[SCA] OS engine: chip error {type(e).__name__}")
+        self._show_chip(p)
         a["fills"] = a.get("fills", 0) + 1
         if a["fills"] >= (a.get("max_uses") or 1):
             self.disarm("CONSUMED")

@@ -147,6 +147,68 @@ def test_match_and_autofill():
     assert not r.engine._pending                                         # the password went with it
 
 
+class LateRig(Rig):
+    """The fill comes back after its first check; the 1.0 s re-check is still to come (result.late)."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.late = Future()
+
+    def filler(self, hwnd, service, password, selector):
+        self.fills.append((hwnd, service["login_page_link"], password == FAKE_PASSWORD))
+        return FillResult("filled", "setvalue", "", late=self.late)
+
+
+def test_chip_shows_at_once_and_the_fill_counts_when_the_late_check_passes():
+    r = LateRig()
+    r.arm()
+    r.show()
+    assert r.chips == [("Fictional Traders", "GST", 101)]               # before the re-check is in
+    assert r.watcher.results == [] and r.engine.armed
+    assert all("password" not in p for p in r.engine._pending.values())  # dropped once it is in the box
+    r.engine.tick()
+    assert len(r.fills) == 1                                              # not filled a second time meanwhile
+    r.late.set_result("")
+    assert r.watcher.results[-1]["result"] == "filled" and r.chips == [("Fictional Traders", "GST", 101)]
+    assert not r.engine.armed and not r.engine._pending                  # max_uses 1: consumed
+
+
+def test_a_value_the_page_dropped_by_the_late_check_is_reported_failed():
+    r = LateRig()
+    r.arm()
+    r.show()
+    r.late.set_result("empty (at 1.0s)")
+    assert r.watcher.results[-1]["result"] == "failed" and "empty" in r.watcher.results[-1]["reason"]
+    assert r.engine.armed and not r.engine._pending and not r.engine.busy   # staff may try again
+
+
+def test_disarm_cancels_a_pending_late_check():
+    r = LateRig()
+    r.arm()
+    r.show()
+    r.engine.disarm()
+    assert r.late.cancelled() and r.watcher.results == []
+
+
+def test_fill_job_uses_the_cached_box_and_returns_after_the_first_check(monkeypatch):
+    calls = {}
+
+    def cached(hwnd, user_sel, pass_sel, want=""):
+        calls["find"] = (hwnd, user_sel, pass_sel, want)
+        return None, "the box"
+
+    def filled(hwnd, box, password, is_password, service, **kw):
+        calls["fill"] = (box, is_password, kw)
+        return FillResult("filled", "setvalue")
+    monkeypatch.setattr(locate, "host_matches_service", lambda hwnd, service: True)
+    monkeypatch.setattr(locate, "find_fields_cached", cached)
+    monkeypatch.setattr(sca_engine.fill, "fill", filled)
+    res = sca_engine.fill_job(101, {"login_page_link": GST_URL}, FAKE_PASSWORD, "#pw", foreground=lambda: 101)
+    assert res.outcome == "filled"
+    assert calls["find"] == (101, None, "#pw", "pass")
+    assert calls["fill"] == ("the box", True, {"late_check": "background"})
+
+
 def test_needs_confirm_shows_card_and_inject_fills():
     r = Rig()
     r.arm(svc(3, IT_URL, needs_confirm=True, name="Income Tax"))

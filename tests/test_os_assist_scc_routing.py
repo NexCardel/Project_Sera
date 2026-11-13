@@ -73,6 +73,13 @@ class TestLaunchScc(unittest.TestCase):
         self.assertEqual(opened, [ITR["login_page_link"]])
         self.assertEqual(shown[0][0], 77)
 
+    def test_open_tab_reuses_a_window_already_on_the_login_page(self):
+        lc, opened, shown = self._launcher()
+        lc._reuser = lambda service: 88
+        self.assertTrue(lc.launch_scc(ITR, "P", ROWS, "n", 7, "att-1", open_tab=True))
+        self.assertEqual(opened, [])
+        self.assertEqual(shown[0][0], 88)
+
     def test_open_tab_timeout_reports_error(self):
         errs = []
         t = iter(range(0, 1000, 10))

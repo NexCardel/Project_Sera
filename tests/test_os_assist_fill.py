@@ -88,6 +88,7 @@ def env(monkeypatch):
         host["reads"] += 1
         return host["ok"]
     monkeypatch.setattr(locate, "host_matches_service", matches)
+    fill._keys_only.clear()
     return SimpleNamespace(uia=uia, host=host)
 
 
@@ -296,8 +297,8 @@ def test_background_returns_after_the_first_check(env):
     kb = LaterKeys(box)
     res = fill.fill(HWND, box, "AB12", False, SERVICE, keyboard=kb, late_check="background")
     assert (res.outcome, res.method) == ("filled", "setvalue")
-    assert kb.slept == [0.15]                                     # not the 1.0 s check
-    assert [round(s, 2) for s, _f, _u in kb.queued] == [0.85]     # the re-check, 1.0 s after the write
+    assert kb.slept == [fill.SETTLE_S]                            # the value was there at once: no fixed wait
+    assert [round(s, 2) for s, _f, _u in kb.queued] == [0.96]     # the re-check, 1.0 s after the write
     assert not res.late.done()
     kb.run_later()
     assert res.late.result() == ""
@@ -339,4 +340,142 @@ def test_wait_mode_is_unchanged(env):
     kb = LaterKeys(box)
     res = fill.fill(HWND, box, "AB12", False, SERVICE, keyboard=kb)
     assert res.outcome == "filled" and res.late is None
-    assert kb.slept == [0.15, 1.0] and kb.queued == []
+    assert [round(s, 2) for s in kb.slept] == [0.04, 0.96] and kb.queued == []   # re-check 1.0 s after the write
+
+
+# ----------------------------------------------------------------------------- no fixed waits
+def test_first_check_waits_only_until_the_value_is_there(env):
+    class Slow(Box):
+        """The page shows the value on the third read."""
+        reads = 0
+
+        @property
+        def CurrentValue(self):
+            Slow.reads += 1
+            return self.value if Slow.reads >= 3 else ""
+    box = Slow("ok")
+    kb = LaterKeys(box)
+    res = fill.fill(HWND, box, "AB12", False, SERVICE, keyboard=kb, late_check="background")
+    assert (res.outcome, res.method) == ("filled", "setvalue")
+    assert kb.slept == [fill.FIRST_POLL_S, fill.FIRST_POLL_S, fill.SETTLE_S]
+
+
+def test_a_value_the_page_resets_on_its_next_tick_is_not_called_filled(env):
+    class Resets(Box):
+        """Takes the value, then drops it before the settle check."""
+        reads = 0
+
+        @property
+        def CurrentValue(self):
+            Resets.reads += 1
+            return self.value if Resets.reads == 1 else ""
+    box = Resets("ok")
+    kb = LaterKeys(box)
+    res = fill.fill(HWND, box, "AB12", False, SERVICE, method="setvalue", keyboard=kb, late_check="background")
+    assert res.outcome == "failed" and "(at 0.15s)" in res.reason
+    assert round(sum(kb.slept), 2) <= 0.2
+
+
+def test_first_check_gives_up_after_the_old_wait(env):
+    box = Box("ignored")
+    kb = LaterKeys(box)
+    res = fill.fill(HWND, box, "AB12", False, SERVICE, method="setvalue", keyboard=kb)
+    assert res.outcome == "failed" and "(at 0.15s)" in res.reason
+    assert round(sum(kb.slept), 2) == 0.15
+
+
+def test_focus_is_waited_for_only_until_it_arrives(env):
+    box = Box("readonly")
+    env.uia.focus = box
+    kb = LaterKeys(box)
+    res = fill.fill(HWND, box, "AB12", False, SERVICE, keyboard=kb, late_check="background")
+    assert (res.outcome, res.method) == ("filled", "keys")
+    assert kb.slept == [fill.FOCUS_SETTLE_S, fill.SETTLE_S]       # no 0.15 s focus wait
+
+
+def test_a_box_that_ignored_setvalue_is_typed_into_directly_next_time(env):
+    box = Box("ignored")
+    env.uia.focus = box
+    kb = keys_for(box)
+    assert fill.fill(HWND, box, "AB12", False, SERVICE, keyboard=kb).method == "keys"
+    assert box.setvalue_calls == 1
+    res = fill.fill(HWND, box, "CD34", False, SERVICE, keyboard=kb)
+    assert (res.outcome, res.method) == ("filled", "keys") and box.value == "CD34"
+    assert box.setvalue_calls == 1 and kb.typed == 2              # SetValue not tried again
+    other = Box("ok")                                             # another box of that window: SetValue as usual
+    assert fill.fill(HWND, other, "EF56", False, SERVICE, keyboard=keys_for(other)).method == "setvalue"
+
+
+def test_method_setvalue_is_tried_even_for_a_keys_only_box(env):
+    box = Box("ignored")
+    env.uia.focus = box
+    kb = keys_for(box)
+    fill.fill(HWND, box, "AB12", False, SERVICE, keyboard=kb)
+    res = fill.fill(HWND, box, "CD34", False, SERVICE, method="setvalue", keyboard=kb)
+    assert res.outcome == "failed" and box.setvalue_calls == 2 and kb.typed == 1
+
+
+def test_fast_keys_the_page_dropped_are_typed_again_slower(env):
+    class DropsFast(Keys):
+        SLOW_GAP_S = 0.012
+        gaps = []
+
+        def type_text(self, text, hwnd, gap=None):
+            self.gaps.append(gap)
+            self.typed += 1
+            self.box.value = text if gap else text[:-1]           # the fast try loses a character
+            return True
+    box = Box("readonly")
+    env.uia.focus = box
+    kb = DropsFast(box)
+    res = fill.fill(HWND, box, "AB12", False, SERVICE, keyboard=kb)
+    assert (res.outcome, res.method) == ("filled", "keys") and box.value == "AB12"
+    assert kb.gaps == [None, 0.012]
+    assert env.host["reads"] == 4          # SetValue, SetFocus, the keys, the second keys
+
+
+def test_no_second_try_when_the_focus_left_the_box(env):
+    class DropsFast(Keys):
+        SLOW_GAP_S = 0.012
+
+        def type_text(self, text, hwnd, gap=None):
+            self.typed += 1
+            env.uia.focus = Box()                                 # the page moved the focus on
+            return True
+    box = Box("readonly")
+    env.uia.focus = box
+    kb = DropsFast(box)
+    res = fill.fill(HWND, box, "AB12", False, SERVICE, keyboard=kb)
+    assert res.outcome == "failed" and kb.typed == 1
+
+
+# ----------------------------------------------------------------------------- the fill log
+def test_log_says_why_setvalue_was_not_used_and_how_long_it_took(env, caplog):
+    box = Box("ignored")
+    env.uia.focus = box
+    with caplog.at_level("INFO", logger="os_assist.fill"):
+        fill.fill(HWND, box, "s3cret-fake", False, SERVICE, keyboard=keys_for(box))
+    lines = [r.getMessage() for r in caplog.records]
+    assert any(l.startswith("user  setvalue-not-used  mismatch (0 chars) (at 0.15s)") for l in lines)
+    assert any(l.startswith("user  typed") for l in lines)
+    assert any(l.startswith("user  took  ") and l.endswith("ms (keys)") for l in lines)
+    assert "s3cret" not in " | ".join(lines) and "s3cret" not in repr([r.args for r in caplog.records])
+
+
+def test_log_file_gets_the_fill_lines_and_no_value(env, tmp_path):
+    import logging
+    import main
+    lg = logging.getLogger("os_assist")
+    before = list(lg.handlers)
+    try:
+        main._setup_os_assist_log(tmp_path)
+        box = Box("ok", password=True)
+        fill.fill(HWND, box, "s3cret-fake", True, SERVICE, keyboard=keys_for(box))
+    finally:
+        for h in [h for h in lg.handlers if h not in before]:
+            lg.removeHandler(h)
+            h.close()
+    text = (tmp_path / "logs" / "os_assist.log").read_text(encoding="utf-8")
+    assert "pass  filled  setvalue" in text and "pass  took  " in text
+    assert "s3cret" not in text
+

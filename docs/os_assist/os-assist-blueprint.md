@@ -41,7 +41,7 @@ only *where they live* and *how a box gets its text* change.
 |---|---|---|
 | 1 | Which fields | SMTI: user ID **and** password. SCA: password only (as today). |
 | 2 | MECP | Behaviour unchanged: it **copies**, it does not fill. Only the card moves to the desktop. |
-| 3 | Opening the portal | A new tab every time is OK. |
+| 3 | Opening the portal | A new tab every time is OK. Changed 2026-11-13: a browser window already showing the portal's login page (the login link, or a visible password box) is reused; any other case still opens a new tab. |
 | 4 | How SCA sees the login page | UIA reads: address bar + a password box present. No extension tracking. |
 | 5 | Fast Autofill | Stays on the extension. Not part of this project. |
 | 6 | Legal / ToS | The owner handles it. Not tracked here; workers don't raise it. |

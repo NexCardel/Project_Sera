@@ -13,6 +13,7 @@ import sqlcipher3.dbapi2 as sqlite3
 import os
 import time
 import threading
+from typing import Optional
 from contextlib import contextmanager
 
 # Re-exported: other modules import these from `database`.

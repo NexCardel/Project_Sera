@@ -98,10 +98,14 @@ class AppShell(QWidget):
             self.expand_sidebar()
 
     def eventFilter(self, watched, event):
-        """Close Client Detail when the area outside the slide panel is clicked."""
+        """Close Client Detail when the area outside the slide panel is clicked.
+
+        Only a press in this window counts: the filter is app-wide, so it also sees presses in
+        other top-level windows (the OS Assist cards over the browser), which must reach them."""
         if (
             self.dismiss_detail_on_outside
             and event.type() == QEvent.MouseButtonPress
+            and self._is_own_window(watched)
             and hasattr(self, "slide_panel")
             and (getattr(self.slide_panel, "is_open", False) or self.slide_panel.isVisible())
         ):
@@ -115,6 +119,13 @@ class AppShell(QWidget):
                 self.slide_panel.slide_out()
                 return True
         return super().eventFilter(watched, event)
+
+    def _is_own_window(self, watched) -> bool:
+        """True if `watched` is this window's native window or a widget inside this window."""
+        from PySide6.QtWidgets import QWidget
+        if isinstance(watched, QWidget):
+            return watched.window() is self
+        return watched is not None and watched is self.windowHandle()
 
     def _build_ui(self):
         self.layout = QHBoxLayout(self)

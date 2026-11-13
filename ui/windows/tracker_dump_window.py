@@ -6,6 +6,7 @@ filing submissions, ARNs, and raw technical payloads received from the browser
 extension and VSDC.
 """
 
+import csv
 import json
 import re
 import os
@@ -2001,6 +2002,7 @@ class TrackerDumpWindow(QWidget):
     skip_page_fade = True
 
     service_action_requested = Signal(int, dict)
+    toggle_sidebar_requested = Signal()
 
     # Table columns (same order in both views)
     COL_CLIENT, COL_FILING, COL_PERIOD, COL_STATUS, COL_ACTIONS, COL_UPDATED, COL_DEVICE = range(7)
@@ -2048,6 +2050,12 @@ class TrackerDumpWindow(QWidget):
         self.page_header = PageHeader(
             "Tracker Dump", lead="Filings captured by the browser extension, VSDC and SGT, grouped per client")
         self._lbl_subtitle = self.page_header.lead_label
+
+        # sidebar toggle: shown only while the sidebar (which has its own button) is collapsed
+        self.btn_toggle_sidebar = IconButton("mdi.dock-left", "Toggle Sidebar (Ctrl+B)")
+        self.btn_toggle_sidebar.clicked.connect(self.toggle_sidebar_requested.emit)
+        self.page_header.add_leading(self.btn_toggle_sidebar)
+        self.btn_toggle_sidebar.setVisible(False)
 
         btn_refresh = IconButton("mdi.refresh", "Refresh (F5)", variant="bordered")
         btn_refresh.clicked.connect(self.load_data)
@@ -2205,6 +2213,7 @@ class TrackerDumpWindow(QWidget):
         # Data table: cells, pills and row buttons are drawn by the grid's delegate
         self.table = DataGrid(tone="dark")
         self.table.set_tall_rows(True)
+        self.table.set_large_pills(True)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._user_col_widths = {}
@@ -2648,6 +2657,10 @@ class TrackerDumpWindow(QWidget):
             MessageBox.critical(self, "Error Loading Dumps", f"Could not load tracker dumps: {e}")
 
     REUSE_DATA_FOR_S = 60.0
+
+    def set_sidebar_collapsed(self, collapsed):
+        """The title-row sidebar button shows only while the sidebar is collapsed."""
+        self.btn_toggle_sidebar.setVisible(bool(collapsed))
 
     def load_data_if_stale(self):
         """Opening the tracker: reload only if something was written or the view changed."""

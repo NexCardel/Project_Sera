@@ -26,7 +26,7 @@ Conventions every component follows:
 Leaves (K-1):
 
 LabelledAction(text, parent=None, *, variant="secondary", icon=None, sm=False, tooltip="")
-    Icon + text button. variant: primary (one per screen), soft, secondary, ghost, danger
+    Icon + text button. variant: primary (one per screen), soft, secondary, ghost, danger, info (blue), warn (amber)
     (destructive only). icon: an "mdi.*" name or a QIcon.
     set_disabled_reason(reason)  disable with the reason as tooltip; None re-enables and puts the
                                  old tooltip back. set_icon_only(on)  hides the text (COMPACT bars),
@@ -292,6 +292,9 @@ _ACTION_TONES = {
     "secondary": (K["btn_bg"], T["line2"], T["text"], K["btn_hover"], T["line3"]),
     "ghost": ("transparent", "transparent", T["text2"], K["ghost_hover"], "transparent"),
     "danger": ("transparent", T["dangerline"], T["dangertx"], T["dangerdim"], T["dangerline"]),
+    # additive colour variants: tinted fill, coloured border and text (blue = info, amber = warn)
+    "info": (T["infodim"], T["info"], K["blue_tx"], T["infoline"], T["info"]),
+    "warn": (T["warndim"], T["warn"], T["warn"], T["warnline"], T["warn"]),
 }
 
 
@@ -2714,6 +2717,7 @@ class GridDelegate(QStyledItemDelegate):
         self._view = view
         self.tone = tone
         self.list_mode = False          # DataGrid(list_mode=True): services as tinted pills
+        self.large_pills = False        # DataGrid.set_large_pills(): bigger status pills
 
     # ---- geometry shared by paint, clicks and tooltips
     def _pal(self):
@@ -3062,25 +3066,34 @@ class GridDelegate(QStyledItemDelegate):
             painter.drawText(QRect(x, cr.top(), max(cr.right() - x, 0), cr.height()),
                              Qt.AlignLeft | Qt.AlignVCenter, f"+{len(items) - shown}")
 
+    def _pill_metrics(self):
+        """(font px, padding, dot diameter) of a cell pill."""
+        if self.large_pills:
+            return K["f_gpill_lg"], K["pad_gpill_lg"], K["d_pill_dot_lg"]
+        return T["f_xs"], K["pad_gpill"], K["d_pill_dot"]
+
     def _pill_geometry(self, option, cr, text, dot):
-        font = self._small_font(option, T["f_xs"])
+        size, pad, d = self._pill_metrics()
+        font = self._small_font(option, size)
         fm = QFontMetrics(font)
-        pad = K["pad_gpill"]
-        dot_w = K["d_pill_dot"] + T["s_1"] + 1 if dot else 0
+        dot_w = d + T["s_1"] + 1 if dot else 0
         shown = fm.elidedText(text, Qt.ElideRight, max(cr.width() - 2 * pad - dot_w, 0))
         return font, shown, min(cr.width(), fm.horizontalAdvance(shown) + 2 * pad + dot_w)
 
     def _paint_pill(self, painter, option, cr, text, tone="neutral", dot=False):
         bg, tx, bd = self._pill_colours(tone)
-        h = K["h_pill"] if self.tone == "list" else K["h_gpill"]
+        if self.large_pills:
+            h = K["h_gpill_lg"]
+        else:
+            h = K["h_pill"] if self.tone == "list" else K["h_gpill"]
+        _size, pad, d = self._pill_metrics()
         font, shown, w = self._pill_geometry(option, cr, str(text), dot)
         r = QRectF(cr.left(), cr.top() + (cr.height() - h) / 2, w, h)
         painter.setPen(QPen(QColor(bd), 1) if bd != "transparent" else Qt.NoPen)
         painter.setBrush(QColor(bg))
         painter.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), h / 2, h / 2)
-        x = r.left() + K["pad_gpill"]
+        x = r.left() + pad
         if dot:
-            d = K["d_pill_dot"]
             painter.setPen(Qt.NoPen)
             painter.setBrush(QColor(tx))
             painter.drawEllipse(QRectF(x, r.center().y() - d / 2, d, d))
@@ -3403,6 +3416,11 @@ class DataGrid(QTableWidget):
         if y1 > y0:
             vp.update(QRect(0, y0, vp.width(), y1 - y0))
         self.horizontalHeader().viewport().update()   # the selected columns' underline
+
+    def set_large_pills(self, on=True):
+        """Draw ROLE_PILL cells as larger pills (taller, bigger text and dot)."""
+        self.delegate.large_pills = bool(on)
+        self.viewport().update()
 
     def set_tone(self, tone):
         if tone not in _GRID_TONES:

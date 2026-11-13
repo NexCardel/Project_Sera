@@ -10,6 +10,7 @@ if '--sdis-mine' in sys.argv:
     from core.sdis.mine_process import run
     sys.exit(run(sys.argv))
 import os
+import re
 import socket
 import json
 import queue
@@ -104,6 +105,25 @@ def _setup_sync_log(app_dir: Path) -> None:
         lg = logging.getLogger(name)
         lg.setLevel(logging.INFO)
         lg.addHandler(handler)
+
+def _setup_os_assist_log(app_dir: Path) -> None:
+    """OS Assist fill outcomes to ``logs/os_assist.log`` (1 MB x 3): which box (user / pass), the
+    outcome, the method (SetValue or keys), why SetValue was not used, and how long it took.
+    core/os_assist/fill.py never logs a value: reasons carry lengths only."""
+    import logging
+    from logging.handlers import RotatingFileHandler
+    try:
+        (app_dir / "logs").mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(app_dir / "logs" / "os_assist.log", maxBytes=1_000_000,
+                                      backupCount=3, encoding="utf-8")
+    except OSError as exc:
+        print(f"[OS Assist] could not open logs/os_assist.log: {exc}")
+        return
+    handler.setFormatter(logging.Formatter("%(asctime)s.%(msecs)03d %(name)s: %(message)s", "%Y-%m-%d %H:%M:%S"))
+    lg = logging.getLogger("os_assist")
+    lg.setLevel(logging.INFO)
+    lg.addHandler(handler)
+
 
 def _copy_if_changed(src: Path, dst: Path) -> None:
     """copy2 keeps the modified time, so a same-size, same-time copy is already up to date -
@@ -2152,6 +2172,10 @@ class SeraApp:
         # one sidebar button at a time: the page's own appears only while the sidebar is collapsed
         self.shell.sidebar_collapsed_changed.connect(self.search_win.set_sidebar_collapsed)
         self.search_win.set_sidebar_collapsed(self.shell.sidebar_collapsed)
+        for _page in (self.admin_win, self.tracker_dump_win):
+            _page.toggle_sidebar_requested.connect(self.shell.toggle_sidebar)
+            self.shell.sidebar_collapsed_changed.connect(_page.set_sidebar_collapsed)
+            _page.set_sidebar_collapsed(self.shell.sidebar_collapsed)
         
         self.detail_win.back_requested.connect(self._show_search_from_detail)
         # the panel's Edit and ⋯ menu run the same handlers as the All Clients grid
@@ -3036,6 +3060,7 @@ if __name__ == "__main__":
             sys.exit(0)     # Sera is already open in this session; the logon launch has nothing to add
         startup_boost.raise_priority()
     _setup_sync_log(APP_DIR)
+    _setup_os_assist_log(APP_DIR)
     SeraApp().run()
 
 

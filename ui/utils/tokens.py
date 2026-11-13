@@ -245,6 +245,11 @@ KIT = {
     "pad_cell": 12,
     "pad_list_cell": 14,
     "pad_gpill": 8,
+    # large grid pills (DataGrid.set_large_pills): the tracker's submission status
+    "h_gpill_lg": 26,
+    "d_pill_dot_lg": 7,
+    "pad_gpill_lg": 11,
+    "f_gpill_lg": 13,
     "gap_cell_btn": 4,
     "gap_svc": 9,
     # frames (.scrim, .dlg, .d-ic, .hd, .tile, .log, .panel)

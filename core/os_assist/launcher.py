@@ -1,11 +1,14 @@
 """
 OS Assist launcher: SMTI and MECP through the OS engine (blueprint §3, §4.4, §4.7).
 
-`launch(kind, service, ...)` opens the service's login page in the default browser (a new tab every
-time, owner answer 3), waits up to 20 s for a browser window whose address bar is on the service's
-host (locate.window_for_host, each look a job on the UIA worker; the wait itself never holds the
-worker), then shows the card on the Qt main thread, attached to that window. No window in time ->
-on_error with a clear message.
+`launch(kind, service, ...)` first looks for a browser window already showing the service's LOGIN
+page (locate.login_window: the login link itself or a visible password box, the extension's rule
+D5); that window is brought to the front and the card docks to it, no new tab. Otherwise (no such
+window, or the portal is open on another page: someone is logged in there) it opens the login page
+in the default browser in a new tab, waits up to 20 s for a browser window whose address bar is on
+the service's host (locate.window_for_host, each look a job on the UIA worker; the wait itself
+never holds the worker), then shows the card on the Qt main thread, attached to that window. No
+window in time -> on_error with a clear message.
 
 The wait is event-driven (core/os_assist/win_events): a browser window coming to the front or a
 browser title changing (the new tab appearing, its page loading) ends a wait at once, so the card
@@ -115,6 +118,29 @@ def _default_finder(url: str) -> int:
         return 0
 
 
+def _bring_to_front(hwnd: int) -> None:
+    import ctypes
+    user32 = ctypes.windll.user32
+    if user32.IsIconic(hwnd):
+        user32.ShowWindow(hwnd, 9)                # SW_RESTORE
+    user32.SetForegroundWindow(hwnd)
+
+
+def _default_reuser(service) -> int:
+    """The browser window already on the service's login page, brought to the front; 0 when none."""
+    url = str(_get(service, "login_page_link", "") or "").strip()
+    browser = str(_get(service, "browser", "") or "").strip().lower() or None
+    try:
+        hwnd = int(worker.submit(locate.login_window, url, _get(service, "username_selector"),
+                                 _get(service, "password_selector"), browser)
+                   .result(timeout=LOOK_TIMEOUT_S) or 0)
+        if hwnd:
+            _bring_to_front(hwnd)
+        return hwnd
+    except Exception:
+        return 0
+
+
 _clear_seconds_provider: Optional[Callable[[], object]] = None
 
 
@@ -148,10 +174,14 @@ class Launcher:
                  finder: Callable[[str], int] = None, card_factory=None,
                  sleep: Optional[Callable[[float], None]] = None,
                  clock: Callable[[], float] = time.monotonic,
-                 spawn: Callable[[Callable[[], None]], None] = None, events=None) -> None:
+                 spawn: Callable[[Callable[[], None]], None] = None, events=None,
+                 reuser: Callable[[object], int] = None) -> None:
         """sleep: a test's fake clock; without it the waits are event-driven (events: the WinEvent
-        hub, default win_events.default())."""
+        hub, default win_events.default()). reuser(service) -> the window already on the login
+        page (0 = none, open a new tab); a launcher given its own finder never looks at real
+        windows unless it is given a reuser too."""
         self._opener = opener or _default_opener
+        self._reuser = reuser or (_default_reuser if finder is None else (lambda service: 0))
         self._finder = finder or _default_finder
         self._factory = card_factory or _default_card_factory
         self._sleep = sleep
@@ -194,6 +224,12 @@ class Launcher:
         else:
             wake.wait(seconds)
 
+    def _reuse(self, service) -> int:
+        try:
+            return int(self._reuser(service) or 0)
+        except Exception:
+            return 0
+
     def _current(self, kind: str, gen: int) -> bool:
         with self._lock:
             return self._gen[kind] == gen
@@ -219,14 +255,17 @@ class Launcher:
         def _wait() -> None:
             wake = self._wake()                       # hooked before the tab opens: its first title counts
             try:
-                try:
-                    self._opener(url, browser)
-                except Exception:
-                    pass
+                hwnd = self._reuse(service)           # already on the login page: no new tab
+                if not hwnd:
+                    try:
+                        self._opener(url, browser)
+                    except Exception:
+                        pass
                 deadline = self._clock() + WAIT_S
-                self._pause(wake, FIRST_LOOK_S)
+                if not hwnd:
+                    self._pause(wake, FIRST_LOOK_S)
                 while self._current(kind, gen):
-                    hwnd = self._finder(url)
+                    hwnd = hwnd or self._finder(url)
                     if hwnd:
                         user, pwd = creds["user"], creds["pass"]
                         self._on_qt(lambda: self._show(kind, gen, hwnd, service, user, pwd,
@@ -264,14 +303,17 @@ class Launcher:
         def _wait() -> None:
             wake = self._wake()
             try:
-                try:
-                    self._opener(url, browser)
-                except Exception:
-                    pass
+                found = self._reuse(service)          # already on the login page: no new tab
+                if not found:
+                    try:
+                        self._opener(url, browser)
+                    except Exception:
+                        pass
                 deadline = self._clock() + WAIT_S
-                self._pause(wake, FIRST_LOOK_S)
+                if not found:
+                    self._pause(wake, FIRST_LOOK_S)
                 while True:
-                    found = self._finder(url)
+                    found = found or self._finder(url)
                     if found:
                         self._on_qt(lambda: self._show_scc(found, service, pan, rows, client_name, client_id,
                                                            attempt_id, on_error))

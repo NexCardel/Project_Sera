@@ -10,6 +10,8 @@ import os
 import sys
 import shutil
 
+import sync_schema
+
 from sera_db.common import is_filed_dataset, payload_original_author, stamp_payload_original_author
 
 

@@ -424,3 +424,41 @@ def test_dismiss_cancels_a_pending_late_check(app):
     card.pass_btn.click()
     card.dismiss("close")
     assert late.cancelled() and copies == []
+
+
+# ----------------------------------------------------------------------------- a press is answered at once
+def test_a_press_looks_pressed_before_the_worker_answers(app):
+    card, filler, *_ = make()
+    fut = Future()
+    filler.fill_answers.append(fut)
+    card.user_btn.click()
+    assert state(card.user_btn) == "busy" and card.user_btn.text() == "👤  Username"
+    assert state(card.pass_btn) == "primary"                    # only the pressed button
+    fut.set_result("filled")
+    app.processEvents()
+    assert card.user_btn.text() == "✓  Username Injected" and state(card.user_btn) == "done"
+    assert not card._working["user"].isActive()
+    card.dismiss()
+
+
+def test_a_slow_press_reads_injecting_until_the_result_is_in(app):
+    card, filler, copies, *_ = make()
+    fut = Future()
+    filler.fill_answers.append(fut)
+    card.pass_btn.click()
+    assert card._working["pass"].interval() == sc.WORKING_AFTER_MS and card._working["pass"].isActive()
+    card._working["pass"].timeout.emit()
+    assert card.pass_btn.text() == "⏳  Injecting…" and state(card.pass_btn) == "busy"
+    fut.set_result("nobox")
+    app.processEvents()
+    assert card.pass_btn.text() == "📋  Copied Password (Ctrl+V)" and len(copies) == 1
+    card.dismiss()
+
+
+def test_a_fast_result_never_shows_injecting(app):
+    card, filler, *_ = make()
+    filler.fill_answers.append("filled")
+    card.user_btn.click()
+    card._working["user"].timeout.emit()                        # a stray late timer changes nothing
+    assert card.user_btn.text() == "✓  Username Injected"
+    card.dismiss()
