@@ -1,8 +1,8 @@
 {
-  "version": "2.13.7",
+  "version": "2.13.8",
   "min_required_version": "2.9.9",
   "mandatory": true,
-  "download_url": "https://github.com/NexCardel/Project_Sera/releases/download/v2.13.7/Amas_Sera_Setup_v2.13.7.exe",
-  "sha256": "78beb25e644554b54991740ab45e711dd8ed289a71132e042dd24906d2fd3356",
-  "release_notes": "Project Sera v2.13.7 - Sera Credential Keeper (SCK) Test & Fill card, Firefox companion parity, DRS 768p layout overflow fixes, and original_author tracking propagation"
+  "download_url": "https://github.com/NexCardel/Project_Sera/releases/download/v2.13.8/Amas_Sera_Setup_v2.13.8.exe",
+  "sha256": "36ef54d833f39a5579bb23fe104a4b5b24faeab5f5e91df83fe66490bc1a4661",
+  "release_notes": "Project Sera v2.13.8 - OS assist fill/locate/launcher updates and UI polish"
 }
