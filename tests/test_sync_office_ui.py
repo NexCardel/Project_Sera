@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from ui.components.kit import MessageBox
 
 windows_only = pytest.mark.skipif(sys.platform != "win32", reason="DPAPI is Windows-only")
 pytestmark = windows_only
@@ -137,7 +138,7 @@ def test_first_run_office_signals_deliver_across_threads(tmp_path, monkeypatch):
         dlg.office_peer_found_signal.emit({"ip": "127.0.0.1"})
         dlg.office_join_done_signal.emit(False, "no admin PC reachable")
 
-    with patch.object(QMessageBox, "warning", return_value=QMessageBox.Ok):
+    with patch.object(MessageBox, "warning", return_value=QMessageBox.Ok):
         t = threading.Thread(target=_emit, daemon=True)
         t.start()
         assert _pump_until(lambda: len(received) >= 2)

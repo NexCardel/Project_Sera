@@ -139,3 +139,21 @@ def test_the_display_control_saves_on_this_pc_only(ini_settings):
     control.combo.setCurrentIndex(0)                # "Automatic"
     control._apply()
     assert ui_scale.read_settings() == (ui_scale.MODE_AUTO, None)
+
+
+def test_the_display_control_is_a_setting_row_with_two_actions(ini_settings):
+    from PySide6.QtWidgets import QApplication
+    from ui.components.kit import LabelledAction, SettingRow
+    from ui.dialogs.display_scale_dialog import DisplayScaleControl, DisplayScaleDialog
+    QApplication.instance() or QApplication([])
+    control = DisplayScaleControl()
+    assert isinstance(control, SettingRow)
+    assert isinstance(control.btn_apply, LabelledAction) and isinstance(control.btn_restart, LabelledAction)
+    dialog = DisplayScaleDialog()
+    assert dialog.frame.title() == "Display scale"
+    assert dialog.frame.body_layout.indexOf(dialog.control) >= 0
+
+
+def test_the_display_scale_dialog_has_no_literal_styles():
+    source = (ROOT / "ui" / "dialogs" / "display_scale_dialog.py").read_text(encoding="utf-8")
+    assert "setStyleSheet(" not in source

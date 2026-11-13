@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sera OS Assist test - login</title>
+<style>
+  body { font: 14px "Segoe UI", sans-serif; background: #0f1512; color: #e6f2ea; margin: 0; padding: 32px; }
+  .wrap { max-width: 520px; margin: 0 auto; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p.sub { color: #8fb09c; margin: 0 0 20px; }
+  label { display: block; margin: 14px 0 4px; color: #b9d6c4; }
+  input { width: 100%; box-sizing: border-box; padding: 9px 11px; font-size: 14px; border-radius: 8px;
+          border: 1px solid #2e4a3a; background: #14201a; color: #fff; }
+  .decoy { position: absolute; left: -9999px; width: 1px; height: 1px; }
+  .model { margin-top: 18px; padding: 10px 12px; border: 1px solid #2e9b5f; border-radius: 8px; background: #102018; }
+  .ok { color: #4cf9b7; } .bad { color: #f5a97a; }
+  button { margin-top: 16px; padding: 9px 14px; border-radius: 8px; border: 0; background: #2e9b5f; color: #fff; }
+  button:disabled { background: #2a3a31; color: #7b8f84; }
+  #log { margin-top: 18px; font: 12px Consolas, monospace; color: #9fb8a8; white-space: pre-wrap; max-height: 240px; overflow: auto; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Sera OS Assist test - login</h1>
+  <p class="sub">Offline page for fill_spike.py --local. The "model" below is updated only from
+     input events, like an Angular/React form: if it shows the value, a framework would see it too.</p>
+
+  <form id="f" onsubmit="event.preventDefault(); log('SUBMIT fired - the spike must never cause this');">
+    <!-- decoys the field rules must skip -->
+    <input class="decoy" type="password" name="hiddenPassword" id="hiddenPassword" tabindex="-1" aria-hidden="true">
+    <input type="text" id="searchBox" placeholder="(hidden search box)" style="display:none">
+
+    <label for="userId">User ID</label>
+    <input id="userId" name="userId" autocomplete="off">
+
+    <label for="psw">Password</label>
+    <input id="psw" name="psw" type="password" autocomplete="off">
+
+    <button id="go" type="submit" disabled>Continue</button>
+  </form>
+
+  <div class="model">
+    model.user: <span id="mu" class="bad">empty</span><br>
+    model.pass: <span id="mp" class="bad">empty</span>
+  </div>
+  <div id="log"></div>
+</div>
+<script>
+  const model = { user: "", pass: "" };
+  const logEl = document.getElementById("log");
+  function log(s) { logEl.textContent = new Date().toLocaleTimeString() + "  " + s + "\n" + logEl.textContent; }
+  function render() {
+    const mu = document.getElementById("mu"), mp = document.getElementById("mp");
+    mu.textContent = model.user ? model.user : "empty";
+    mu.className = model.user ? "ok" : "bad";
+    mp.textContent = model.pass ? model.pass.length + " chars" : "empty";
+    mp.className = model.pass ? "ok" : "bad";
+    document.getElementById("go").disabled = !(model.user && model.pass);
+  }
+  for (const [id, key] of [["userId", "user"], ["psw", "pass"]]) {
+    const el = document.getElementById(id);
+    for (const t of ["input", "change", "keydown", "focus", "blur"]) {
+      el.addEventListener(t, e => {
+        if (t === "input" || t === "change") { model[key] = el.value; render(); }
+        log(`${id}: ${t}${t === "keydown" ? " " + (e.key.length === 1 ? "(char)" : e.key) : ""}`);
+      });
+    }
+  }
+  render();
+</script>
+</body>
+</html>

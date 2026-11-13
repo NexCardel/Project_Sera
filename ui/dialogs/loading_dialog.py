@@ -1,6 +1,12 @@
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QProgressBar, QWidget, QHBoxLayout
-from PySide6.QtGui import QFont
+from pathlib import Path
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont, QPixmap
+from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QProgressBar, QVBoxLayout, QWidget
+
+from ui.components.kit import Card
+from ui.utils.tokens import TOKENS
+
 
 class StartupLoadingDialog(QDialog):
     """
@@ -11,77 +17,53 @@ class StartupLoadingDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setFixedSize(360, 160)
+        self.setMinimumWidth(380)
         self._build_ui()
 
     def _build_ui(self):
-        container = QWidget(self)
-        container.setFixedSize(360, 160)
-        container.setStyleSheet("""
-            QWidget {
-                background-color: #2E9B5F;
-                border-radius: 12px;
-                border: 1px solid #164A68;
-            }
-        """)
-
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(28, 24, 28, 24)
-        layout.setSpacing(12)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        card = Card()
+        outer.addWidget(card)
 
         # App Brand Header
-        header_layout = QHBoxLayout()
-        header_layout.setSpacing(8)
+        header = QWidget()
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(TOKENS["s_2"])
 
         logo = QLabel()
         logo.setAlignment(Qt.AlignCenter)
         logo.setFixedSize(28, 28)
-        
-        from pathlib import Path
-        from PySide6.QtGui import QPixmap
-        logo_path = Path(__file__).resolve().parent.parent.parent / "assets" / "logo" / "icon_here.png"
+
+        logo_dir = Path(__file__).resolve().parent.parent.parent / "assets" / "logo"
+        logo_path = logo_dir / "icon_here.png"
         if not logo_path.exists():
-            logo_path = Path(__file__).resolve().parent.parent.parent / "assets" / "logo" / "files" / "sera_icon_whitegold.png"
+            logo_path = logo_dir / "files" / "sera_icon_whitegold.png"
         if not logo_path.exists():
-            logo_path = Path(__file__).resolve().parent.parent.parent / "assets" / "logo" / "sera_icon.png"
-            
+            logo_path = logo_dir / "sera_icon.png"
+
         if logo_path.exists():
-            pix = QPixmap(str(logo_path)).scaled(28, 28, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            logo.setPixmap(pix)
+            logo.setPixmap(QPixmap(str(logo_path)).scaled(28, 28, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         else:
             logo.setText("PS")
-            logo.setStyleSheet("background-color: #164A68; border-radius: 6px; color: #F8F5F2; font-size: 11px; font-weight: 700;")
+            logo.setFont(QFont("Segoe UI", 10, QFont.Bold))
         header_layout.addWidget(logo)
 
         app_title = QLabel("Project Sera")
-        app_title.setStyleSheet("color: #F8F5F2; font-size: 16px; font-weight: 700; border: none; background: transparent;")
+        app_title.setFont(QFont("Segoe UI", 14, QFont.Bold))
         header_layout.addWidget(app_title)
         header_layout.addStretch()
-        layout.addLayout(header_layout)
+        card.add_widget(header)
 
-        # Status text
         self.lbl_status = QLabel("Initializing security vault...")
-        self.lbl_status.setStyleSheet("color: #E2E8F0; font-size: 12px; font-weight: 500; border: none; background: transparent;")
-        layout.addWidget(self.lbl_status)
+        self.lbl_status.setWordWrap(True)
+        card.add_widget(self.lbl_status)
 
-        # Progress bar
         self.progress = QProgressBar()
-        self.progress.setFixedHeight(6)
         self.progress.setTextVisible(False)
-        self.progress.setRange(0, 0) # Indeterminate animated loading
-        self.progress.setStyleSheet("""
-            QProgressBar {
-                background-color: rgba(255, 255, 255, 0.2);
-                border: none;
-                border-radius: 3px;
-            }
-            QProgressBar::chunk {
-                background-color: #FF4D4D;
-                border-radius: 3px;
-            }
-        """)
-        layout.addWidget(self.progress)
+        self.progress.setRange(0, 0)  # Indeterminate animated loading
+        card.add_widget(self.progress)
 
     def set_status(self, text: str):
         self.lbl_status.setText(text)

@@ -11,7 +11,57 @@ AlertSender with an explicit config and a fake transport.
 
 import os
 
+# Many test modules create the QApplication at import time, and the first one imported fixes the Qt
+# platform for the whole run. Pick offscreen here, before any of them is imported, so pixel tests
+# (tests/test_ui_kit.py, test_ui_sidebar.py) never depend on which module happens to load first.
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _ui_lock_clipboard_cleared(request):
+    """The tests/test_ui_lock_*.py files copy to the clipboard; a QMimeData still held by it
+    crashes the interpreter at exit (offscreen), so it is emptied after each of those tests."""
+    yield
+    if request.module.__name__.startswith("test_ui_lock"):
+        from PySide6.QtWidgets import QApplication
+        if QApplication.instance() is not None:
+            QApplication.clipboard().clear()
+
+
+@pytest.fixture(autouse=True)
+def _unanswered_prompt_fails(monkeypatch):
+    """Every prompt is a kit dialog (kit.MessageBox); offscreen, one that a test forgot to patch would
+    wait forever. After 10 s it is closed and the test fails with its title instead."""
+    import sys
+    kit = sys.modules.get("ui.components.kit")
+    if kit is None:
+        yield
+        return
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication
+    original, hung = kit._choose, []
+
+    def guarded(parent, title, *args, **kwargs):
+        def give_up():
+            modal = QApplication.activeModalWidget()
+            if modal is not None:
+                hung.append(title)
+                modal.reject()
+        timer = QTimer()
+        timer.setSingleShot(True)
+        timer.timeout.connect(give_up)
+        timer.start(10000)
+        try:
+            return original(parent, title, *args, **kwargs)
+        finally:
+            timer.stop()
+
+    monkeypatch.setattr(kit, "_choose", guarded)
+    yield
+    if hung:
+        pytest.fail(f"a kit prompt was never answered: {hung}")
 
 
 @pytest.fixture(autouse=True)
@@ -26,6 +76,22 @@ def _diag_log_in_tmp(monkeypatch, tmp_path):
     """The capture engine's diagnostics log (core/vsdc/vsdc_diag) goes to the test's own folder,
     never to the real ~/AmanAssociates_Sera/logs/vsdc.log."""
     monkeypatch.setenv("VSDC_DIAG_LOG", str(tmp_path / "vsdc.log"))
+
+
+@pytest.fixture(autouse=True)
+def _sca_log_in_tmp(monkeypatch, tmp_path):
+    """SCA's step log (core/sca/sca_log) goes to the test's own folder, never to the real
+    ~/AmanAssociates_Sera/logs/sca.log (test runs once filled it with fake portal lines)."""
+    monkeypatch.setenv("SERA_SCA_LOG", str(tmp_path / "sca.log"))
+
+
+@pytest.fixture(autouse=True)
+def _assist_engine_from_tmp(monkeypatch, tmp_path):
+    """automation.assist_engine() reads the test's own empty settings.ini (so: 'extension'), never
+    the real ~/AmanAssociates_Sera/settings.ini - with the owner's 'assist_engine = os' there, SCA
+    arms went to the OS engine and the SCA UID tests failed on this PC only. Tests that need the
+    OS engine patch assist_engine or _settings_ini_path themselves."""
+    monkeypatch.setattr("automation._settings_ini_path", lambda: tmp_path / "settings.ini")
 
 
 @pytest.fixture(autouse=True)

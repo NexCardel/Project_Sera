@@ -106,6 +106,7 @@ logs/sdis/
 ~*
 scratch/
 .pytest_cache/
+.pytest_tmp*/
 data/
 tools/vsdc_uia_probe_output/
 
@@ -117,6 +118,16 @@ vsdc_scope.json
 ltt_feed.csv
 ltt_tracker.xlsx
 ltt_rules.json
+# UI overhaul tracker (same machinery, task status only, no client data)
+Mockups/overhaul/.ui-overhaul.lock
+Mockups/overhaul/logs/
+!Mockups/overhaul/ui-overhaul-status.csv
+!Mockups/overhaul/ui-overhaul-runs.csv
+!Mockups/overhaul/ui-overhaul-decisions.csv
+!Mockups/overhaul/ui-overhaul-checks.csv
+!Mockups/overhaul/ui-overhaul-questions.csv
+# Worker pytest --basetemp paths whose backslashes got stripped (land in the repo root)
+/Users*AppDataLocalTemp*/
 tmp_pytest/
 # SGT never-miss tracker (same machinery, task status only, no client data)
 !docs/sgt_never_miss/sgt-never-miss-status.csv
@@ -126,3 +137,5 @@ tmp_pytest/
 !docs/sgt_never_miss/sgt-never-miss-questions.csv
 .sgt-never-miss.lock
 logs/sgt-never-miss/
+.os-assist.lock
+logs/os-assist/

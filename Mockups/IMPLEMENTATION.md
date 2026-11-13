@@ -15,18 +15,24 @@ does not redo them.
 ## 0. The whole plan on one page
 
 - **What:** restyle and re-arrange six screens (All Clients, Client detail, Audit log, Sera Sync,
-  Settings General, Settings Columns) as in the mockups, then bring every other screen onto the same
-  look so the app does not end up as a few new screens among old ones.
+  Settings General, Settings Columns) as in the mockups, plus Manage Clients, Tracker Dump and the
+  display scale picker (phase 4), then bring every other screen onto the same look so the app does
+  not end up as a few new screens among old ones. Every changed screen works at every display scale
+  and in both width modes (4.7). The SGT lab and the SDIS panels are **out of the overhaul**.
 - **How:** build the shared pieces once (phase 1), then use them screen by screen, busiest screens
   first. Each phase ends with a review that checks the "kept as it is" promises against the old code.
 - **Rule of the plan:** same data, same shortcuts, same settings, same database writes. Only the
   presentation and the arrangement change. Where a mockup needs new behaviour (selection bar,
   "Shows on" write-through, unsaved bar, audit service names, Sync cards) the behaviour is specified
   in section 4 *before* any code is written.
-- **Order:** 0 safety net → 1 shared pieces → 2 Client detail → 3 All Clients → 4 Settings →
-  5 Audit log → 6 Sera Sync → 7 every other screen → 8 docs and final review.
+- **Order:** 0 safety net (+ the fleet mockup, W0-D) → 1 shared pieces → 2 Client detail →
+  3 All Clients → 4 Manage Clients, Tracker Dump, Display scale → 5 Settings → 6 Audit log →
+  7 Sera Sync → 8 every other screen → 9 docs and final review.
+- **Re-planned (2026-10-10):** phase 4 added; SGT lab and SDIS removed; W0-D (a cloud session
+  with Fable 5.1 redesigns every screen as a new HTML mockup in `Mockups/fleet/`) added; the
+  work-package files moved to `Mockups/overhaul/`.
 - **Decided (2026-10-05):** Theme shows "Dark" as the only option. EMAIL and TAN keep type
-  `password` [Secret] for now. All screens not mocked up get the same treatment (phase 7).
+  `password` [Secret] for now. All screens not mocked up get the same treatment (phase 8).
 
 ---
 
@@ -51,10 +57,13 @@ does not redo them.
 7. **Fictional data.** Test fixtures, gallery data and screenshots use made-up clients, PANs and
    workstation names. Nothing is copied from `master.db`, `~/AmanAssociates_Sera/` or backups.
 8. **Small laptop first.** Every screen must work at 1366×768, at 100 / 125 / 150 % Windows scaling,
-   with no sideways scroll except inside the white data grid.
+   at Sera's own display scale 0.80–1.25 and in both width modes (WIDE / COMPACT, see 4.7), with no
+   sideways scroll except inside the white data grid.
 9. **Do not touch** version numbers, installers or the release files (`version.json`, release
    process). This is a UI change only. Never bulk-delete files in user data folders.
 10. **Match the surrounding code**: style, comment density, naming. Change only what the WP needs.
+11. **Out of the overhaul:** the SGT lab (`ui/dialogs/sgt_lab_dialog.py`) and the SDIS panels
+    (`ui/dialogs/sdis_dialog.py`, `sdis_containers_dialog.py`) keep their current look. No WP edits them.
 
 ---
 
@@ -63,6 +72,9 @@ does not redo them.
 | Thing | Location |
 | :--- | :--- |
 | Mockup specs, images, clickable page | `Mockups/` (this folder), `Mockups/redesign/index.html` |
+| Fleet redesign mockup (W0-D) | `Mockups/fleet/index.html`, `Mockups/fleet/README.md` |
+| Work-package tracker and dispatcher | `Mockups/overhaul/` (`ui_overhaul.py`, plan JSON, status CSVs, runner prompts, `run_ui_overhaul.bat`, `watch_ui_worker.bat`) |
+| Display scale and width modes | `ui/utils/ui_scale.py`, `ui/utils/responsive.py`, `ui/dialogs/display_scale_dialog.py`, `docs/ui-scale-adaptive-layout-plan.md` |
 | Screenshots of today's screens (31 files) | `Mockups/current/` |
 | Existing tokens and 5 primitives | `ui/utils/theme.py`, `docs/Sera_UI.md` |
 | Existing chip, switch | `FilterChip` (Manage Clients, `ui/windows/admin_window.py`), `ToggleSwitch` (`ui/shell/sidebar.py`) |
@@ -75,13 +87,28 @@ does not redo them.
 (`$env:PYTHONPATH="tools"; python -m pytest -p live_tf -p no:terminal -p no:cacheprovider tests`);
 single files with plain `python -m pytest <file>`. UI tests run with `QT_QPA_PLATFORM=offscreen`.
 
+**Running the dispatcher:** `Mockups/overhaul/run_ui_overhaul.bat` (from the `../APP-ui` worktree);
+`../APP/venv/Scripts/python.exe Mockups/overhaul/ui_overhaul.py show | next | prompt <WP>`. WPs of kind
+`cloud` (W0-D) are never started by the dispatcher: print the prompt with `prompt W0-D` and start
+a cloud session with it, then `git pull` the branch when it has pushed.
+
 ---
 
 ## 3. Work packages
 
+> **Superseded 2026-10-10.** The order and the packages below are replaced by
+> [`fleet/BUILD-PLAN.md`](fleet/BUILD-PLAN.md) (kit first: T, K, R, S, F), written with the fleet
+> mockup (W0-D). Phase 0 (W0-1 to W0-R) stays. Sections 1, 4, 5 and 9 still apply; the WP ids in
+> the 4.x headings map to BUILD-PLAN rows by topic (4.1 → S-7, 4.2 → S-6, 4.3 → S-4, 4.4 → S-1,
+> 4.5 → S-11, 4.6 → S-12, 4.7 → R-1 / R-3, 4.8 → S-9 / S-10). Models: the tracker
+> (`overhaul/ui-overhaul-plan.json`) gives each package one preferred model (Gemini 3.8 Flash for
+> mechanical packages, else Haiku / Sonnet / Opus 5.5); Claude and Gemini stand in for each other
+> only when one is at its usage limit.
+
 Columns follow the SGT plan: **model** is the tier (`opus` for design-heavy or risky work,
 `sonnet` for normal builds, `haiku` for mechanical checks), **kind** is `auto` (can run unattended),
-`desktop` (needs a real screen) or `review` (reads the phase against the rules), **size** is S/M/L.
+`desktop` (needs a real screen), `review` (reads the phase against the rules) or `cloud` (started by
+the owner in a cloud session, never by the dispatcher), **size** is S/M/L.
 Each phase's `-R` package is a gate: the next phase does not start until it passes.
 
 ### Phase 0 — Safety net *(nothing visual changes)*
@@ -90,7 +117,8 @@ Each phase's `-R` package is a gate: the next phase does not start until it pass
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | W0-1 | haiku | auto | S | — | Baseline: run the full suite with the live plugin; record pass/fail counts and the names of pre-existing failures in the hand-off note. Create worktree `../APP-ui`, branch `ui-overhaul`. |
 | W0-2 | sonnet | auto | L | W0-1 | **Behaviour lock.** Write offscreen Qt tests for every item in section 5 that has no test today (search keys, Enter, Alt+n, masking, clipboard wipe, settings save keys, audit filters, sync columns). They must pass on the *unchanged* code; they are the contract the redesign is held to. |
-| W0-3 | sonnet | auto | M | W0-1 | **Screen inventory.** For every screen in `Mockups/current/` list: file, class, entry point, tests that cover it, controls (name, type, signal target). Output: `Mockups/INVENTORY.md`. Basis for phase 7 and for every "where every control goes" table. |
+| W0-3 | sonnet | auto | M | W0-1 | **Screen inventory.** For every screen in `Mockups/current/` list: file, class, entry point, tests that cover it, controls (name, type, signal target). Output: `Mockups/INVENTORY.md`. Basis for phase 8 and for every "where every control goes" table. |
+| W0-D | fable | cloud | S | — | **Fleet redesign mockup** (Claude Fable 5.1, cloud session, prompt `Mockups/overhaul/fleet-redesign-cloud.md`). Redesign every screen in `Mockups/current/` except the SGT lab, plus the display scale picker and COMPACT mode, as one self-contained clickable `Mockups/fleet/index.html` with a `README.md` (tokens, components, where every control went, departures from `redesign/index.html`). Design only. Can run any time; W4-1 waits for it. |
 | W0-R | opus | review | S | W0-2, W0-3 | Check the lock tests really fail when a behaviour is broken (mutate one thing per area, see red, undo). |
 
 ### Phase 1 — Shared pieces
@@ -119,33 +147,43 @@ Each phase's `-R` package is a gate: the next phase does not start until it pass
 | W3-3 | opus | auto | L | W3-1, W1-2 | **Columns ▾ menu** and column widths (spec 4.2). |
 | W3-R | opus | review | M | W3-2, W3-3 | Section 5 checks R1.*; keyboard-only run through the whole screen; no layout jump when the bar appears. |
 
-### Phase 4 — Settings
+### Phase 4 — Manage Clients, Tracker Dump, Display scale *(daily screens; no mockup yet)*
 
 | WP | Model | Kind | Size | Deps | What |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| W4-1 | opus | auto | L | W3-R | **Unsaved bar and dirty tracking** for the whole hub (spec 4.4), including lazily built pages. No visual page changes yet. |
-| W4-2 | sonnet | auto | M | W4-1 | General page: real switches, equal-width controls via `SettingRow`, four cards (Display, Passwords & clipboard, Start-up, Capture engines), plainer wording, live masking preview. Theme shows "Dark" only. |
-| W4-3 | opus | auto | L | W4-1 | **Columns page** as a table with Type / Role tags and **Shows on M·Q·A write-through** (spec 4.3); labelled actions (+ Add column, Edit per row, Move / Delete for the selected row, Delete set apart). |
-| W4-R | opus | review | M | W4-2, W4-3 | Section 5 checks R3.*; every setting key written exactly as before (diff of the saved settings between old and new build on the same inputs). |
+| W4-1 | opus | auto | M | W3-R, W0-D | **Specs first.** Write `Mockups/07-manage-clients.md`, `08-tracker-dump.md`, `09-display-scale.md` in the 01–06 format (layout, where every control goes, kept as it is), taking the look from the fleet mockup where it fits section 1, and add a tab for each to `redesign/index.html` (Tracker Dump in WIDE and COMPACT). No app code. |
+| W4-2 | sonnet | auto | L | W4-1 | Manage Clients (`admin_window.py`) rebuilt on the kit per 07: list and chips, editor form in Cards, labelled actions, archived mode, bulk actions, toolbar, Ctrl+S / Ctrl+N, PIN and new-client dialogs. |
+| W4-3 | opus | auto | L | W4-1 | Tracker Dump (`tracker_dump_window.py`) rebuilt on the kit per 08, keeping all the adaptive-layout behaviour (4.7) and the per-row Actions cell. |
+| W4-4 | sonnet | auto | M | W4-2, W4-3 | Display scale picker on the kit per 09 (Settings → General row and sidebar Display dialog), then `tests/test_ui_scale_matrix.py`: every rebuilt screen at 1366×768 and 1024×700 × scale 0.80 / 1.00 / 1.25. |
+| W4-R | opus | review | M | W4-4 | R7–R9 checks; built screens vs their new mockup tabs; scale matrix PNGs; tokens only. |
 
-### Phase 5 — Audit log
-
-| WP | Model | Kind | Size | Deps | What |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| W5-1 | sonnet | auto | M | W4-R | Data helpers with tests, no layout yet (spec 4.5): service id → name map, time labels, elided actor / detail, per-workstation counts. |
-| W5-2 | sonnet | auto | L | W5-1 | Layout: one filter row (search + Action / Staff / Date chips), status pill for the aggregator, workstation column with counts, table, details panel on the right with both buttons ("Copy details", "Show only this client"). |
-| W5-R | opus | review | S | W5-2 | R4.* checks; export CSV byte-compared with the old one for the same data (apart from the one added column, see 4.5). |
-
-### Phase 6 — Sera Sync
+### Phase 5 — Settings
 
 | WP | Model | Kind | Size | Deps | What |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| W6-1 | opus | auto | M | W5-R | **Feature map.** The dialog is 1,700 lines and does much more than the mockup shows (office members, shadow mode start / reset / go-live, conflicts, workstation add / remove, hand-over of admin, recovery kit, manual peers by IP, network warning, context menu). List every control and give each a place; add an addendum to `04-sera-sync.md`. Nothing is dropped. |
-| W6-2 | sonnet | auto | M | W6-1 | Status strip, "Don't accept incoming syncs" switch (spec 4.6), one primary button. |
-| W6-3 | opus | auto | L | W6-2 | Device cards with all eight facts, ahead/behind label, empty state; activity card; the W6-1 placements for the remaining features. |
-| W6-R | opus | review | M | W6-3 | R5.* checks; all `test_sync_*_ui.py` pass unchanged; admin-only controls still hidden for non-admins. |
+| W5-1 | opus | auto | L | W3-R | **Unsaved bar and dirty tracking** for the whole hub (spec 4.4), including lazily built pages. No visual page changes yet. |
+| W5-2 | sonnet | auto | M | W5-1 | General page: real switches, equal-width controls via `SettingRow`, four cards (Display, Passwords & clipboard, Start-up, Capture engines), plainer wording, live masking preview. Theme shows "Dark" only. |
+| W5-3 | opus | auto | L | W5-1 | **Columns page** as a table with Type / Role tags and **Shows on M·Q·A write-through** (spec 4.3); labelled actions (+ Add column, Edit per row, Move / Delete for the selected row, Delete set apart). |
+| W5-R | opus | review | M | W5-2, W5-3 | Section 5 checks R3.*; every setting key written exactly as before (diff of the saved settings between old and new build on the same inputs). |
 
-### Phase 7 — Every other screen *(not mocked up; style pass with fixed recipes)*
+### Phase 6 — Audit log
+
+| WP | Model | Kind | Size | Deps | What |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| W6-1 | sonnet | auto | M | W5-R | Data helpers with tests, no layout yet (spec 4.5): service id → name map, time labels, elided actor / detail, per-workstation counts. |
+| W6-2 | sonnet | auto | L | W6-1 | Layout: one filter row (search + Action / Staff / Date chips), status pill for the aggregator, workstation column with counts, table, details panel on the right with both buttons ("Copy details", "Show only this client"). |
+| W6-R | opus | review | S | W6-2 | R4.* checks; export CSV byte-compared with the old one for the same data (apart from the one added column, see 4.5). |
+
+### Phase 7 — Sera Sync
+
+| WP | Model | Kind | Size | Deps | What |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| W7-1 | opus | auto | M | W6-R | **Feature map.** The dialog is 1,700 lines and does much more than the mockup shows (office members, shadow mode start / reset / go-live, conflicts, workstation add / remove, hand-over of admin, recovery kit, manual peers by IP, network warning, context menu). List every control and give each a place; add an addendum to `04-sera-sync.md`. Nothing is dropped. |
+| W7-2 | sonnet | auto | M | W7-1 | Status strip, "Don't accept incoming syncs" switch (spec 4.6), one primary button. |
+| W7-3 | opus | auto | L | W7-2 | Device cards with all eight facts, ahead/behind label, empty state; activity card; the W7-1 placements for the remaining features. |
+| W7-R | opus | review | M | W7-3 | R5.* checks; all `test_sync_*_ui.py` pass unchanged; admin-only controls still hidden for non-admins. |
+
+### Phase 8 — Every other screen *(not mocked up; style pass with fixed recipes)*
 
 These screens get the same look without a new mockup, using the recipes in section 7. If W0-3 shows a
 screen whose layout would change materially, the WP first adds a small mockup to `redesign/index.html`
@@ -153,23 +191,24 @@ and waits for approval (kind `desktop`).
 
 | WP | Model | Kind | Size | Deps | Screens |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| W7-1 | sonnet | auto | M | W6-R | Security dialogs: change master password, office recovery, rejoin office, first run, force update, startup loading, shadow start. Extra care: they handle passwords and keys; masking and focus behaviour unchanged. |
-| W7-2 | sonnet | auto | L | W7-1 | Data dialogs: MCL manager, MCL column edit, service manager, service edit, CSV import. |
-| W7-3 | sonnet | auto | L | W4-R | Remaining Settings pages: actions, SCC, services, tracker, export, backup, purge, QC, and the three visibility pages (kept, as the spec promises). The legacy `settings_dialog.py` is checked for use; if unused, only noted. |
-| W7-4 | sonnet | auto | M | W7-2 | SGT lab, SDIS dialogs, LTT rules, SCA diagnostics, update dialog. |
-| W7-5 | sonnet | auto | M | W7-4 | Consistency pass on already redesigned or untouched shells: sidebar active item / icons from tokens, Manage Clients and Tracker Dump moved onto kit components where they duplicate them, toast colours from tokens. |
-| W7-R | opus | review | M | W7-5 | Sweep: grep for hard-coded colours outside `tokens.py`, every screen screenshot vs recipe, all dialogs reach at 125 % scaling. |
+| W8-1 | sonnet | auto | M | W7-R | Security dialogs: change master password, office recovery, rejoin office, first run, force update, startup loading, shadow start. Extra care: they handle passwords and keys; masking and focus behaviour unchanged. |
+| W8-2 | sonnet | auto | L | W8-1 | Data dialogs: MCL manager, MCL column edit, service manager, service edit, CSV import. |
+| W8-3 | sonnet | auto | L | W5-R | Remaining Settings pages: actions, SCC, services, tracker, export, backup, purge, QC, and the three visibility pages (kept, as the spec promises). The legacy `settings_dialog.py` is checked for use; if unused, only noted. |
+| W8-4 | sonnet | auto | M | W8-2 | LTT rules, SCA diagnostics, update dialog. (SGT lab and SDIS are out of the overhaul.) |
+| W8-5 | sonnet | auto | M | W8-4 | Consistency pass on already redesigned or untouched shells: sidebar active item / icons from tokens, display entry kept, toast colours from tokens. (Manage Clients and Tracker Dump were rebuilt in phase 4.) |
+| W8-R | opus | review | M | W8-5 | Sweep: grep for hard-coded colours outside `tokens.py`, every screen screenshot vs recipe, all dialogs reach at 125 % scaling. |
 
-### Phase 8 — Finish
+### Phase 9 — Finish
 
 | WP | Model | Kind | Size | Deps | What |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| W8-1 | sonnet | auto | M | W7-R | Rewrite `docs/Sera_UI.md` to describe the new system as current (tokens, kit, QSS snippets, screen layouts); update `Mockups/README.md` status to "built". |
-| W8-2 | haiku | desktop | S | W8-1 | Take real screenshots of each built screen into `Mockups/built/` for the human comparison (fictional data only). |
-| W8-R | opus | review | L | W8-2 | Final review and merge-readiness report: full suite, startup time and memory compared to W0-1, every row of every "where every control goes" table ticked, open checks listed. Merge is the owner's decision. |
+| W9-1 | sonnet | auto | M | W8-R | Rewrite `docs/Sera_UI.md` to describe the new system as current (tokens, kit, QSS snippets, screen layouts); update `Mockups/README.md` status to "built". |
+| W9-2 | haiku | desktop | S | W9-1 | Take real screenshots of each built screen into `Mockups/built/` for the human comparison (fictional data only). |
+| W9-R | opus | review | L | W9-2 | Final review and merge-readiness report: full suite, startup time and memory compared to W0-1, every row of every "where every control goes" table ticked, open checks listed. Merge is the owner's decision. |
 
-**Count:** 8 phases, 35 packages (9 reviews). Longest chain: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8. W7-3 can
-start once phase 4 is reviewed; W5 and W6 do not depend on each other and may swap order.
+**Count:** 10 phases (0–9), 41 packages (10 reviews, 1 cloud). Longest chain: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9.
+W0-D has no dependencies and should run early (W4-1 waits for it). W8-3 can start once phase 5 is
+reviewed; W6 and W7 do not depend on each other and may swap order.
 
 ---
 
@@ -226,7 +265,7 @@ decision.
   horizontal scrollbar at 1366 px with the default column set; widths stable across refresh; manual
   resize preserved if it exists today.
 
-### 4.3 Settings — Columns table and "Shows on" write-through *(W4-3, uses W4-1)*
+### 4.3 Settings — Columns table and "Shows on" write-through *(W5-3, uses W5-1)*
 
 - **The three flags** per column: Main (`show_in_search`), Quick-copy (`allow_quick_copy`), Admin
   (`admin_show_in_search`). Today three pages each own a dict of checkboxes and write on Save via
@@ -251,7 +290,7 @@ decision.
   toggling a flag twice leaves the dialog clean; reorder and delete behave as before; table sort/scan
   has the same row order as the old list.
 
-### 4.4 Settings — unsaved changes bar *(W4-1)*
+### 4.4 Settings — unsaved changes bar *(W5-1)*
 
 - **Dirty means different from loaded**, not "something fired". The dialog keeps a snapshot of every
   setting value at load (and after each Save). Dirty = snapshot ≠ current values. Turning a switch on
@@ -273,7 +312,7 @@ decision.
   save; the diff of the saved settings between old and new build for the same sequence of inputs is
   empty.
 
-### 4.5 Audit log — readable values *(W5-1, W5-2)*
+### 4.5 Audit log — readable values *(W6-1, W6-2)*
 
 - **Service names:** build `{service_id: name}` once per refresh from the services table. Unknown or
   removed service → "Service #n (removed)". Several services in one entry → names joined and elided
@@ -299,9 +338,9 @@ decision.
   elision; each filter chip vs the old filter on the same fixture; export compared with the old
   export; counts.
 
-### 4.6 Sera Sync — cards and the "Inv-Frames" switch *(W6-1 to W6-3)*
+### 4.6 Sera Sync — cards and the "Inv-Frames" switch *(W7-1 to W7-3)*
 
-- **Feature map first (W6-1):** every control of the current dialog gets a documented place before
+- **Feature map first (W7-1):** every control of the current dialog gets a documented place before
   layout work. Admin-only and shadow-mode controls stay admin-only and keep their PIN confirmation
   (`_confirm_admin_pin`). The "Kept as it is" list in `04-sera-sync.md` is extended with everything
   found.
@@ -324,6 +363,48 @@ decision.
 - **Tests:** existing `test_sync_*_ui.py` unchanged and green; card count equals member count;
   selection → N in the button; ahead / behind / in step / unknown; empty state; switch persistence;
   non-admin sees no admin controls.
+
+### 4.7 Display scale and width modes *(every phase; W4-3, W4-4)*
+
+What exists today (commit `702feda`, plan `docs/ui-scale-adaptive-layout-plan.md`):
+
+- **Display scale** per PC: Automatic (from the primary monitor's work-area width, clamped 0.80–1.00)
+  or a manual 0.80 / 0.90 / 1.00 / 1.10 / 1.25. Stored in QSettings on this PC, **never** in
+  `app_settings` (that table is synced). Applied through `QT_SCALE_FACTOR` before `QApplication`
+  starts, so a change takes effect at the next start ("Restart now"). Ctrl+= / Ctrl+- / Ctrl+0 step it.
+  Reached from Settings → General (admin) and the sidebar Display entry (all staff).
+- **Width modes** (`ui/utils/responsive.py`): a page narrower than 1080 logical px goes COMPACT. In
+  Tracker Dump COMPACT moves the filter chips to a second row, shortens labels and elides status
+  pills; columns shrink toward their minimums, the Client column keeps 240 px, and Device, Updated
+  and Filing hide in that order (the header menu shows or hides optional columns per PC; hidden
+  values go into the Client tooltip). The sidebar folds below 1000 px and reopens above 1060 px
+  unless the user toggled it this session.
+
+Rules for the overhaul:
+
+- Nothing in this list changes behaviour. The redesign restyles the picker and the COMPACT layouts;
+  the thresholds, the storage and the hide order stay.
+- Every screen a WP changes is rendered at 1366×768 and 1024×700 with scale 0.80, 1.00 and 1.25
+  (`tools/ui_snapshots.py --size … --scale …`, one process per scale) and checked for clipping and
+  sideways scroll. From W4-4 on, `tests/test_ui_scale_matrix.py` does this for every rebuilt screen;
+  later phases add their screens to it.
+- New kit components size from tokens, never fixed pixel widths on text, so they follow the scale.
+
+### 4.8 Manage Clients and Tracker Dump *(W4-1 to W4-3)*
+
+These two were redesigned once before the mockups and are busy daily screens, so they get a spec
+first (W4-1) rather than the phase-8 recipes.
+
+- **Spec source:** the fleet mockup (W0-D) for the look, `INVENTORY.md` for the full control list,
+  the 01–06 specs for the format. If the owner rejected the fleet mockup's version of a screen (see
+  the decisions file), follow `redesign/index.html` instead.
+- **Manage Clients:** the dynamic form still builds from the master column list; secret fields mask as
+  everywhere; New / Save / Archive / Restore / Purge and their bulk forms keep their confirmations,
+  admin PIN and audit entries; the chips stay a view of the hidden filter combo.
+- **Tracker Dump:** everything in 4.7; the per-row Actions cell (`act_autofill`, `act_view`, more)
+  keeps its service colours and tooltips; summary tiles, chips, view switch, page size, F5, export,
+  the payload inspector, MCL mapping and add-client-from-capture all stay. Its existing tests
+  (`test_tracker_dump_*.py`, `test_responsive.py`) pass unchanged.
 
 ---
 
@@ -374,9 +455,34 @@ redesign) and is re-run in every `-R` review. Items marked ◆ also need a human
   `test_memory_tuning`, `memory.log`).
 - R6.2 Tab order and focus rings sensible on every changed screen; every icon-only button has a
   tooltip; every disabled control explains why.
-- R6.3 ◆ 100 / 125 / 150 % scaling, 1366×768, no clipped text, no sideways scroll outside the grid.
+- R6.3 ◆ 100 / 125 / 150 % scaling, 1366×768, display scale 0.80–1.25, WIDE and COMPACT, no clipped
+  text, no sideways scroll outside the grid.
 - R6.4 `test_validate_icons` passes (every `mdi.*` icon name used exists).
 - R6.5 Screen reader names are not required, but every control has a text or tooltip name.
+
+**R7 — Manage Clients**
+- R7.1 Search, the filter presets / chips and the archived toggle list the same clients as before.
+- R7.2 Ctrl+S saves, Ctrl+N starts a new client; the new-client dialog; save writes the same database
+  call and audit entry; the form builds from the master column list with the same masking.
+- R7.3 Archive, restore, purge and their bulk forms, and bulk service, act on the selected clients
+  with the same confirmations and admin PIN.
+- R7.4 Every toolbar action stays reachable: backup, restore backup, audit log, export CSV, template,
+  column manager, services, import CSV, settings, purge duplicates, Sera Sync, inspect conflicts.
+
+**R8 — Tracker Dump**
+- R8.1 Search, filter chips, view switch, summary tiles, Reset and page size give the same rows.
+- R8.2 Row actions (autofill with the service colour, view, more menu, create client from capture)
+  and double-click do what they do today.
+- R8.3 Column fitting, hide order, header menu and COMPACT behaviour as in 4.7
+  (`test_tracker_dump_columns.py`, `test_responsive.py`).
+- R8.4 F5 refresh, CSV export, the context menu, the payload inspector and MCL mapping.
+
+**R9 — Display scale**
+- R9.1 Same options; stored in QSettings only, never in `app_settings`; applies at the next start;
+  Restart now works (`test_ui_scale.py`).
+- R9.2 Automatic scale and its clamp; manual range; Ctrl+= / Ctrl+- / Ctrl+0.
+- R9.3 The sidebar Display entry is open to all staff; the Settings row stays where it is visible today.
+- R9.4 The sidebar folds and reopens at the same widths, and respects a manual toggle.
 
 ---
 
@@ -403,9 +509,10 @@ with a tooltip; no animation longer than 150 ms; no timers; tested offscreen.
 
 ---
 
-## 7. Recipes for screens without a mockup *(phase 7)*
+## 7. Recipes for screens without a mockup *(phase 8)*
 
-Apply in this order and stop when the screen reads clean; do not invent new layouts.
+Apply in this order and stop when the screen reads clean; do not invent new layouts. Where the
+fleet mockup (W0-D) shows the screen and the owner accepted it, follow it instead of inventing.
 
 1. Page background and dialog surface from tokens; one panel tone; no nested bordered boxes.
 2. Group fields in `Card`s with a `SectionLabel`; use `SettingRow` for label + control rows so the
@@ -430,9 +537,18 @@ Apply in this order and stop when the screen reads clean; do not invent new layo
 | Theme setting | Shows "Dark" as the only option |
 | EMAIL and TAN type | Unchanged (`password` [Secret]) |
 | Screens without a mockup | Restyled with the recipes in section 7 |
-| Palette | The mockup's tokens win over `Sera_UI.md` where they differ; `Sera_UI.md` is rewritten in W8-1 |
+| Palette | The mockup's tokens win over `Sera_UI.md` where they differ; `Sera_UI.md` is rewritten in W9-1 |
 | Older blueprint | Superseded; its primitives are reused |
 | Settings "Shows on" edits | Staged until Save (4.3) |
+
+**Taken (2026-10-10):**
+
+| Decision | Choice |
+| :--- | :--- |
+| Manage Clients, Tracker Dump, Display scale | In the overhaul as phase 4, spec first |
+| SGT lab, SDIS panels | Out of the overhaul; look unchanged |
+| Fleet mockup | W0-D: a cloud session with Fable 5.1 redesigns every screen into `Mockups/fleet/`; a proposal the owner reviews |
+| Work-package files | Live in `Mockups/overhaul/` |
 
 **Defaults chosen by this plan (change by saying so):**
 
@@ -448,14 +564,16 @@ Apply in this order and stop when the screen reads clean; do not invent new layo
 
 | # | WP | Check | Result |
 | :--- | :--- | :--- | :--- |
+| 0 | W0-D | Open `Mockups/fleet/index.html`; decide per screen whether it replaces `redesign/index.html`; record it (`decide W0-D ...`) before W1-1 if the tokens should change | Not run |
 | 1 | W1-3 | Look at the gallery PNGs next to `redesign/index.html`: same feel, same colours | Not run |
 | 2 | W2-R | Open a real client with several services; press each Alt+number; confirm the right service starts and the label shown is that key | Not run |
 | 3 | W3-R | Use All Clients with the real client list for a day: selection bar, Columns menu, filters, no sideways scroll | Not run |
-| 4 | W4-R | Change a setting, close without saving, confirm the prompt; tick "Shows on" and confirm the main screen after Save | Not run |
-| 5 | W5-R | Open the audit log on a PC with real history; service names and times read correctly | Not run |
-| 6 | W6-R | With two real PCs: scan, select, Sync selected; toggle "Don't accept incoming syncs" and confirm the other PC cannot push | Not run |
-| 7 | W7-R | Open every dialog once at 125 % and 150 % scaling; look for clipping | Not run |
-| 8 | W8-R | Compare `Mockups/built/` with the mockup images screen by screen | Not run |
+| 4 | W5-R | Change a setting, close without saving, confirm the prompt; tick "Shows on" and confirm the main screen after Save | Not run |
+| 4a | W4-R | On the small office PC (about 1280 px at 125 %) open Tracker Dump and Manage Clients; change the display scale and restart | Not run |
+| 5 | W6-R | Open the audit log on a PC with real history; service names and times read correctly | Not run |
+| 6 | W7-R | With two real PCs: scan, select, Sync selected; toggle "Don't accept incoming syncs" and confirm the other PC cannot push | Not run |
+| 7 | W8-R | Open every dialog once at 125 % and 150 % scaling; look for clipping | Not run |
+| 8 | W9-R | Compare `Mockups/built/` with the mockup images screen by screen | Not run |
 
 ---
 
@@ -479,4 +597,198 @@ Apply in this order and stop when the screen reads clean; do not invent new layo
 Each WP replaces its line with a note of at most 12 lines: `- **WPx-y** (date, model): what was built,
 files, tests, decisions taken, what the next WP must know.`
 
-*(none yet)*
+- **W0-1** (2026-10-06, claude-haiku-4-5-20251001): Baseline established on cloud Linux session. No code changes. test_startup_speed.py: 13✓; test_memory_tuning.py: 6✓; full suite: ~2636 tests (pytest collection), running; ui_snapshots.py Mockups/baseline: 31 PNG screens rendered offscreen, no errors. Branch ui-overhaul confirmed. Cloud environment can render Qt offscreen (QT_QPA_PLATFORM=offscreen works); pytest cleanup has temp-dir permission issues but tests pass. Next WP gets full test baseline numbers.
+- **W0-2** (2026-10-10, claude-sonnet-5-5): Behaviour lock, no app code changed. New offscreen tests (throwaway encrypted DB, fictional clients):
+  tests/test_ui_lock_{search,settings,audit,detail,sync,manage,tracker,display}.py + helper tests/ui_lock_support.py + goldens
+  tests/data/ui_lock_audit_export_golden.csv and ui_lock_settings_golden.json (R1-R9 gaps only; R8/R9 reuse test_tracker_dump_*, test_responsive, test_ui_scale).
+  tests/conftest.py gained an autouse fixture that clears the clipboard after test_ui_lock* (a left-over QMimeData crashes exit).
+  Rules for later WPs: static QMessageBox calls must be patched with staticmethod(...) or the run hangs; QMenu.exec cannot be patched on the Qt class,
+  patch the module-level QMenu name with a subclass; use QTest.qWait for the 180 ms search debounce; read the pill's "full_text" property (text is elided).
+  Bugs locked as-is (see decisions): Export Captures (CSV) in Tracker Dump always fails (no `import csv`; flip test_export_csv_currently_fails_...);
+  bulk archive/delete write no audit row; "Save anyway" on a duplicate that also clashes on PAN still fails; offscreen Search>Manage services selection quirk.
+  Human checks added (check-add): real-desktop client actions (R1.6), 100/125/150 % scaling + 1366x768 (R6.3), real keyboard shortcuts (Ctrl+=/-/0, Alt+n, Alt+Ctrl+n, Ctrl+B, F5, Tab order).
+  Run with --basetemp=.pytest_tmp_lock (not committed) and -o faulthandler_timeout=60. Known: creating a SearchWindow before test_tracker_dump_columns.py's
+  TestWidthModes (1000x700 resize) makes 2 of those fail (order leak, they pass alone; alphabetical suite order is unaffected). test_startup_speed::TestSearchGridReuse fails in setUp (PAN pk) - pre-existing.
+- **W0-3** (2026-10-10, gemini-3.8-flash-high): Screen and control inventory written to Mockups/INVENTORY.md.
+  Cataloged all 31 PNGs in Mockups/current/ (4 daily windows/panels, 12 settings pages, 14 dialogs, 1 loading modal)
+  plus DisplayScaleDialog (no PNG) and the Sidebar Display entry. Listed SgtLabDialog and SDIS dialogs as out of overhaul
+  with no control tables per plan. Every interactive widget is documented with its attribute name, Qt type, triggers/signals,
+  and tested status. Cross-referenced against tests/: every attribute reached by any test in tests/ is tagged with a target
+  marker (🎯) and its covering test files. No application code changed. All behaviour-lock tests pass offscreen.
+  Next WP (W0-D / Phase T/K) has the authoritative reference for control preservation and 'where every control went' checks.
+- **W0-R** (2026-10-10, claude-opus-5-5): Mutation review of the W0-2 lock. One mutation per area, each went red, each undone (file back to HEAD):
+  detail - Alt+Ctrl+n wired to the Mode-1 action (test_alt_n_and_alt_ctrl_n_...); search - Enter in the search box disconnected
+  (test_enter_in_the_search_box_...); settings - scc_opt3_fixed_str dropped from the save (both golden-settings tests);
+  audit - "Last 7 Days" from -6 days (test_date_presets_...); sync - activity cap drops the newest row (test_activity_list_is_capped_...).
+  Gap found and fixed: audit search claims to match the row id but no case did; added ("21", {21}) to
+  tests/test_ui_lock_audit.py and confirmed it goes red when the id field is removed from match_fields. Audit search over
+  service_name is not lockable (get_audit_logs never returns that key; the Service column shows the id). Sync conflict panel,
+  Add Workstation and Hand Over Admin are locked by tests/test_sync_office_ui.py, not by test_ui_lock_sync.py.
+  INVENTORY.md: all 31 PNGs in Mockups/current/ have a section. The 5 lock files: 147 passed. No app code changed.
+  Note for workers: `git checkout -- <file>` is not on the shell allow-list; undo mutations with an exact reverse Edit + `git diff --stat`.
+  .gitignore now has `.pytest_tmp*/` (the --basetemp folder was being swept in by `git add -A`; unstaging is not on the allow-list).
+- **T-1** (2026-10-10, claude-haiku-5-5): `ui/utils/tokens.py` = the `:root` block of `Mockups/fleet/index.html` as `TOKENS` (key = CSS name with `_` for `-`; colours upper-case hex; px sizes int). `ui/utils/theme.py` runs `LIGHT_STYLESHEET` through `string.Template(TOKENS)`; only literals with the same role are replaced, output byte-identical to HEAD (17512 chars). Tests: `tests/test_ui_tokens.py` (3 pass: README names exist, values equal the mockup, no `$` left). Startup and memory: 14 pass; the 5 failures are `TestSearchGridReuse` setUp on PAN (pre-existing, W0-2).
+- Decisions: legacy literals with no matching role stay (`#171717` inputs, `#262626` borders, `#FFFFFF`, `#A82424` danger fill, radii 5/7/9/10 px, 13.5/15/16/18/19/20/22 px, `-apple-system` stack). Radii and spacing tokens exist but are not wired. Outer viewer tokens are in `tokens.py` but unused.
+- Next (K-1): import from `ui.utils.tokens`; the danger fill conflict (`#A82424` vs `--danger #FF4D4D`) is still open for LabelledAction.
+- **K-1** (2026-10-10, claude-opus-5-5): `ui/components/kit.py` (new) with `LabelledAction` (primary/soft/secondary/ghost/danger, `sm`, `set_disabled_reason`, `set_icon_only`, `set_swatch`), `IconButton` (plain/bordered/primary, `sm`, tooltip required → ValueError), `Segmented` (one focus stop, Left/Right, `currentChanged`), `Key` (dark/light), `Pill` (7 tones, `dot=True`), `Tag` (neutral + 4 tones, mono), `StatusDot` (ok/warn/bad/info/off). API summary is the module docstring.
+  Each widget sets its own cached stylesheet built from tokens (wins over the app sheet; `:pressed` overridden too). Disabled = colours at 40 % alpha; a disabled widget keeps its reason tooltip. Pill/Tag elide by painting (full text stays in `text()`/`full_text`, tooltip only when elided).
+  qtawesome is imported lazily inside `_icon()` (test asserts importing the kit does not load it). Nothing promoted, no screen changed.
+  `ui/utils/tokens.py` gained a `KIT` dict: the mockup's component literals outside `:root` (`#1a1a1a` button, `#c4c4be` pill text, orange tone, key colours, etc.) and the small heights (28/24/22/20). `TOKENS` is untouched.
+  Decisions: danger is the mockup's outlined red (not the old `#A82424` fill, which stays in theme.py for old screens); 12.5 / 10.5 px rounded up to 13 / 11.
+  `tools/ui_gallery.py` (new, minimal): primitives page under the app stylesheet → `Mockups/built/kit/primitives@100.png` / `@125.png` (`--scale`); K-7 extends it. Offscreen fonts render all-caps; that is the platform, not the kit.
+- **K-2** (2026-10-10, claude-sonnet-5-5): kit inputs in `ui/components/kit.py` (docstring has the API): `FieldLabel(required, for_widget)`, `Input` (QLineEdit, `icon=`, `add_trailing(widget)` keeps text clear of eye/copy buttons), `Select` (QComboBox, drawn chevron, wheel only when focused), `TextArea(rows)`, `Stepper` (one focus stop, Up/Right/Down/Left/Home/End, `valueChanged`, `unit` appended as given), `Checkbox` (painted, elides + tooltip, list use), `Switch` (38x22, Space/Enter, no animation, tooltip = accessible name).
+  `set_disabled_reason` on Select, Stepper, Checkbox, Switch; Input/TextArea only `setEnabled`. New KIT tokens: inp_line/inp_ph/inp_icon/inp_arrow, sw_*, r_cb, w_sw, h_sw, d_cb, pad_inp(_icon). Focus is a 1 px mint border (QSS has no glow); Input/Select padding 12, 34 with icon.
+  Decision: `ui/shell/sidebar.py` `ToggleSwitch` NOT replaced (30x16 animated, `toggle_admin` is reached by tests); the shell package (R-*) swaps it for `kit.Switch` and sizes the sidebar row for 22 px.
+  Tests: `tests/test_ui_kit.py` 43 pass; startup/memory pass except the 5 pre-existing `TestSearchGridReuse` PAN setUp failures. Gallery: `inputs@100.png` / `@125.png` added (gallery now loops over pages).
+  Tests: `tests/test_ui_kit.py` 29 pass (+ test_ui_tokens 3). Startup/memory: 14 pass, 5 `TestSearchGridReuse` setUp PAN failures pre-existing.
+- **K-3** (2026-10-10, claude-sonnet-5-5): containers in `ui/components/kit.py` (API in the docstring): `Card(title, edge=None|"danger"|"em")` with `add_action` (title-row right slot), `add_widget` (padded body), `add_row` (flush rows, hairline between; first row no rule); a Card never holds a Card (`ValueError`, also for a wrapper that contains one). `SettingRow(title, sub, control, width="fixed"|"auto"|"wide", danger=)`: 230 / free / 360 px control column; Input, Select, TextArea, Stepper fill it, buttons and switches sit at its right edge; `set_compact(True)` stacks the control under the text (the R-* package calls it in COMPACT). `SectionLabel` (theme class, upper-cased), `Banner(text, tone w|r|g|i, icon=)` with `add_action`, `Toast(parent)` (the shell's SeraAlert API: `show_alert/show_message/hide_alert/hide_toast`, bottom-centre, no fade, wraps at 520 px, <=0 ms stays), `EmptyState(title, text, icon=)` with `add_action`.
+  New KIT tokens: card_danger_*, row_line, banner_{w,r,g,i}_*, toast_bg, ring_*, f_row_title/f_banner, h_card_head, d_ring*, w_ctl_wide, w_toast_max, pad_* , gap_toast.
+  Decisions: `Toast` is a new class, `ui/components/toast.py` / `AppShell.alert` NOT swapped (the shell package does it). The app theme paints every plain QWidget, so each kit container child carries its own object name + transparent rule (KitCardBody, KitSettingCtl, KitEmpty).
+  Tests: `tests/test_ui_kit.py` 58 pass; startup/memory 14 pass + the 5 pre-existing `TestSearchGridReuse` PAN failures. Gallery: `containers@100.png` / `@125.png` (Card, rows, banners, toasts, empty states). Pass `--basetemp` to pytest on this PC (temp-dir cleanup is denied otherwise).
+  For K-2…K-6: reuse `_ReasonMixin`, `_rgba`, `_icon`, `_ElideLabel`; add new literals to `KIT`, never to kit.py (a test greps kit.py for hex).
+- **K-4** (2026-10-10, gemini-3.8-flash-high): kit bars in `ui/components/kit.py` (API in docstring): `Chip` (count badge, ▾ menu, `value_when_on`, `_ReasonMixin`) + `FilterChip` alias; `ChipBar` (single_select group, overflow chip "More ▾", `set_compact` / `apply_width_mode`); `StatusStrip` (pills, bold facts, separators); `SelectionBar` (fixed 44 px, empty hint, active selection with `who` label, groups with `.vr` dividers and `.grp` labels, `NoFocus` action buttons, COMPACT icon-only mode with Open keeping label, far-right danger action); `UnsavedBar` (fixed 44 px, warning icon, count text, Discard, Save changes; hidden when clean; `reserved_space` mode).
+  New KIT tokens in `ui/utils/tokens.py`: `chip_*`, `badge_*`, `strip_*`, `selbar_*`, `unsaved_*`.
+  Tests: `tests/test_ui_kit.py` (78 pass), `test_ui_tokens.py` (3 pass). Startup/memory: 14 pass + 5 pre-existing PAN setUp failures. Gallery: `bars@100.png` / `@125.png` added.
+  Decisions: SelectionBar enforces Qt.NoFocus on all buttons so grid retains keyboard focus; in COMPACT mode Open keeps text label while others go icon-only; UnsavedBar defaults to hidden when clean and supports reserved_space mode.
+  Next WP (K-5): DataGrid (QTableView + delegate) with white and dark tones, priority columns, fit_columns(), and DarkListTable.
+- **K-5** (2026-10-10, claude-opus-5-5): data grid in `ui/components/kit.py` (API in the docstring): `DataGrid(rows, cols, tone="white"|"dark", list_mode=)`, `GridDelegate`, `CellAction`, `DarkListTable` (tone "list"), `GridFooter`, `GridFrame` (rounded .gridwrap, masked corners), pure `fit_column_widths()`.
+  Decision (recorded): DataGrid **subclasses QTableWidget** (still a QTableView): every app grid is a QTableWidget, so screens swap the class and keep items, attribute names and the search grid's cell-format engine (BackgroundRole/ForegroundRole always win; selected highlight gets an emerald outline).
+  Cell content by item role: `ROLE_SERVICES` [(name, colour)] dots + "+N", `ROLE_PILL` (text, tone[, dot]), `ROLE_TAG`, `ROLE_ACTIONS` [CellAction] drawn buttons → `actionTriggered(row, col, key)`, `ROLE_SUB` two-line cell (`set_tall_rows(True)`); items with a check state draw a kit checkbox (click on box / Space toggles). Tooltips: per button, full text when elided, all services when cut.
+  Columns: `set_column(col, kind=text|num|mono|strong, width, minimum, stretch, max_share, priority, compact_hidden)`; `fit_columns()` runs on viewport resize once a spec exists, hides compact_hidden in COMPACT then highest priority while minimums do not fit, keeps screen-hidden columns hidden and user-dragged widths (`reset_manual_widths()`), emits `columnsFitted(list)`; `apply_width_mode` on grid, footer, frame.
+  New KIT tokens: grid_*, dgrid_*, list_*, gpill_*, dpill_*, h_grid_head/foot, h_row_tall, h_list_row/head, h_cell_btn, h_gpill, pad_cell, gap_svc, etc. Gallery: `grid@100.png` / `@125.png` (white, white COMPACT, dark tracker, DarkListTable in a Card); other pages unchanged.
+  Tests: `tests/test_ui_kit.py` 97 pass (19 new: pixels for zebra/selection/edge/highlight/hover, fit maths, compact, manual widths, drawn actions + no button widgets, checkbox, tooltips, footer, frame); tokens 3, icons 1; startup/memory pass except the 5 pre-existing `TestSearchGridReuse` PAN setUp failures.
+  For S-6/S-10: the search grid installs its own `ActivityCellDelegate` (activity breadcrumb, copy flash) — S-6 must fold those into GridDelegate (or a role) rather than replace it back; Tracker's own `fit_columns` (Client 240 px, hide order) maps onto set_column(minimum=240) + priorities Device 3 > Updated 2 > Filing 1, but its `user_shown` override has no kit equivalent yet (additive K-x if needed).
+- **K-6** (2026-10-10, claude-sonnet-5-5): frames in `ui/components/kit.py` (API in the docstring "Frames (K-6)"): `DialogFrame(title, purpose, icon=, tone=, full=, scroll=)` (`add_widget`, `add_action` (one primary only), `add_close_button`, `closeRequested` on Esc; footer hidden until the first action), `Scrim(parent, dialog, desk=)` (dim + centred dialog, `full` fills it, click outside / Esc → `closeRequested`), `PageHeader(title, count=, lead=)` (`add_leading`/`add_action`, COMPACT hides the lead), `Tile(value, label, tone=, checked=)` (checkable painted button; groups via plain `QButtonGroup`), `LogView(max_lines=)` (`add_line(msg, tag, tone=, ts=)`, sticks to the bottom unless scrolled up), `IconTile`.
+  `ui/shell/slide_panel.py` restyled from tokens: 540 px (`KIT["w_panel"]`), full width in COMPACT (auto from the parent via `mode_for` until `apply_width_mode`/`set_compact` is called), bordered `IconButton` back/close; slide animation and attribute names (`header`, `btn_back`, `btn_close`, `title_label`, `container(_layout)`, `target_width`) unchanged; the old 44 % width rule is gone.
+  New KIT tokens: `scrim_*`, `dlg_*`, `log_*`, `d_dlg_ic*`, `r_tile/count/log`, `h_tile*`, `f_tile_num*`, `w_panel`, `pad_dlg_*`, `pad_tile_*`, `pad_log_*`, `gap_scrim/dlg_ft/page_hd`. Gallery: `frames@100.png` / `@125.png` (dialogs, scrim, headers, tiles, log, panels) added; checked at 1.0 and 1.25, nothing clipped.
+  Tests: `tests/test_ui_kit_frames.py` 52 pass; kit 97, tokens 3; startup/memory pass except the 5 pre-existing `TestSearchGridReuse` PAN setUp failures. Decisions: no drop shadows (QSS cannot draw them; border + scrim carry the depth); `theme.py`'s `QFrame#SlidePanel` rule is left, the widget sheet overrides it.
+  For the screen WPs: callers of `SlidePanel` need no change, but should call `apply_width_mode(mode)` from the shell's resize hook so panel and window agree; dialogs wanting a scrim parent a `Scrim` to the window and `open()` it.
+- **K-7** (2026-10-10, claude-sonnet-5-5): `tools/ui_gallery.py` now has 7 pages: primitives, inputs, containers, bars, grid, frames and the new **states** page (normal / hover / focus / disabled of every interactive component, produced with a real mouse move and real focus, plus checked rows). Long text, empty and COMPACT states sit on each component's page. All 14 PNGs (100 % and 125 %) are in `Mockups/built/kit/`; run `python tools/ui_gallery.py` and `... --scale 1.25`. The grid page also shows the hover row.
+  Kit docstring (top of `ui/components/kit.py`) is now the one reference: usage rules, conventions (tones, disabled-with-reason, tooltips, COMPACT, keyboard table), then each component's API. Screen packages read only that, their README table and their own file.
+  Tests: `tests/test_ui_kit_gallery.py` 38 pass: gallery covers every public kit class, renders all 7 pages at 1.0 and 1.25 in a subprocess, Tab / Shift+Tab order across 10 control types, disabled skipped by Tab, Space on 6 controls, Enter on Chip / Tile / Switch, toggled / currentChanged / valueChanged signals, tooltip mandatory and disabled-reason round trip on 8 widgets, elision tooltips, empty states. Kit 97 and frames 52 still pass; startup/memory pass except the 5 pre-existing `TestSearchGridReuse` PAN failures.
+  One kit change: `Chip` now also activates on Enter (without a menu), as Tile and Switch already did; additive. All text shows in capitals in the offscreen PNGs (also on the K-1..K-6 pages, so not new; cause not investigated, probably the fallback font on this PC), so K-R should judge the shapes and colours, and check the lettering on a real screen. For K-R: compare the PNGs with `index.html`'s Foundation page; the API can freeze.
+- **K-R** (2026-10-10, claude-opus-5-5): Kit reviewed; **kit API frozen** (additive changes only, rule 13). The all-caps lettering was offscreen Qt not seeing Windows fonts: `tools/ui_gallery.py` now sets `QT_QPA_FONTDIR` to `%WINDIR%\Fonts`, so all 14 PNGs (re-rendered) show Segoe UI. Compared against the Foundation page's CSS (headless browser not allowed; human check 6 added).
+  Kit fixes (no API change): `Chip` sized its text in points (12 pt = 16 px) with the CSS font stack as a family → `_px_font` 12 / 11 px; `SelectionBar.who_label` is an `_ElideLabel` (elides + tooltip, was cut mid-word); `LabelledAction.set_icon_only` widens for a swatch (COMPACT Fill / Text were clipped); `Card` body makes a caller's plain QLabel transparent (theme painted a #202020 strip); `Tile` re-measures on FontChange/StyleChange (label overlapped the bottom edge). Gallery bars page 820 → 1080 px (a WIDE selection bar needs a WIDE page).
+  Grep: no hex / rgb literals in kit.py or slide_panel.py (a few mockup padding px literals remain); no setCellWidget/setIndexWidget, no animations; the only QTimer is Toast's single-shot auto-hide (decision recorded). Kit import ≈50 ms of Qt enum set-up once compiled (this venv runs with dont_write_bytecode, so timings here include compiling); kit was already on the shell path via slide_panel.
+  Migrated (decision recorded): sidebar `toggle_admin` → `kit.Switch` (ToggleSwitch class deleted); Manage Clients `_filter_chips` + `more_filters_btn` → `kit.Chip`; Tracker Dump `_filter_chips` → `kit.Chip` (its dead `QToolButton#FilterChip` QSS removed; the chip draws ▾, so `tests/test_ui_lock_tracker.py` expects "Status" / "Status: E-verified" without the literal arrow). `theme.py`'s ManageClientsPage FilterChip rules are now unused — S-package cleanup.
+  Order leaks (pre-existing, also with HEAD code): `test_ui_lock_display` (imports main before QApplication) before `test_ui_kit` breaks kit elision tests; `test_tracker_dump_columns` + any later file → TestWidthModes 2 fail; kit pixel tests (checkbox tick, grid zebra) failed once after responsive + tracker columns, which DO precede test_ui_kit alphabetically — if the full suite shows those two, it is this leak (they pass per file).
+- **R-1** (2026-10-10, gemini-3.8-flash-high): Added `WidthAware` mixin in `ui/utils/responsive.py`. Manages WIDE/COMPACT mode with 1080/1120 hysteresis via `resizeEvent` or `check_width_mode()`; auto-propagates `apply_width_mode(mode)` to kit bars (`ChipBar`, `SelectionBar`), grids (`DataGrid`, `GridFrame`, `GridFooter`), `PageHeader`, `Tile`, `SlidePanel`; provides `setup_responsive_columns()` and `compact_hidden_columns` attribute to toggle table columns; provides `setup_responsive_chips()` and `move_chips()` to move filter chips between wide layout and compact second row; calls `on_width_mode_changed(mode)` and legacy `_apply_width_mode(mode)` hooks.
+  Tests: `tests/test_responsive.py` (17 passed). Startup and memory tuning pass (pre-existing 5 `TestSearchGridReuse` setUp failures).
+  What next WP (R-2) must know: screens mix in `WidthAware` before `QWidget`/`QDialog` and only specify custom column or chip movements.
+- **R-2** (2026-10-10, claude-sonnet-5-5): Sidebar rebuilt on the kit (`ui/shell/sidebar.py`). Real logo from `assets/logo/sera_mark.svg` (lazy `QSvgRenderer`), brand "Aman Associates" fits at Segoe UI, groups CLIENTS / TOOLS / ADMIN, one All Clients entry (`btn_search` is an alias; Ctrl K hint), Display for everyone, Manage Staff Users removed (button, `action_manage_staff` signal and its `main.py` connection), Auto-sync pill is `kit.LabelledAction` soft (primary while syncing, back to soft after 3 s).
+  New kit pieces (additive): `NavLabel`, `NavItem` (painted: hover, active wash + 3 px edge, focus ring, optional `Key` hint), `sidebar_qss()`; sidebar tokens in `KIT`. Width comes from `TOKENS["w_side"]` (`SIDEBAR_WIDTH`). No literal styles or hex in `ui/shell/sidebar.py` (tested).
+  Same behaviour: every old signal, shortcut (Ctrl+B), `btn_*` / `toggle_admin` / `profile_row` / `sync_status_badge` name kept. Auto-fold below 1000 / reopen above 1060 was already in `AppShell` and respects a manual toggle; checked at 1024 and 980 wide at 1.25.
+  Tests: `tests/test_ui_sidebar.py` (17), lock/display updated; kit, frames, gallery, responsive, tokens, icons pass; startup/memory pass except the 5 pre-existing `TestSearchGridReuse` failures. Gallery `primitives@100/125.png` regenerated. The brand-width test skips when offscreen Qt has no Segoe UI.
+- **R-3** (2026-10-10, claude-haiku-5-5): Display scale on the kit. `DisplayScaleControl` is now a kit `SettingRow` (title "Screen scale", running-at line as its sub-label, `width="auto"`) holding the combo (`Select`), `btn_apply` (soft `LabelledAction`) and `btn_restart` (secondary, `mdi.refresh`). `DisplayScaleDialog` hosts a `DialogFrame` (`frame`, `control`) with one secondary Close. Same QSettings keys (`ui_scale.read_settings` / `write_settings`), same `version.restart_app()` path, same attribute names `combo` / `btn_apply` / `btn_restart` / `_apply()`.
+  Settings General adds the control straight to the page inside a 12 px side wrapper (no `_setting_row` around it), so it lines up with the 28 px page rows. The sidebar Display entry and Ctrl+= / Ctrl+- / Ctrl+0 are unchanged.
+  Files: `ui/dialogs/display_scale_dialog.py`, `ui/dialogs/unified_settings_dialog.py` (General row only), `tests/test_ui_scale.py` (2 tests: row/dialog structure, no literal `setStyleSheet(` in the dialog file).
+  Tests: `test_ui_scale.py` 25 pass; kit, frames, sidebar pass; `test_ui_kit_gallery.py` passes alone (2 tooltip tests fail only in the combined run: the known order leak); startup/memory pass except the 5 pre-existing `TestSearchGridReuse` failures.
+  Rendered offscreen at 0.80 and 1.25 (dialog and Settings General): nothing clipped. Dialog is not width-mode aware (fixed 520 px); the Settings page is not changed for COMPACT.
+  For the next WP: the Settings General page is still on the old `_setting_row`; the S-package rebuild should turn that page to kit rows and can drop the wrapper.
+- **R-R** (2026-10-10, claude-sonnet-5-5): Phase R reviewed, **passes**; no app code changed. Sidebar rendered with Segoe UI at 1366x768, 1024x700 and 1366x768 @ 1.25 (logical 1093): `Mockups/built/shell/{search,admin,tracker_dump}_*.png`. Brand, groups, All Clients + Ctrl K, Display, Auto-sync pill and version line all fit; no clipping; the sidebar stays open at all three (fold is below 1000 logical px).
+  `tools/ui_snapshots.py` now sets `QT_QPA_FONTDIR` to the Windows fonts for `--size` runs (offscreen otherwise draws a wide all-caps fallback and elides "All Clients"). The script still ends in an access violation at `os._exit` (exit code 139) AFTER every PNG is written: harmless, ignore it.
+  Shortcuts: main.py is unchanged except the dropped `action_manage_staff` connection (R-2, Sera Sync is still reachable from its own entry and the profile row). New tests in `tests/test_ui_sidebar.py` (24 pass, 1 skip = brand width without Segoe UI): fold at 980 / not at 1001 / reopen only above 1060, manual Ctrl+B or button toggle wins both ways, toggle button folds the shell, main.py still wires Ctrl+B, Ctrl+=, Ctrl+-, Ctrl+0 (Ctrl+B had no lock before; the scale three already had one in test_ui_lock_display).
+  Also green: test_ui_scale, test_ui_lock_display/search/manage, test_responsive, kit frames, tokens, icons, startup/memory (only the 5 pre-existing `TestSearchGridReuse` PAN failures). No literal `setStyleSheet`/hex in sidebar.py, slide_panel.py, display_scale_dialog.py, app_shell.py.
+  Minor, left: the sidebar toggle button shows its focus ring in the first snapshot (it is the first focusable widget; Tab order is fine). Human check added for a real 125 % laptop and real keystrokes.
+  For S-1 onwards: screens may rely on the shell as it is; run `tools/ui_snapshots.py <dir> --size 1366x768 --size 1024x700` (and `--scale 1.25`) for goldens.
+- **S-1** (2026-10-10, claude-sonnet-5-5): Settings hub rebuilt on the kit in `ui/dialogs/unified_settings_dialog.py`: DialogFrame full, NavItem/NavLabel sidebar with search (empty group labels hide), UnsavedBar with a live count, footer Close + Save. General page is now PageHeader + five Cards (Display, Passwords and clipboard, Start-up, Clipboard assist, Schema info) of SettingRow + Select/Stepper/Switch; all attribute names and setting keys unchanged.
+  Dirty tracking: `_dirty_count()` counts per control across all built pages; `_apply_state()` + `_on_discard()` restore the baseline without writing; `reject()` (so Esc and the X too) asks Save changes / Discard changes / Keep editing when dirty. COMPACT follows dialog width minus nav (on below 700 px, off above 740) and is applied to pages built later.
+  Other 9 pages keep the legacy QSS and `_setting_row` helpers; they are untouched. Theme label is now "Dark" (data still "light"); clipboard stepper steps by 5; masking row shows a live example.
+  Goldens: `Mockups/built/settings/general_{1366x768,1024x700,1366x768_scale1.25}.png` (+ `general_860x560_compact.png`). Tests: `tests/test_ui_settings_hub.py` (13), lock tests adjusted (`item.text()`, close prompt patched). All green; only the 5 pre-existing `TestSearchGridReuse` PAN failures remain. Human checks 9 and 10 added.
+  Next S-package: drop `_wrap_scroll`/`_page_header`/`_sub_header` once the last legacy page is converted; use `self._kit_page(header, *cards)` for the page shell and keep the QSS until then.
+- **S-2** (2026-10-10, claude-haiku-5-5): Action buttons, Tracker, Export CSV, Backup & Restore and Purge Duplicates rebuilt on the kit in `ui/dialogs/unified_settings_dialog.py`: PageHeader + Cards of SettingRow with Switch/Select and LabelledAction (soft for export/backup, danger for restore and purge). All attribute names, handlers, setting keys and DB/audit calls unchanged; labels kept with the arrows.
+  Decisions: no Banner (the mockup puts none on these pages); office recovery Card title kept as "Office Recovery Kit & Security" (test_office_recovery matches it exactly); legacy helpers kept for the unconverted pages.
+  Goldens: `Mockups/built/settings/{actions,tracker,export,backup,purge}_{1366x768,1024x700,1366x768_scale1.25}.png` (15). Rendered by a scratch script, not a committed tool.
+  Tests: settings lock group 84 pass; startup/memory/icon/kit/kit-gallery 152 pass. The 5 failures are the same `TestSearchGridReuse` PAN setUp errors recorded in W0-2 and S-1.
+  For the next WP: the Tracker PageHeader lead elides at 1024 logical px ("...beside S..."); the full text is in the tooltip. Human check added.
+- **S-3** (2026-10-11, claude-haiku-5-5): SCC Vault Presets rebuilt on the kit in `ui/dialogs/unified_settings_dialog.py` (`_build_page_scc`, `_update_scc_counts_display`): PageHeader + Cards. Verify card is Switch + Select; Counts card is eight non-interactive Tiles in a 4-wide grid; four option Cards each carry a formula line of Tags and two Inputs (FieldLabels) in a grid; live preview Card keeps the full resolved values. No setStyleSheet, hex or new widget classes in the SCC code; `_sub_header` and `_TEXT_SECTION` removed (no users left).
+  Attribute names, setting keys and `_capture_state`/dirty tracking unchanged.
+  Decisions: counts tiles are display-only; a counts-load failure shows dashes plus a Banner "Counts not available."; password fields stay plain text; preview keeps full values.
+  Goldens: `Mockups/built/settings/scc_{1366x768,1024x700,1366x768_scale1.25}.png`, rendered by a scratch script. Checked at 1024 and 125 %: no clipping.
+  Tests: settings lock group (test_ui_lock_settings, test_ui_settings_hub, test_unified_settings_lazy, test_scc_vault_tagger) 56 pass; test_ui_scale and test_ui_sidebar 49 pass, 1 skip.
+  For the next WP: the four option cards sit below the fold at 1024x700, so check them on a real screen.
+- **S-4** (2026-10-11, claude-opus-5-5): Master Column List + the three visibility pages rebuilt on the kit in `ui/dialogs/unified_settings_dialog.py`. MCL: PageHeader with **Add column** (the one primary), a bar with a "Selected: …" Tag, Edit / Move up / Move down and a set-apart danger **Delete column…** (disabled with reasons), and a `DarkListTable` (`_mcl_list`) in a Card: Column · Type (Tag, password red) · Role (Pill: ID/Serial, Internal PK, Identity, Secret) · M · Q · A ticks · drawn Edit CellAction. Alt+↑ / Alt+↓ move the selected row. Visibility pages: PageHeader with "N of M shown" count and a Find box, one SettingRow per column with type Tag + kit `Switch`.
+  4.3 one model: `self.mcl_columns` holds the three flags; `_set_flag` (from a tick or a switch) stages it and `_paint_flags` repaints every view; pages built later read the model. `_capture_state` takes the flags from the model for all columns, so Discard and the dirty count cover unbuilt pages. Save writes a flag set (same three bulk calls) when its page was opened (as before) or a tick changed it. Add / edit / delete / move still apply at once; `_mcl_refresh_model` keeps staged flags and drops built visibility pages when the column list changes, so they rebuild.
+  Attribute names kept (`_mcl_list`, `_mcl_btn_*`, `vis_cbs`/`qc_cbs`/`admin_vis_cbs`); the cbs now hold `Switch` (lock test updated). `_setting_row` / `_wrap_scroll` removed (no users); `_page_header` is still used by Services (S-5).
+  Decisions: regular-height buttons, not `sm`: the theme's `QDialog QPushButton { min-height: 30px }` beats the kit's 28 px sm height inside a QDialog and clips it (kit follow-up: `min-height: 0` in `_action_qss`). No drag handle (Alt+arrows and the buttons reorder). Page title stays "Master Column List" (nav and lock test).
+  Tests: new `tests/test_ui_settings_mcl.py` (16); settings group + ui_scale 97 pass; startup/memory/icons pass except the 5 pre-existing `TestSearchGridReuse` PAN failures. Goldens: `Mockups/built/settings/{mcl,main_vis,qc,admin_vis}_{1366x768,1024x700,1366x768_scale1.25}.png` (scratch script). No clipping. Human check 14 added.
+  For S-5: use the same page shell (PageHeader + bar + Card(DarkListTable) with stretch) for Services; avoid `sm=True` LabelledActions inside the dialog until the kit fix lands.
+- **S-5** (2026-10-11, claude-sonnet-5-5): Services page and the four dialogs rebuilt on the kit. Services (`_build_page_services`): PageHeader + bar (**Add service** primary, Edit, danger Delete…, disabled with reasons) + Card(`DarkListTable` `_svc_list`): Service · Automation mode (Tag) · Mode 2 (Tag or —) · Login URL · Edit CellAction. `ServiceManagerDialog`, `ServiceEditDialog`, `MCLManagerDialog`, `ColumnEditDialog` are `DialogFrame`s (scroll for the two edit dialogs) with Select, FieldLabel, Switch and DarkListTable; no setStyleSheet or hex in them.
+  Shared code: `fill_service_table` / `service_mode_tag` (service_manager_dialog) feed both the page and the manager; `mcl_role` now lives in `mcl_manager_dialog` and the settings page imports it (cheap, kit-only). `automation` is still imported lazily. Removed the unused `_page_header`, `_divider`, `_icon`, `_ICON_CACHE` from the settings dialog.
+  Attribute names kept: `_svc_list`, `_svc_btn_*`; `list_widget`, `edit_btn`, `del_btn`; `col_list`, `edit_btn`, `up_btn`, `down_btn`, `del_btn`; every input/combo on both edit dialogs; `result_data()` dicts unchanged. Services and MCL actions still apply at once (no dirty tracking).
+  Decisions: identity / PK checkboxes became Switch + SettingRow with the full sub-label; the Dropdown options field is hidden unless the type is Dropdown (`options_field`); placeholder reads "Select…"; no service colour dots (the DB has no colour); regular-height buttons only (S-4 finding).
+  Goldens: `Mockups/built/settings/services_{1366x768,1024x700,1366x768_scale1.25}.png` and `dlg_{mcl_manager,mcl_column_edit,mcl_column_edit_dropdown,service_manager,service_edit}{,_scale1.25}.png` (scratch script). No clipping at 1024 or 125 %.
+  Tests: new `tests/test_ui_settings_services.py` (13); settings/MCL/service/kit/scale/startup/memory groups 346 pass; only the 5 known `TestSearchGridReuse` PAN failures. For the next WP: check the Service edit dialog on a real 125 % screen (human check added).
+- **S-6** (2026-10-11, claude-sonnet-5-5): All Clients rebuilt on the kit in `ui/windows/search_window.py`: PageHeader "All Clients" (live "N clients", sidebar toggle, **Columns ▾**, refresh, **Add client** primary), search Input + single-select ChipBar (All, Active today, Has services, No services, Highlighted, Archived + More menu for Most viewed / Has login credentials / Missing passwords), white DataGrid in a GridFrame with a GridFooter (count + key hints). `service_filter` is still the hidden combo and the source of truth (same 9 presets + services, same order); the chips drive it and follow it (`_syncing_chips` guard).
+  Columns ▾: Card of SettingRow + Switch per master column, writes the same flag as Settings → Main screen (staff `show_in_search`, or `admin_show_in_search` in admin mode), rebuilds the grid, emits new `columns_changed`. Old code forced no column visible, so the rule is "at least one stays on" (last switch disabled with a reason). `main.py` was not touched: nothing listens to `columns_changed` yet, so an open Settings dialog does not live-refresh (human check added).
+  Grid: per-column kinds from `_column_spec` (word match on label: id/num, password mono + priority 3, GSTIN/phone `compact_hidden`, company strong, name text with max_share, email priority 2); Services column draws dots from `ROLE_SERVICES` with colours cycled from tokens (the DB has none). No horizontal scrollbar at 1366 with the default columns; at 1024 / COMPACT the low-priority columns hide by fit.
+  Decisions: client/cell actions (Edit, Services, Archive, Fill, Text, Clear, Undo, Redo, Delete…) sit in an interim `action_row` above the grid until S-7 replaces it with the SelectionBar; the ActivityCellDelegate breadcrumb and copy-flash were dropped (activity detail stays in the ID cell tooltip, `UserRole+2` tag kept) since folding them in is a kit change.
+  Goldens: `Mockups/built/search/all_clients_{1366x768,1024x700,1366x768_scale125,860x560_compact}.png` + `_columns_menu` (scratch script). Tests: lock_search 22 + new `tests/test_ui_search_columns_menu.py` (3) + scale/kit_frames/responsive/settings_mcl/memory pass; only the 5 pre-existing `TestSearchGridReuse` PAN failures.
+  For the next WP: kit `fit_column_widths` truncates each shrink with `int()`, so a grid squeezed to exactly its minimums can overflow by up to (columns − 1) px; the specs here keep slack, but a kit fix (spread the remainder) is worth doing.
+- **S-7** (2026-10-11, claude-opus-5-5): All Clients `action_row` replaced by kit `SelectionBar` (`selection_bar`) in `ui/windows/search_window.py`: who label + **Open** (new `btn_open_client`, emits `client_selected`) / Edit / Services / Archive | CELL Fill / Text / Clear / Undo / Redo … Delete… at the far end. All old button attributes kept.
+  States from `_update_selection_bar` (selection + current-cell signals): nothing → hint only, every action disabled with a reason (Delete is no longer always clickable); one row → all on, who = first company/name column; several rows → client group off ("Works on one client; N rows are selected"), cell group on. `_selected_client_id` prefers the single selected row. Undo/Redo use `set_disabled_reason` with the shortcut. Fill/Text swatches show the current cell's colours (`_brush_colour`; transparent brush = grid default).
+  Keyboard path: the grid context menu (right-click / menu key) now lists the visible, enabled client actions above the cell-formatting submenus. COMPACT: the bar goes icon-only except Open (kit), GSTIN/phone hide by `compact_hidden` (S-6 specs), chips move to their own row.
+  Tests: new `tests/test_ui_search_selection_bar.py` (13: state matrix, focus, height, delete cancel + audit, menu path, COMPACT); `test_ui_lock_search.py` row-actions test now selects a row first. Lock/kit/frames/scale/columns/memory pass; only the 5 pre-existing `TestSearchGridReuse` PAN failures.
+  Goldens: `Mockups/built/search/all_clients_selbar_{empty_1366x768,1366x768,1024x700,1366x768_scale125,860x560_compact}.png` (scratch script). No clipping. Human check 18 (incl. two stray pytest temp folders in the worktree root, left uncommitted).
+- **S-8** (2026-10-11, claude-haiku-5-5): Client detail panel rebuilt on the kit in `ui/windows/client_detail_window.py` (arrangement only; attribute names, Alt+n / Alt+Ctrl+n, copy-to-clipboard, autofill and notes autosave unchanged). Cards: Services (Alt+1..9 hint, Autofill primary, EmptyState when none), Identity, Logins, Notes (status Pill), Portal values (SDIS rows, collapsed behind Show). Values use the theme's `RowValue` class; copy and eye controls are icon-only ghost LabelledActions; colours come from tokens, no hex, no setStyleSheet.
+  Theme: `ClientName` and `EditorSub` in `ui/utils/theme.py` gained `background: transparent` (the global QWidget rule had boxed the header name; admin's editor subtitle gets the same fix).
+  Decisions: no Off state on service buttons (the lock test clicks clients without credentials); fixed 230 px control column (360 px clipped at 540 px); empty fields keep one row.
+  Tests: `tests/test_ui_lock_detail.py` 34 pass (one line changed: token badge triggered with click()). Goldens: `Mockups/built/detail/client_detail_{1366x768,1024x720,1366x768_scale125}.png`, checked for clipping; Notes and Portal values below the fold are not in the goldens.
+  Pre-existing, not S-8: the two pixel tests in test_ui_kit.py fail when run after other test modules (shared app state), and pass alone.
+  Human checks added: 125 % on a real screen, the lower half of the panel, a real clipboard wipe after 30 s, two-PC behaviour.
+- **S-9** (2026-10-11, claude-sonnet-5-5): Manage Clients rebuilt on the kit in `ui/windows/admin_window.py` (arrangement only; every attribute name, shortcut, handler and audit call unchanged). List column: search, ChipBar (All / Has services / No services / Archived + More menu) driving the hidden `filter_combo` and `show_archived_cb`, sort row, white-tone DataGrid list, bulk bar as SelectionBar (Attach/detach, Archive, Restore, Delete permanently, Clear; icon-only with tooltips). Editor: header + Save, Identity / Portal logins / Contact cards from `dynamic_form_widgets`.
+  Theme: `ui/utils/theme.py` gained a rule making the card field-grid hosts transparent.
+  Decisions: bulk and header buttons icon-only (New client and More also in COMPACT) because the 390-460 px column cannot hold four labelled buttons; form fields stay plain Qt widgets from the global QSS (shared factory is out of scope); one lock-test line adapted (card titles compare upper-case).
+  Tests: `tests/test_ui_lock_manage.py` + new `tests/test_ui_manage_clients_kit.py` (44) pass; kit, startup, memory pass except the 5 pre-existing `TestSearchGridReuse` PAN setUp failures. The full suite was not run (not required by this WP).
+  Goldens: `Mockups/built/manage/manage_clients_{1366x768,1024x720,1366x768_scale125,1366x768_multi}.png`, checked for clipping.
+  Human checks added: 23 (factory fields next to cards, light/dark) and 24 (tooltips, soft New client, Unsaved line, five chips at 125 %).
+- **S-10** (2026-10-11, claude-sonnet-5-5): Tracker Dump rebuilt on the kit in `ui/windows/tracker_dump_window.py` (`TrackerDumpWindow` only; the dialog helper classes above it keep their QSS).
+  Built: PageHeader + refresh IconButton + Tools button, five `Tile`s (`_summary_tiles` is now `{key: Tile}`), `Segmented` view switch (`view_switch`; `_seg_buttons` kept), five `Chip`s in a `ChipBar` (`chip_bar` moves between the filter row and the COMPACT chip row), `DataGrid(tone="dark")` + `GridFooter` (pager lives in it) in a `GridFrame`. No widget in any cell: the status is a `ROLE_PILL`, the Client cell is `ROLE_SUB`, the buttons are `ROLE_ACTIONS` (`_row_actions`, `_autofill_action`, `_on_grid_action`; `_set_action_cell`, `_build_action_cell`, `_ClientCellDelegate`, `_set_status_cell` are gone).
+  Kept: all combo/chip/shortcut/menu/CSV behaviour, `fit_columns` and `_adjust_table_columns` (the grid's `set_column`/`apply_width_mode` are never called), item roles `_SUBLINE_ROLE` etc.
+  Decisions: kit 52 px rows in both modes (was 48/44); action order autofill, view, create, kebab; search box 180-320 px (fixed 320 pushed the page minimum to 1140 px, above the COMPACT switch at 1080); Client column stays narrow at 1024 px because `fit_columns` is unchanged.
+  Tests: `tests/test_ui_lock_tracker.py`, `test_tracker_refresh.py`, `test_tracker_dump_{autofill_button,columns,status}.py` adapted (cell widgets became roles); new `tests/test_ui_tracker_kit.py` (11); responsive, scale, kit, startup, memory pass except the 5 pre-existing `TestSearchGridReuse` PAN setUp failures. Full suite not run.
+  Goldens: `Mockups/built/tracker/tracker_{1366x768,1024x700,1366x768_scale125}.png`, checked for clipping. Human check 25 added (real 125 % screen, narrow Client column).
+- **S-11** (2026-10-11, claude-sonnet-5-5): Audit log rebuilt on the kit in `ui/dialogs/audit_log_dialog.py` (no `setStyleSheet`, no hex; the old hex `_get_action_badge_style` is replaced by `_get_action_badge -> (label, pill_text, tone)`).
+  Built: `DialogFrame(full)` with the "Host aggregator active" Pill, a Workstations `Card` + `DarkListTable` (`workstation_list`, count column from the loaded cache), search `Input` + `ChipBar` (`chip_action`, `chip_staff`, `chip_date` are menus), icon-only `btn_refresh`, soft `btn_export`, a count/range line, `DataGrid` (`table`, action cell is a `ROLE_PILL`; Service/Detail are `compact_hidden` and hide by priority when narrow), and an "Entry #n" `Card` (`entry_pill`, `inspector_box`, `btn_copy_insp`, `btn_filter_client`).
+  Kept: every attribute the lock tests drive. `action_combo`, `cmb_date_preset` (hidden `Select`s) and `actor_input` (in the Staff menu) are still the state; the chips only mirror them. Filter, CSV, self-audit and debounce code are unchanged.
+  Decisions: Refresh is icon-only (old Refresh+Export row overflowed at 1093 px); Export goes icon-only in COMPACT or below 1180 px; Custom range From/To row only shows for that preset.
+  Tests: `tests/test_ui_lock_audit.py` 16 pass (two lines adapted: `btn_refresh.click()`, `workstation_list.rowCount()`); new `tests/test_ui_audit_screen.py` (23); startup/memory pass except the 5 pre-existing `TestSearchGridReuse` PAN setUp failures. `test_audit_log_v2::test_client_name_resolution_and_token_export` fails in `sera_db/clients.py` (PAN pk), same cause. Full suite not run.
+  Goldens: `Mockups/built/audit/audit_log_{1366x768,1024x720,1366x768_scale125}.png`, checked for clipping. Human check 26 added (real 125 % screen).
+- **S-12** (2026-10-11, claude-opus-5-5): Sera Sync rebuilt on the kit in `ui/dialogs/sera_sync_dialog.py` (no setStyleSheet, no hex). Feature map first: addendum in `Mockups/04-sera-sync.md` places every control. Built: `DialogFrame(full)`, amber network `Banner`, `StatusStrip` (`sync_pill`, `status_label` "N devices online", this PC, `mode_pill`), `Segmented` `tabs` + `tab_stack` (each tab its own scroll area), Devices (`table` = `DarkListTable`, status pill, all facts in the row tooltip, `devices_empty` EmptyState + `btn_empty_add_ip`, info banner, **Scan again** = `btn_refresh`), Office members (Banner, table with pills, **Add workstation** the one primary, off states with reasons), Sync status (three Cards; parked warning is a Banner), Live activity Card with `log_list` = `LogView(max_lines=400)` coloured by `_activity_tone`.
+  User answer (Q1): kit has no Tabs / device card → Segmented + one row per device in DarkListTable (no kit change).
+  Refresh gate is now `_panel_on(group)` (visible, or visible to its tab page) so Members / Sync status refresh while another tab shows; office mode opens on Sync status. Not built (no such control today): Sync selected / all, Inv-Frames switch, tick, ahead / behind (recorded).
+  Tests: `tests/test_ui_lock_sync.py` adapted (labels "Normal" / "N devices online" / "Scan again", LogView lines and tones, tabs in the office-mode visibility test); new `tests/test_ui_sync_screen.py` (9). All `test_sync_*_ui.py` unchanged and green. Startup/memory/icons pass except the 5 known `TestSearchGridReuse` PAN failures; `test_sync_rejoin` ('EPFO' services fixture) and `test_sync_hotfix::test_sync_metrics_counts_clients` (PAN pk) fail in DB fixtures, not the dialog.
+  Goldens: `Mockups/built/sync/sera_sync_{devices,members,status,legacy_empty}_{1366x768,1024x700,1366x768_scale125}.png` (scratch script, fictional office). No sideways scroll; at 125 % the Devices tab scrolls a little (human check 27).
+- **S-13** (2026-10-11, claude-sonnet-5-5): Small dialogs on the kit, no `setStyleSheet`, no hex: CSV import + summary, Change master password, Office recovery, Rejoin office + Salvage, First run (3 pages, one `DialogFrame` each) + join request, Force update, Startup loading. Shadow start, Add client, Admin PIN needed no change (already kit / no layout of their own).
+  Kept: every attribute and signal the older tests drive; password fields keep `Input.Password` masking and their save/focus keys. Errors and status lines are kit `Banner`s (`set_text` / `set_tone`).
+  Progress (user answer Q2 = A): one global `QProgressBar` rule in `ui/utils/theme.py` from tokens; dialogs use a plain `QProgressBar`. Also styles the SDIS loading bar.
+  Behaviour change: Force update "Exit application" now asks first, like closing the window (mockup); Esc is still swallowed. Fixed sizes became minimums; first-run "Pair & Join" is "Pair and join" (the `&` made a mnemonic).
+  Tests: new `tests/test_ui_dialogs_s13.py` (16 pass); office_recovery, sync_office_ui, shadow_start_ui, lock_manage, kit, icons, scale pass. Known failures only: 5 `TestSearchGridReuse`, `test_sync_rejoin` EPFO fixture, `test_sync_hotfix` metrics, kit elision order leaks (pass alone).
+  Goldens: `Mockups/built/dialogs/<name>.png` and `<name>_scale1.25.png` (21 views; every dialog is at most 740x640 so fits 1024x700; scratch script). Human checks 28-29.
+- **S-14** (2026-10-11, claude-haiku-5-5): Remaining dialogs on the kit, no `setStyleSheet` or hex in them: SCA diagnostics, LTT rules, McL mapping, payload inspector, add client from capture, add-workstation pairing window (in `sera_sync_dialog.py`), add/remove PC by IP prompts, ForceUpdate exit and error prompts.
+  New `show_message` / `ask_confirm` in `kit.py` (DialogFrame in a QDialog, no new widget class); `KitList` and `KitFieldVal` rules in `_dialog_qss`; `KIT["w_msg"]`. Attribute names kept (lst_forms, editor, btn_save, field_inputs, lbl_status, ...).
+  McL stays a DataGrid, so its delegate and `_populate` are unchanged; mapped colour is `T['text']` (no cyan token). LTT body scrolls; its lists have minimum heights.
+  Still QMessageBox, handed off: rejoin_office_dialog.py; sera_sync_dialog rejoin, shadow, go live, remove member, hand over and become admin; tracker_dump_window.py window-level calls; main.py; other dialogs. STATUS_THEMES and portal-colour hex in tracker_dump_window.py left in place.
+  Tests: new `tests/test_ui_dialogs_s14.py` (9 pass); `test_ui_lock_sync` and `test_sync_hotfix` patched to the new prompts; s13, kit and frames pass.
+  Full suite: 137 failed, 1 skipped; all 137 reproduce on HEAD (more than the S-13 list, so the baseline has drifted). Kit elision tests fail when run after the sync/startup files, on HEAD too (pre-existing order leak; pass alone).
+  Goldens: `Mockups/built/dialogs/{sca_diagnostics,ltt_rules,mcl_mapping,payload_inspector,add_client_from_capture,add_workstation,message_warning,confirm_remove}_{1366x768,1024x700,1366x768_scale1.25}.png`. Decisions: 6 recorded. Human checks 30-31.
+- **S-R** (2026-10-12, claude-opus-5-5): Phase S reviewed. Control check: every `self.x` attribute, connected handler, shortcut, setting key and audit call on `main` is still on this branch for all 21 screen files (only recorded refactors moved: sidebar accordion, tracker `_on_grid_action`, display status as sub-label). README "where every control went" rows ticked; Sync selected / Inv-Frames never existed (S-12). Goldens viewed against `index.html`'s markup (no browser allowed): match, except the fixes below.
+  Fixed: Settings still set a literal hex stylesheet (`_apply_global_style` + palette) → removed (before/after renders of all 12 pages differ only in scrollbar width); Tracker row autofill was solid red → emerald kit primary as the mockup draws it (red = danger); All Clients menu icons and `_portal_short` hex → tokens; office-restore typed confirmation → DialogFrame + Banner + Input + danger Restore.
+  Owner answer (Q3): **every QMessageBox converted now**. New `kit.MessageBox` (information / warning / critical / question with the QMessageBox arguments and StandardButton results, `danger=`, `choose(...)` for custom buttons); ~125 calls in 16 files + main.py (settings close prompt, restore source, pending rejoin, SGT demotion via `choose`). Tests patch `MessageBox` instead of `QMessageBox` (17 files retargeted). `tests/conftest.py` closes a kit prompt nobody answered after 10 s and fails the test (no more offscreen hangs).
+  New `tests/test_ui_overhaul_rules.py` (76): no literal `setStyleSheet`, no hex outside the data palettes / tracker status colours, no QMessageBox in any screen or main.py, MessageBox semantics. Out of scope and untouched: SGT lab, SDIS panels, legacy `settings_dialog.py`.
+  Tests: full suite 3502 pass, 139 fail, 1 skip (S-14 had 137). One was mine (gallery list missed `MessageBox`; fixed, it is not a widget). The rest are pre-existing: DB fixtures with the PAN / company primary key (sync_rejoin 43, sync_golive 22, sync_shadow_start 18, clipboard_assist 18, sync_restore 6, raw_payload 6, undo_redo, ...) and order leaks that pass alone (kit elision, kit_frames slide panel, lock_tracker debounce, selection-bar COMPACT). Startup/memory/icons: only the 5 known `TestSearchGridReuse` PAN failures.
+  For F-1: Settings goldens show the old 6 px scrollbars (now the theme's); the search grid never masks password columns (as on main; Columns ▾ can now show them - owner may want masking there). The 12 destructive confirmations (delete client / column / service / container / record, delete permanently, clear all captures, remove workstation, restore, purge) pass `danger=True`; wording unchanged.
+- **F-1** (2026-10-12, gemini-3.8-flash-high): Rewrote `docs/Sera_UI.md` comprehensively from the kit docstring and tokens (architectural rules, design tokens, component APIs, responsive width modes, display scale 0.80-1.25, screen architectures). Updated `Mockups/README.md` and `Mockups/fleet/BUILD-PLAN.md` statuses to "built". Removed legacy `ui/dialogs/settings_dialog.py` after verifying nothing in the live app opens it; cleaned up unused import in `ui/windows/admin_window.py`, removed legacy snapshot build from `tools/ui_snapshots.py`, and updated `tests/test_ui_overhaul_rules.py`.
+  Tests: `tests/test_ui_overhaul_rules.py` (76 passed), `tests/test_ui_kit.py` (94 passed), `tests/test_ui_tokens.py` (3 passed), `tests/test_ui_lock_manage.py` + `test_ui_manage_clients_kit.py` (60 passed), `test_ui_settings_hub.py` (13 passed), startup and memory tests (14 passed, only the 5 known pre-existing `TestSearchGridReuse` PAN setUp failures).
+  Decision recorded: `settings_dialog.py` removed and cleaned up across codebase.
+  For F-2: The UI overhaul codebase and design system documentation are complete and frozen; proceed to capturing real application screenshots across all converted screens into `Mockups/built/` with fictional data.
+- **F-2** (2026-10-12, claude-haiku-5-5): Screenshots of every screen, fictional data only (clients like Sharma Traders, PANs ABCDE1000F, demo passwords, DEMO-PC names). Regenerated at HEAD: the flat set (`01_`-`04_`, `settings_*`, `dlg_*`) from `tools/ui_snapshots.py`, and `shell/` (search, admin, tracker_dump at 1366x768, 1024x700, 1366x768 @1.25). Added `dlg_display_scale{,_scale1.25}.png`. The harness and scratch wrappers (not committed) set `QT_QPA_PLATFORM=offscreen` and `QT_QPA_FONTDIR`; the harness sets the font dir only for `--size`. S-package subfolder goldens (search/, settings/, dialogs/, detail/, manage/, tracker/, audit/, sync/, kit/) are not re-rendered. Every mockup screen in `index.html` has a golden; by-IP, Map datapoints and Shadow start prompts are not captured (decided: kit MessageBox).
+  Defect, not fixed (capture only): Display scale dialog clips the "Running at 100 %" sub-label at 100 % and 125 %, and elides the combo text at 125 % (check 32).
+  Tests: `tests/test_ui_overhaul_rules.py` 76 pass; no code changed. Pytest exits 1 at temp-folder cleanup (WinError 5 on `pytest-current`), after the tests pass. The harness exits 139 at `os._exit` after writing PNGs (known, harmless).
+  For F-R: check 33 (real 125 % display); decide whether to re-render the subfolder goldens at HEAD.
+- **F-R** (2026-10-12, claude-opus-5-5): Merge-readiness report `Mockups/MERGE-READINESS.md` (W8-R). Verdict: ready after two conflict fixes, which the report spells out
+  (`settings_dialog.py` modify/delete → keep the deletion; `tracker_dump_window.py` one hunk → keep the branch's `_table_item` line and take main's latest-period lines). Merging is the owner's call; nothing was merged.
+  Fixes: main's "Run the ARN fixer automatically" switch (`arn_autofix_enabled`) moved to Settings → General → Start-up (`arn_autofix_check`, kit Switch, default on; lock test + golden updated);
+  the Display scale dialog no longer clips "Running at …" (stacked row, 600 px wide, re-rendered at 100 % / 125 %); `dynamic_form_widgets.py` read-only ID field now uses tokens.
+  Full suite: 3505 pass / 137 fail / 1 skip. The failures are all outside the branch: 132 DB-fixture failures (PK/EPFO seed), 1 SDIS, and 4 UI order leaks that pass alone. Open owner decisions are in report §5
+  (masking of password columns in the grid, `SeraAlert` toast colours, `tools/sgt_overhaul.py` placement).

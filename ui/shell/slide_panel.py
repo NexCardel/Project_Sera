@@ -4,86 +4,79 @@ from PySide6.QtCore import (
     QRect,
     Signal,
     Qt,
-    QSize,
 )
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtGui import QIcon, QPixmap
-try:
-    import qtawesome as qta
-except Exception:
-    qta = None
-from pathlib import Path
+from PySide6.QtGui import QPixmap
 
-BACK_ICON = str(Path(__file__).resolve().parents[2] / "assets" / "icons" / "arrow_back_24dp_E3E3E3_FILL0_wght400_GRAD0_opsz24.svg")
+from ui.components.kit import IconButton
+from ui.utils.responsive import WidthMode, mode_for
+from ui.utils.tokens import KIT, TOKENS
+
+
+def _panel_qss(compact):
+    edge = "none" if compact else f"1px solid {TOKENS['line2']}"
+    return (
+        f"QFrame#SlidePanel {{ background: {TOKENS['panel']}; border: none; border-left: {edge}; }}"
+        f"QFrame#SlidePanelHead {{ background: transparent; border: none;"
+        f" border-bottom: 1px solid {TOKENS['line']}; }}"
+        f"QWidget#SlidePanelBody {{ background: transparent; }}"
+        f"QLabel#SlidePanelTitle {{ color: {TOKENS['text']}; background: transparent; border: none;"
+        f" font-size: {TOKENS['f_xl']}px; font-weight: 700; }}"
+    )
 
 
 class SlidePanel(QFrame):
     opened = Signal()
     closed = Signal()
 
-    def __init__(self, parent=None, width=650):
+    def __init__(self, parent=None, width=KIT["w_panel"]):
         super().__init__(parent)
         self.target_width = width
         self._is_open = False
+        self._compact = None            # None: follow the parent's width until a mode is set
+        self._auto_mode = WidthMode.WIDE
         self.setObjectName("SlidePanel")
-        
+        self.setStyleSheet(_panel_qss(False))
+
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.layout.setSpacing(0)
-        
-        self.header = QWidget()
-        h_layout = QHBoxLayout(self.header)
-        h_layout.setContentsMargins(24, 24, 24, 0)
 
-        self.btn_back = QPushButton()
-        if qta:
-            self.btn_back.setIcon(qta.icon("mdi.arrow-left", color="#FFFFFF"))
-        else:
-            self.btn_back.setIcon(QIcon(BACK_ICON))
-        self.btn_back.setIconSize(QSize(22, 22))
-        self.btn_back.setToolTip("Back")
-        self.btn_back.setCursor(Qt.PointingHandCursor)
-        self.btn_back.setStyleSheet("""
-            QPushButton {
-                background: transparent;
-                border: 1px solid #D8CDB4;
-                border-radius: 6px;
-                padding: 4px 8px;
-            }
-            QPushButton:hover {
-                background-color: #E6DCB8;
-            }
-        """)
+        self.header = QFrame()
+        self.header.setObjectName("SlidePanelHead")
+        h_layout = QHBoxLayout(self.header)
+        h_layout.setContentsMargins(KIT["pad_dlg_h"], KIT["pad_panel_top"], KIT["pad_dlg_h"], KIT["pad_panel_bot"])
+        h_layout.setSpacing(TOKENS["s_3"])
+
+        self.btn_back = IconButton("mdi.arrow-left", "Back", variant="bordered")
         self.btn_back.clicked.connect(self.slide_out)
         h_layout.addWidget(self.btn_back)
 
         self.title_label = QLabel("Panel")
-        self.title_label.setProperty("class", "SlidePanelTitle")
-        
-        self.btn_close = QPushButton("✕")
-        self.btn_close.setFixedSize(30, 30)
-        self.btn_close.setProperty("class", "CloseButton")
+        self.title_label.setObjectName("SlidePanelTitle")
+
+        self.btn_close = IconButton("mdi.close", "Close", variant="bordered")
         self.btn_close.clicked.connect(self.slide_out)
-        
+
         h_layout.addWidget(self.title_label)
         h_layout.addStretch()
         h_layout.addWidget(self.btn_close)
-        
+
         self.layout.addWidget(self.header)
         self.btn_back.hide()
-        
+
         self.container = QWidget()
+        self.container.setObjectName("SlidePanelBody")
         self.container_layout = QVBoxLayout(self.container)
         self.container_layout.setContentsMargins(0, 0, 0, 0)
         self.layout.addWidget(self.container, stretch=1)
-        
+
         # The slide animates a snapshot of the panel (self._proxy), not the panel: repainting a full
         # client profile on every frame cost ~27 ms (7 frames in 220 ms, worst gap 70 ms), a
         # snapshot costs next to nothing. The real panel is parked off-screen meanwhile and put in
@@ -102,14 +95,33 @@ class SlidePanel(QFrame):
     def is_open(self) -> bool:
         return self._is_open
 
+    def is_compact(self) -> bool:
+        if self._compact is not None:
+            return self._compact
+        return self._auto_mode is WidthMode.COMPACT
+
+    def set_compact(self, on: bool):
+        self._compact = bool(on)
+        self._restyle()
+        self.update_position()
+
+    def apply_width_mode(self, mode):
+        self.set_compact(str(getattr(mode, "value", mode)).lower() == "compact")
+
+    def _restyle(self):
+        self.setStyleSheet(_panel_qss(self.is_compact()))
+
     def _calc_panel_width(self, parent_w: int) -> int:
         if parent_w <= 0:
             return self.target_width
-        # On compact/laptop displays (e.g. 1280-1366px or 125%/150% scaling),
-        # allocate ~42-44% of window width (min 380px) so the main content is not squeezed out.
-        responsive_w = int(parent_w * 0.44)
-        clamped_w = max(380, min(self.target_width, responsive_w))
-        return min(clamped_w, parent_w)
+        if self._compact is None:
+            mode = mode_for(parent_w, self._auto_mode)
+            if mode is not self._auto_mode:
+                self._auto_mode = mode
+                self._restyle()
+        if self.is_compact():
+            return parent_w
+        return min(self.target_width, parent_w)
 
     def update_position(self):
         """Update geometry when parent resizes."""
@@ -138,10 +150,10 @@ class SlidePanel(QFrame):
                     if not getattr(w, '_is_persistent_panel', False):
                         w.deleteLater()
             self.container_layout.addWidget(widget)
-            
+
         if persistent:
             widget._is_persistent_panel = True
-        
+
         if title:
             self.title_label.setText(title)
             self.header.show()
@@ -150,7 +162,7 @@ class SlidePanel(QFrame):
             # If no title is provided, assume the widget has its own header
             self.header.hide()
             self.btn_back.hide()
-            
+
     def _end_geometry(self) -> QRect:
         parent_w, parent_h = self.parent().width(), self.parent().height()
         panel_w = self._calc_panel_width(parent_w)

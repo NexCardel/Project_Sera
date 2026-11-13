@@ -1,8 +1,8 @@
 from PySide6.QtWidgets import QHBoxLayout, QLayout, QSizePolicy, QStackedWidget, QWidget, QGraphicsBlurEffect, QGraphicsOpacityEffect
-from PySide6.QtCore import QPropertyAnimation, QEasingCurve, QEvent, Qt
+from PySide6.QtCore import QPropertyAnimation, QEasingCurve, QEvent, Qt, Signal
 
 
-from ui.shell.sidebar import Sidebar
+from ui.shell.sidebar import SIDEBAR_WIDTH, Sidebar
 from ui.services.alert_service import ActionAlertFormatter
 
 
@@ -11,6 +11,9 @@ SIDEBAR_AUTO_EXPAND_ABOVE = 1060     # wider than this again (the gap stops it f
 
 
 class AppShell(QWidget):
+    # True while the sidebar is collapsed: pages show their own sidebar button only then
+    sidebar_collapsed_changed = Signal(bool)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Aman Associates — SERA Workspace")
@@ -95,10 +98,14 @@ class AppShell(QWidget):
             self.expand_sidebar()
 
     def eventFilter(self, watched, event):
-        """Close Client Detail when the area outside the slide panel is clicked."""
+        """Close Client Detail when the area outside the slide panel is clicked.
+
+        Only a press in this window counts: the filter is app-wide, so it also sees presses in
+        other top-level windows (the OS Assist cards over the browser), which must reach them."""
         if (
             self.dismiss_detail_on_outside
             and event.type() == QEvent.MouseButtonPress
+            and self._is_own_window(watched)
             and hasattr(self, "slide_panel")
             and (getattr(self.slide_panel, "is_open", False) or self.slide_panel.isVisible())
         ):
@@ -113,6 +120,13 @@ class AppShell(QWidget):
                 return True
         return super().eventFilter(watched, event)
 
+    def _is_own_window(self, watched) -> bool:
+        """True if `watched` is this window's native window or a widget inside this window."""
+        from PySide6.QtWidgets import QWidget
+        if isinstance(watched, QWidget):
+            return watched.window() is self
+        return watched is not None and watched is self.windowHandle()
+
     def _build_ui(self):
         self.layout = QHBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
@@ -121,7 +135,7 @@ class AppShell(QWidget):
 
         # 1. Sidebar
         self.sidebar = Sidebar()
-        self.sidebar_target_width = 172
+        self.sidebar_target_width = SIDEBAR_WIDTH
         self.sidebar_collapsed = False
         self.sidebar_anim = QPropertyAnimation(self.sidebar, b"maximumWidth", self)
         self.sidebar_anim.setDuration(220)
@@ -140,12 +154,13 @@ class AppShell(QWidget):
         self.slide_panel = SlidePanel(parent=self)
 
         # 4. Sera Alert Notification System
-        from ui.components.toast import SeraAlert
-        self.alert = SeraAlert(self)
+        # the kit's Toast (same API as the old SeraAlert, mockup colours)
+        from ui.components.kit import Toast
+        self.alert = Toast(self)
         self.toast = self.alert  # Backward compatibility alias
 
     def toggle_sidebar(self):
-        """Smoothly toggle sidebar between collapsed (0px) and expanded (172px)."""
+        """Smoothly toggle sidebar between collapsed (0px) and expanded (SIDEBAR_WIDTH)."""
         self._sidebar_user_toggled = True
         if self.sidebar_collapsed:
             self.expand_sidebar()
@@ -160,9 +175,10 @@ class AppShell(QWidget):
         self.sidebar_anim.setEndValue(0)
         self.sidebar_collapsed = True
         self.sidebar_anim.start()
+        self.sidebar_collapsed_changed.emit(True)
 
     def expand_sidebar(self):
-        """Expand sidebar to target width (172px)."""
+        """Expand sidebar to target width (SIDEBAR_WIDTH)."""
         self.sidebar_anim.stop()
         self.sidebar_anim.setStartValue(self.sidebar.width())
         self.sidebar_anim.setEndValue(self.sidebar_target_width)
@@ -172,6 +188,7 @@ class AppShell(QWidget):
                 self.sidebar.setMinimumWidth(self.sidebar_target_width)
         self.sidebar_anim.finished.connect(_on_expand_finished)
         self.sidebar_anim.start()
+        self.sidebar_collapsed_changed.emit(False)
 
     def show_alert(self, message: str, level: str = "success", duration: int = 3000):
         """Displays a non-blocking bottom-left Sera Alert notification."""

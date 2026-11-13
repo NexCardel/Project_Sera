@@ -31,6 +31,9 @@ if ARGS.size:
     # A visible window is clamped to the real screen (a 1536-logical-px screen cannot show 1920 px),
     # and a hidden one never re-lays out. The offscreen platform takes the requested size as it is.
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    # Offscreen Qt does not see the Windows fonts; without this the PNGs fall back to a wide all-caps face.
+    if sys.platform == "win32":
+        os.environ.setdefault("QT_QPA_FONTDIR", os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts"))
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QTimer
@@ -252,6 +255,7 @@ from ui.dialogs.loading_dialog import StartupLoadingDialog
 from ui.dialogs.office_recovery_dialog import OfficeRecoveryDialog
 from ui.dialogs.rejoin_office_dialog import RejoinOfficeDialog
 from ui.dialogs.sera_sync_dialog import SeraSyncDialog
+from ui.dialogs.drs_config_dialog import DRSConfigDialog
 from ui.dialogs.sgt_lab_dialog import SgtLabDialog
 from ui.dialogs.update_dialog import ForceUpdateDialog
 
@@ -267,8 +271,16 @@ build("dlg_startup_loading", lambda: StartupLoadingDialog())
 build("dlg_office_recovery", lambda: OfficeRecoveryDialog(tmp))
 build("dlg_rejoin_office", lambda: RejoinOfficeDialog())
 build("dlg_sera_sync", lambda: SeraSyncDialog(None, db=db, actor="Admin"))
+build("dlg_drs", lambda: DRSConfigDialog(db), (1000, 720))
+build("dlg_drs_narrow", lambda: DRSConfigDialog(db), (640, 720))
 build("dlg_sgt_lab", lambda: SgtLabDialog())
-build("dlg_force_update", lambda: ForceUpdateDialog({"current_version": "2.12.0", "latest_version": "2.13.0", "release_notes": "Demo release notes.", "download_url": ""}, auto_start=False))
+def _force_update():
+    d = ForceUpdateDialog({"current_version": "2.12.0", "latest_version": "2.13.0", "release_notes": "Demo release notes.", "download_url": ""}, auto_start=False)
+    d.mandatory = False     # closing a mandatory one asks "Exit or Stay?" and waits for a click offscreen
+    return d
+
+
+build("dlg_force_update", _force_update)
 
 print("FAILED:", failed)
 shutil.rmtree(tmp, ignore_errors=True)

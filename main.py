@@ -10,6 +10,7 @@ if '--sdis-mine' in sys.argv:
     from core.sdis.mine_process import run
     sys.exit(run(sys.argv))
 import os
+import re
 import socket
 import json
 import queue
@@ -26,6 +27,7 @@ os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.fonts=false")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
 from PySide6.QtWidgets import QApplication, QMessageBox, QDialog, QSizePolicy, QSystemTrayIcon, QMenu
+from ui.components.kit import MessageBox
 from ui.shell.app_shell import AppShell
 from PySide6.QtGui import QFont, QShortcut, QKeySequence, QIcon, QAction
 from PySide6.QtCore import Qt, QObject, Signal, QTimer
@@ -103,6 +105,25 @@ def _setup_sync_log(app_dir: Path) -> None:
         lg = logging.getLogger(name)
         lg.setLevel(logging.INFO)
         lg.addHandler(handler)
+
+def _setup_os_assist_log(app_dir: Path) -> None:
+    """OS Assist fill outcomes to ``logs/os_assist.log`` (1 MB x 3): which box (user / pass), the
+    outcome, the method (SetValue or keys), why SetValue was not used, and how long it took.
+    core/os_assist/fill.py never logs a value: reasons carry lengths only."""
+    import logging
+    from logging.handlers import RotatingFileHandler
+    try:
+        (app_dir / "logs").mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(app_dir / "logs" / "os_assist.log", maxBytes=1_000_000,
+                                      backupCount=3, encoding="utf-8")
+    except OSError as exc:
+        print(f"[OS Assist] could not open logs/os_assist.log: {exc}")
+        return
+    handler.setFormatter(logging.Formatter("%(asctime)s.%(msecs)03d %(name)s: %(message)s", "%Y-%m-%d %H:%M:%S"))
+    lg = logging.getLogger("os_assist")
+    lg.setLevel(logging.INFO)
+    lg.addHandler(handler)
+
 
 def _copy_if_changed(src: Path, dst: Path) -> None:
     """copy2 keeps the modified time, so a same-size, same-time copy is already up to date -
@@ -211,6 +232,10 @@ class SeraApp:
         # that arrive before the handlers are connected are held (see WSBridge.mark_ready).
         from ui import ws_bridge as _ws_bridge_module
         self.bridge = WSBridge(self.app)
+        # SCK candidates the card filled, held in memory only: service_id -> {password, client_id,
+        # portal}. The desktop saves one when the watcher sees the login succeed, even if the page
+        # has navigated and the card is gone. Never written to a setting, log or audit line.
+        self._sck_candidates = {}
         self.app.aboutToQuit.connect(self.bridge.stop)
         self.bridge.start(chrome_manifest_path=self._permanent_extension_dir / "manifest.json")
         _ws_bridge_module.set_active_bridge(self.bridge)
@@ -299,7 +324,7 @@ class SeraApp:
             import sync_snapshot
             if sync_snapshot.has_pending_join(self.app_dir):
                 from PySide6.QtWidgets import QMessageBox
-                reply = QMessageBox.question(
+                reply = MessageBox.question(
                     None,
                     "Aman Associates — Resume Office Join",
                     "An office join was in progress but interrupted before the database snapshot could be downloaded.\n\n"
@@ -311,7 +336,7 @@ class SeraApp:
                     try:
                         sync_snapshot.resume_join_snapshot(self.app_dir)
                     except Exception as exc:
-                        QMessageBox.critical(
+                        MessageBox.critical(
                             None,
                             "Office Join Failed",
                             f"Could not complete office join: {exc}\n\n"
@@ -388,12 +413,15 @@ class SeraApp:
             # Why a fill did not happen (e.g. an Income Tax password SCC has not verified yet)
             self.clipboard_watcher.sca_notice.connect(
                 lambda text, level: getattr(self, "shell", None) and self.shell.show_alert(text, level=level, duration=6000))
+            # UID-page notices happen while the browser is in front: also shown on top of it
+            self.clipboard_watcher.source_notice.connect(self._show_sca_popup)
             sca_active = (self.db.get_setting("sca_enabled", "1") == "1")
             self.clipboard_watcher.set_enabled(sca_active)
+            self.clipboard_watcher.start_source_watch()
             memory_mark("start-up: vault unlocked")
         except Exception as e:
             loading_dlg.close()
-            QMessageBox.critical(None, "Database Error", str(e))
+            MessageBox.critical(None, "Database Error", str(e))
             sys.exit(1)
 
         loading_dlg.set_status("Verifying staff identity & pre-loading workspace...")
@@ -634,6 +662,19 @@ class SeraApp:
         self.bridge.scc_row_worked_received.connect(self._handle_scc_row_worked)
         self.bridge.scc_card_closed_received.connect(self._handle_scc_card_closed)
         self.bridge.scc_row_none_received.connect(self._handle_scc_row_none)
+        self.bridge.sck_save_password_received.connect(self._handle_sck_save_password)
+        self.bridge.sck_widget_closed_received.connect(self._handle_sck_widget_closed)
+        self.bridge.sck_edit_requested.connect(self._handle_sck_edit_requested)
+        from ui.os_assist import dock_card as _os_dock_card     # ✎ on OS Assist cards (D3)
+        _os_dock_card.set_sck_edit_handler(self._handle_sck_edit_requested)
+        from core.os_assist import launcher as _os_launcher     # OS SMTI/MECP copies clear after this
+        _os_launcher.set_clear_seconds_provider(lambda: self.db.get_setting("clipboard_clear_seconds", "30"))
+        import automation as _automation                        # SCA engine switch (blueprint §4.7)
+        _automation.add_engine_listener(self._on_assist_engine_changed)
+        if _automation.assist_engine() == "os":                 # first OS card: no 0.1-0.3 s font search
+            QTimer.singleShot(8000, _os_dock_card.warm_up)
+        self.bridge.sck_candidate_received.connect(self._handle_sck_candidate)
+        self.bridge.sck_outcome_received.connect(self._handle_sck_outcome)
         self.bridge.extension_settings_updated_received.connect(self._handle_extension_settings_updated)
         self.bridge.settings_provider = self._get_extension_settings_payload
         self.bridge.sca_password_requested.connect(self._handle_sca_password_request)
@@ -784,8 +825,22 @@ class SeraApp:
             if to_set:
                 self.db.set_settings_bulk(to_set)
                 print(f"[main] Persisted updated extension settings from popup: {to_set}")
+                from automation import assist_engine
+                if assist_engine() == "os":
+                    self._sync_extension_settings()      # the popup must not turn the extension's SCA back on
         except Exception as e:
             print(f"[main] Error handling extension_settings_updated: {e}")
+
+    def _on_assist_engine_changed(self, engine: str):
+        """Settings -> Assist engine switched (no restart): the extension's SCA goes off in OS mode and
+        gets the user's setting back on Extension; an OS SCA arm is dropped when leaving OS."""
+        if engine != "os":
+            from core.os_assist import sca_engine
+            sca_engine.disarm_all("ENGINE")
+        else:
+            from ui.os_assist import dock_card
+            QTimer.singleShot(1000, dock_card.warm_up)
+        self._sync_extension_settings()
 
     def _get_extension_settings_payload(self) -> dict:
         """Packages current services and settings for the extension."""
@@ -801,12 +856,12 @@ class SeraApp:
                 clip_secs = max(5, min(int(self.db.get_setting("clipboard_clear_seconds", "30")), 300))
             except (ValueError, TypeError):
                 clip_secs = 30
-            from automation import allowed_portal_domains
+            from automation import allowed_portal_domains, assist_engine
             return {
                 "status": "ok",
                 "allowed_domains": allowed_portal_domains(svcs),
                 "clipboard_clear_seconds": clip_secs,
-                "sca_enabled": sca_en,
+                "sca_enabled": sca_en and assist_engine() != "os",   # OS engine: the desktop does SCA
                 "sca_mode": sca_mode,
                 "sca_max_uses": sca_max,
                 "allowed_services": svcs,
@@ -835,8 +890,18 @@ class SeraApp:
         """SCA v2: the extension asks for one portal password after the client's id was entered
         on that portal. clipboard_watch decides; the answer goes back only on the socket that
         asked (WSBridge.reply), never to every connected browser."""
-        reply = self.clipboard_watcher.handle_password_request(msg)
+        reply = self.clipboard_watcher.handle_extension_password_request(msg)
         self.bridge.reply(msg, reply)
+
+    def _show_sca_popup(self, text: str, level: str = "warning") -> None:
+        """ui/components/sca_notice_popup: an SCA notice above the browser (never takes focus)."""
+        try:
+            if getattr(self, "_sca_popup", None) is None:
+                from ui.components.sca_notice_popup import ScaNoticePopup
+                self._sca_popup = ScaNoticePopup()
+            self._sca_popup.show_notice(text, level)
+        except Exception as e:
+            print(f"[SCA] popup error: {e}")
 
     def _on_sca_armed(self, client_id: int, client_token: str, services: list):
         try:
@@ -1261,28 +1326,32 @@ class SeraApp:
     def _ask_sgt_demotion(self, info: dict):
         """A page shows a lower status than a filing that has an ARN. Lowering it is risky, so the user decides;
         the default is to keep the status that is recorded."""
-        from PySide6.QtWidgets import QMessageBox
-        box = QMessageBox(getattr(self, "shell", None))
-        box.setIcon(QMessageBox.Warning)
-        box.setWindowTitle("Lower this filing's status?")
         what = " ".join(x for x in (info.get("form"), info.get("period")) if x)
-        box.setText(f"{info.get('client') or 'This client'} - {what}\n\n"
-                    f"This filing has an acknowledgement ({info.get('arn')}). The portal page now shows a LOWER "
-                    f"status than the one recorded.")
-        box.setInformativeText(f"Recorded: {info.get('from')}\nThe page now shows: {info.get('to')}\n"
-                               f"\"{info.get('evidence') or ''}\"\n\n"
-                               f"Keep the recorded status unless you are sure the page is right.")
-        keep = box.addButton("Keep current status", QMessageBox.RejectRole)
-        lower = box.addButton("Lower the status", QMessageBox.AcceptRole)
-        box.setDefaultButton(keep)
-        box.exec()
+        text = (f"{info.get('client') or 'This client'} - {what}\n\n"
+                f"This filing has an acknowledgement ({info.get('arn')}). The portal page now shows a LOWER "
+                f"status than the one recorded.\n\n"
+                f"Recorded: {info.get('from')}\nThe page now shows: {info.get('to')}\n"
+                f"\"{info.get('evidence') or ''}\"\n\n"
+                f"Keep the recorded status unless you are sure the page is right.")
+        clicked = MessageBox.choose(getattr(self, "shell", None), "Lower this filing's status?", text,
+                                    [("Lower the status", "secondary"), ("Keep current status", "primary")],
+                                    level="warning", escape=1)
         router = getattr(getattr(self, "vsdc_worker", None), "router", None)
         if router is not None:
-            router.answer_demotion(info.get("token"), box.clickedButton() is lower)
+            router.answer_demotion(info.get("token"), clicked == 0)
 
     def _make_scc_handlers(self):
-        """SCC-U's handlers (once, when its host is created)."""
-        return self._ensure_scc()
+        """SCC-U's handlers (once, when its host is created). SCK's watcher shares the same host and
+        runs even when Detect login automatically is Off; SCC-U's own attempt/outcome readers are
+        only registered when that switch is On."""
+        handlers = []
+        try:
+            if str(self.db.get_setting("scc_detect_mode", "off")).strip().lower() == "on":
+                handlers.extend(self._ensure_scc())
+        except Exception:
+            pass
+        handlers.append(self._ensure_sck())
+        return handlers
 
     def _open_scc_manual(self, pan: str, client_id, on_error=None) -> bool:
         """Client Detail's MECP on an unverified Income Tax client (core/scc/manual.py): the card, with
@@ -1341,7 +1410,8 @@ class SeraApp:
         self._scc_card = SccCard(
             self.db,
             open_card=lambda service, pan, rows, title, client_id, attempt_id, **opts:
-                automation.send_scc_card(service, pan, rows, title, client_id, attempt_id, **opts),
+                automation.send_scc_card(service, pan, rows, title, client_id, attempt_id,
+                                         hwnd=self._scc_card.attempt_hwnd(attempt_id), **opts),
             close_card=automation.close_scc_card,
             suppress=clipboard_watch.suppress_client, release=clipboard_watch.release_client,
             on_closed=lambda att: opener.close(att.hwnd),
@@ -1360,6 +1430,11 @@ class SeraApp:
         watcher = getattr(self, "clipboard_watcher", None)
         if watcher is not None:
             watcher.scc_ledger = self._scc_card.note_clipboard
+        from ui.os_assist import mecp_card as _os_mecp_card
+        handlers = {"scc_row_worked": self._handle_scc_row_worked, "scc_row_none": self._handle_scc_row_none,
+                    "scc_card_closed": self._handle_scc_card_closed}
+        _os_mecp_card.set_scc_hooks(send=lambda msg: handlers[msg.get("type")](msg),
+                                    ledger=self._scc_card.note_clipboard)
         self._scc_parts = [opener, self._scc_outcome]
         return self._scc_parts
 
@@ -1390,7 +1465,14 @@ class SeraApp:
                         "verified": "Marked verified"}.get(outcome, "Permanent password saved")
                 self.tray_icon.showMessage("Password Verified via SCC", f"{what} for {client_name} ({pan}).",
                                            QSystemTrayIcon.Information, 5000)
+        except Exception as e:
+            print(f"[main._after_scc_save toast error] {type(e).__name__}")
+        self._refresh_client_views(client_id)
 
+    def _refresh_client_views(self, client_id: int):
+        """Client Detail, the main grid, search results and the extension settings, after a vault
+        write from either SCC or SCK. Safe to call from the Qt thread only."""
+        try:
             if hasattr(self, "client_detail_win") and self.client_detail_win and self.client_detail_win.isVisible():
                 cur_c = getattr(self.client_detail_win, "client", None)
                 if cur_c and cur_c.get("id") == client_id:
@@ -1402,7 +1484,297 @@ class SeraApp:
                 self.search_win._on_search_changed()
             self._sync_extension_settings()
         except Exception as e:
-            print(f"[main._after_scc_save error] {type(e).__name__}")
+            print(f"[main._refresh_client_views error] {type(e).__name__}")
+
+    # ── SCK: Sera Credential Keeper ──────────────────────────────────────────────
+
+    def _sck_enabled(self) -> bool:
+        """SCK has its own switch (sck_enabled, on unless turned off) and does not need SCC-U's
+        Detect login automatically."""
+        try:
+            return str(self.db.get_setting("sck_enabled", "1")).strip().lower() in ("1", "true", "on", "yes")
+        except Exception:
+            return False
+
+    def _ensure_sck(self):
+        """Builds SCK's one watcher (core/rotation/watcher.py): any registered service, any client,
+        including verified ones. Its host is SCC-U's, so the watcher works when SCC-U's own rules
+        are off."""
+        existing = getattr(self, "_sck_watcher", None)
+        if existing is not None:
+            return existing
+        from core.rotation import SckWatcher
+        watcher = SckWatcher(
+            services=self.db.get_services,
+            resolve_client=self._sck_resolve_client,
+            on_failure=self._sck_show,
+            on_clear=self._sck_hide,
+            on_outcome=self._sck_outcome,
+        )
+        self._sck_watcher = watcher
+        return watcher
+
+    def _sck_show(self, failure):
+        """SCC-U's thread: a login was refused. Ask every connected browser to show the
+        new-password card for this service. The card is the only SCK widget: it fills through the
+        extension, and the desktop holds the candidate until the outcome is known."""
+        import automation
+        try:
+            automation.show_sck_widget(
+                dict(getattr(failure, "service", {}) or {}),
+                getattr(failure, "client_id", None),
+                getattr(failure, "client_name", "") or "",
+                getattr(failure, "portal", "") or "")
+        except Exception as exc:
+            print(f"[main._sck_show error] {type(exc).__name__}")
+
+    def _sck_hide(self, failure):
+        """SCC-U's thread: the service's dashboard page was reached. The watcher also reports
+        "worked" as an outcome; the card closes itself and the desktop saves the candidate."""
+        return
+
+    def _sck_outcome(self, service_id, kind):
+        """SCC-U's thread: one page outcome (worked / wrong_password / locked) for this service.
+        Marshalled to the Qt thread by the bridge signal."""
+        try:
+            self.bridge.sck_outcome_received.emit(service_id, str(kind or ""))
+        except Exception:
+            pass
+
+    # ── SCK card (Qt thread) ────────────────────────────────────────────────────
+
+    def _handle_sck_outcome(self, service_id, kind):
+        """Qt thread: show one page outcome on the card, and act on it. "worked" saves the
+        candidate the card filled; "locked" forgets it."""
+        kind = str(kind or "")
+        if not kind:
+            return
+        import automation
+        try:
+            automation.sck_outcome(service_id, kind)
+        except Exception:
+            pass
+        if kind == "worked":
+            self._save_sck_candidate(service_id)
+        elif kind == "locked":
+            self._sck_clear_candidate(service_id)
+
+    def _handle_sck_candidate(self, msg: dict):
+        """Qt thread: the card filled a password. Keep it in memory only, so a success that
+        arrives after the page has navigated can still be saved."""
+        service_id = msg.get("service_id")
+        password = msg.get("password") or ""
+        if service_id is None or not password:
+            return
+        self._sck_candidates[service_id] = {
+            "password": password,
+            "client_id": msg.get("client_id"),
+            "portal": str(msg.get("portal") or ""),
+        }
+        watcher = getattr(self, "_sck_watcher", None)
+        if watcher is not None:
+            try:
+                watcher.reset_outcome_throttle(service_id)
+            except Exception:
+                pass
+
+    def _sck_clear_candidate(self, service_id):
+        """Qt thread: forget the in-memory candidate for this service."""
+        try:
+            self._sck_candidates.pop(service_id, None)
+        except Exception:
+            pass
+
+    def _save_sck_candidate(self, service_id):
+        """Qt thread: the login succeeded. Save the candidate the card filled, if there is one.
+        The password is never logged; the save itself records metadata only."""
+        held = self._sck_candidates.pop(service_id, None)
+        if not held:
+            return
+        self._save_sck_password(
+            service_id=service_id,
+            password=held.get("password") or "",
+            client_id=held.get("client_id"),
+            portal=str(held.get("portal") or ""))
+
+    def _save_sck_password(self, service_id, password, client_id, portal):
+        """Qt thread: write one SCK password to the vault, tell the card, and refresh the views.
+        The password is never logged, printed or stored anywhere but the vault."""
+        import automation
+        from core.rotation import save_verified_for_rotation
+
+        password = str(password or "")
+        portal = str(portal or "").strip()
+        service = {}
+        try:
+            service = self.db.get_service(service_id) or {}
+        except Exception:
+            service = {}
+        portal = portal or str(service.get("name") or "")
+
+        if not client_id:
+            automation.sck_save_result(service_id, False,
+                                       "Sera could not tell which client this login belongs to. "
+                                       "Copy the client's ID first, then try again.")
+            return
+
+        try:
+            result = save_verified_for_rotation(
+                db=self.db, password=password, pan="", client_id=int(client_id),
+                portal=portal, actor=getattr(self, "actor", "Staff"),
+                service_id=service_id, method="SCK-Widget")
+        except Exception as exc:
+            print(f"[main._save_sck_password error] {type(exc).__name__}")
+            automation.sck_save_result(service_id, False, "The password could not be saved. Try again.")
+            return
+        finally:
+            password = ""       # noqa: F841 - drop our copy as soon as the write is done
+
+        if result is None:
+            automation.sck_save_result(service_id, False,
+                                       "This service has no password column in the vault. "
+                                       "Set one in Services.")
+            return
+
+        what = {"saved": "New password saved", "replaced": "Saved password replaced",
+                "verified": "Password already saved"}.get(result.outcome, "Password saved")
+        automation.sck_save_result(service_id, True, what)
+        automation.hide_sck_widget(service_id)
+        watcher = getattr(self, "_sck_watcher", None)
+        if watcher is not None:
+            watcher.mark_resolved(service_id, result.client_id)
+        self._after_sck_save(result)
+
+    def _sck_resolve_client(self, service: dict, obs):
+        """(client_id | None, display name) for a failed login: the PAN/GSTIN SGT read on the page,
+        then the username typed on the login page through the service's user-ID column, then the
+        client SCA is working for on this portal. Read-only."""
+        from core.rotation.watcher import profile_value
+        from core.scc import db_client_names
+
+        pan = profile_value(obs, "pan")
+        gstin = profile_value(obs, "gstin")
+        client = None
+        if pan:
+            client = self.db.get_client_by_pan(pan)
+        if client is None and len(gstin) == 15:
+            client = self.db.get_client_by_pan(gstin[2:12])    # the PAN inside the GSTIN
+
+        if client is None:
+            uid = profile_value(obs, "username") or profile_value(obs, "userid")
+            col = (service or {}).get("userid_column_id")
+            if uid and col:
+                try:
+                    ids = self.db.find_client_ids_by_column_value(col, uid)
+                except Exception:
+                    ids = []
+                if len(ids) == 1:
+                    client = self.db.get_client(ids[0])
+
+        if client is None:
+            watcher = getattr(self, "clipboard_watcher", None)
+            if watcher is not None:
+                try:
+                    cid = watcher.client_for_portal(service, str(getattr(obs, "portal", "") or ""))
+                except Exception:
+                    cid = None
+                if cid:
+                    client = self.db.get_client(cid)
+
+        if not client or client.get("id") is None:
+            return None, ""
+        cid = int(client["id"])
+        try:
+            names = db_client_names(self.db)(cid)
+        except Exception:
+            names = []
+        return cid, (names[0] if names else "")
+
+    def _handle_sck_save_password(self, msg: dict):
+        """SCK: the new password staff typed into the card. Runs on the Qt thread and never writes
+        the message anywhere - no print, no audit detail, no log."""
+        service_id = msg.get("service_id")
+        password = msg.get("password") or ""
+        client_id = msg.get("client_id")
+        if not client_id:
+            arm_id = str(msg.get("arm_id") or "")
+            watcher = getattr(self, "clipboard_watcher", None)
+            if watcher is not None and arm_id:
+                try:
+                    client_id = watcher.client_for_arm(arm_id)
+                except Exception:
+                    client_id = None
+        self._sck_clear_candidate(service_id)
+        self._save_sck_password(service_id, password, client_id, msg.get("portal") or "")
+
+    def _after_sck_save(self, result):
+        """Qt thread: toast + the same refresh SCC's save does. `result` is a RotationSave."""
+        try:
+            if hasattr(self, "tray_icon") and self.tray_icon and self.tray_icon.isVisible():
+                what = {"saved": "New password saved", "replaced": "Saved password replaced",
+                        "verified": "Password already saved"}.get(result.outcome, "Password saved")
+                self.tray_icon.showMessage("Sera Credential Keeper",
+                                           f"{what} for {result.client_name or 'the client'} "
+                                           f"({result.portal}).",
+                                           QSystemTrayIcon.Information, 5000)
+        except Exception as e:
+            print(f"[main._after_sck_save toast error] {type(e).__name__}")
+        self._refresh_client_views(result.client_id)
+
+    def _handle_sck_widget_closed(self, msg: dict):
+        """The browser card closed itself: staff pressed x ("dismissed") or the service's dashboard
+        page was reached ("dashboard"). On the dashboard the login worked, so save the candidate
+        the card filled (if the watcher did not already save it). Either way the next failure on
+        that service may fire."""
+        import automation
+        service_id = msg.get("service_id")
+        if str(msg.get("reason") or "") == "dashboard":
+            self._save_sck_candidate(service_id)
+        self._sck_clear_candidate(service_id)
+        automation.hide_sck_widget(service_id)
+        watcher = getattr(self, "_sck_watcher", None)
+        if watcher is not None:
+            watcher.mark_resolved(service_id)
+
+    def _handle_sck_edit_requested(self, msg: dict):
+        """Staff pressed the ✎ edit button on SMTI / MECP / SCA widget: open the SCK card
+        for this service and client so staff can enter a new password without needing a failed login."""
+        import automation
+        from core.scc import db_client_names
+
+        service_id = msg.get("service_id")
+        client_id = msg.get("client_id")
+        portal = str(msg.get("portal") or "").strip()
+        service = {}
+        try:
+            service = self.db.get_service(service_id) or {}
+        except Exception:
+            service = {}
+        portal = portal or str(service.get("name") or "")
+
+        if not client_id:
+            watcher = getattr(self, "clipboard_watcher", None)
+            if watcher is not None:
+                try:
+                    client_id = watcher.client_for_portal(service, portal)
+                except Exception:
+                    client_id = None
+
+        client_name = ""
+        if client_id:
+            try:
+                names = db_client_names(self.db)(client_id)
+                client_name = names[0] if names else ""
+            except Exception:
+                client_name = ""
+            if not client_name:
+                try:
+                    c = self.db.get_client(client_id) or {}
+                    client_name = c.get("business_name") or c.get("name") or ""
+                except Exception:
+                    client_name = ""
+
+        automation.show_sck_widget(service, client_id, client_name, portal)
 
     def _run_pending_rejoin(self) -> None:
         """P2-8: finish or run a requested "Rejoin office", then offer the salvage import.
@@ -1515,7 +1887,7 @@ class SeraApp:
         import shutil
         import sqlcipher3.dbapi2 as sqlite3
 
-        reply = QMessageBox.critical(
+        reply = MessageBox.critical(
             None,
             "Aman Associates — Office Database Missing",
             f"The office database was not found at:\n{db_path}\n\n"
@@ -1564,23 +1936,23 @@ class SeraApp:
                             ts = datetime.now().strftime("%Y%m%d-%H%M%S")
                             dst_sidecar.rename(dst_sidecar.with_name(f"{dst_sidecar.name}.bak-{ts}"))
 
-                    QMessageBox.information(
+                    MessageBox.information(
                         None, "Database Restored",
                         f"Database successfully restored from:\n{backup_file}\n\nStarting Sera...",
                     )
                     return
                 except Exception as e:
-                    QMessageBox.critical(
+                    MessageBox.critical(
                         None, "Restore Failed",
                         f"The selected backup could not be opened with this office key:\n\n{e}",
                     )
             else:
-                QMessageBox.information(
+                MessageBox.information(
                     None, "Restore Cancelled",
                     "No database backup was selected. Sera cannot start without the office database.",
                 )
         else:
-            QMessageBox.information(
+            MessageBox.information(
                 None, "Startup Cancelled",
                 "Database restore was cancelled. Sera cannot start without the office database.",
             )
@@ -1651,7 +2023,7 @@ class SeraApp:
             office_info = sera_keys.load_office(app_dir)
         except sera_keys.KeyFileInvalid as e:
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.critical(
+            MessageBox.critical(
                 None, "Aman Associates — Office Configuration Error",
                 f"The office configuration file is invalid or corrupted:\n\n{e}\n\n"
                 "Please restore keys/office.json or contact your office administrator."
@@ -1660,7 +2032,7 @@ class SeraApp:
 
         if office_info is None:
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.critical(
+            MessageBox.critical(
                 None, "Aman Associates — Office Configuration Error",
                 "The office configuration file could not be loaded.\n\n"
                 "Please contact your office administrator."
@@ -1678,7 +2050,7 @@ class SeraApp:
         computed_key_id = sera_keys.key_id(dek)
         if not hmac.compare_digest(computed_key_id, office_info.key_id):
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.critical(
+            MessageBox.critical(
                 None, "Aman Associates — Office Key Mismatch",
                 "The loaded office data key does not match the office configuration in office.json.\n\n"
                 "Startup aborted to prevent database damage."
@@ -1783,6 +2155,8 @@ class SeraApp:
         self.tracker_dump_win = TrackerDumpWindow(self.db, defer_first_load=True)   # hidden page: fill when shown
         memory_mark("  window: tracker dump")
         self.shell.add_page(self.search_win)          # Index 0
+        self.shell.slide_panel.opened.connect(lambda: self.search_win.set_panel_open(True))
+        self.shell.slide_panel.closed.connect(lambda: self.search_win.set_panel_open(False))
         self.shell.add_page(self.admin_win)           # Index 1
         self.shell.add_page(self.tracker_dump_win)    # Index 2
         
@@ -1799,8 +2173,20 @@ class SeraApp:
         self.search_win.toast_requested.connect(self.shell.show_alert)
         self.search_win.action_alert_requested.connect(self.shell.show_action_alert)
         self.search_win.toggle_sidebar_requested.connect(self.shell.toggle_sidebar)
+        # one sidebar button at a time: the page's own appears only while the sidebar is collapsed
+        self.shell.sidebar_collapsed_changed.connect(self.search_win.set_sidebar_collapsed)
+        self.search_win.set_sidebar_collapsed(self.shell.sidebar_collapsed)
+        for _page in (self.admin_win, self.tracker_dump_win):
+            _page.toggle_sidebar_requested.connect(self.shell.toggle_sidebar)
+            self.shell.sidebar_collapsed_changed.connect(_page.set_sidebar_collapsed)
+            _page.set_sidebar_collapsed(self.shell.sidebar_collapsed)
         
         self.detail_win.back_requested.connect(self._show_search_from_detail)
+        # the panel's Edit and ⋯ menu run the same handlers as the All Clients grid
+        self.detail_win.edit_requested.connect(self._open_client_editor)
+        self.detail_win.manage_services_requested.connect(self._manage_client_services_from_search)
+        self.detail_win.archive_requested.connect(self._archive_client_from_search)
+        self.detail_win.delete_requested.connect(self._delete_client_from_search)
         self.detail_win.toast_requested.connect(self.shell.show_toast)
         self.detail_win.action_alert_requested.connect(self.shell.show_action_alert)
         self.tracker_dump_win.service_action_requested.connect(self.detail_win.run_service_action)
@@ -1819,7 +2205,6 @@ class SeraApp:
         sidebar.action_tracker_dump.connect(self._show_tracker_dump)
         sidebar.action_open_drs.connect(self._show_drs_dialog)
         sidebar.action_audit_log.connect(self.admin_win._on_view_audit_log)
-        sidebar.action_manage_staff.connect(self.admin_win._on_open_sera_sync)
         sidebar.action_open_sera_sync.connect(self.admin_win._on_open_sera_sync)
         sidebar.action_trigger_sync.connect(self.search_win._on_manual_refresh)
 
@@ -1891,10 +2276,13 @@ class SeraApp:
             vsdc, vsdc_x, vsdc247 = read_engine_flags(self.db.get_setting)
             sgt = read_sgt_mode(self.db.get_setting)
             vsdc247_verify = read_verifier_enabled(self.db.get_setting)
+            # SCC-U's host is also SCK's host: it is attached when either SCC-U's own rules are on
+            # or SCK is on (SCK is on by default and independent of Detect login automatically).
+            scc_or_sck = (read_scc_detect_mode(self.db.get_setting) == "on" or self._sck_enabled())
             worker.router.apply_engine_settings(vsdc, vsdc_x, vsdc247, sgt=sgt,
                                                 sgt_record=read_sgt_record_pages(self.db.get_setting),
                                                 sgt_i=False,   # SGT-I unhooked: never attached, whatever the sgt_i_mode setting says
-                                                scc_detect=read_scc_detect_mode(self.db.get_setting) == "on",
+                                                scc_detect=scc_or_sck,
                                                 sdis_record=read_sdis_record(self.db.get_setting),
                                                 vsdc247_verify=vsdc247_verify)
             if (vsdc or vsdc_x or vsdc247 or vsdc247_verify or sgt != "off") and not worker.isRunning():
@@ -1928,6 +2316,7 @@ class SeraApp:
                 sca_active = (self.db.get_setting("sca_enabled", "1") == "1")
                 self.clipboard_watcher.set_enabled(sca_active)
                 self.clipboard_watcher.refresh_index()
+                self.clipboard_watcher.refresh_sources()
         except Exception:
             pass
 
@@ -2307,7 +2696,7 @@ class SeraApp:
         if not client:
             return
         identity = self.admin_win._get_identity_label(client)
-        confirm = QMessageBox.question(
+        confirm = MessageBox.question(
             self.shell, "Archive client",
             f"Archive {identity}? It will be hidden from Search until restored.",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No
@@ -2325,6 +2714,7 @@ class SeraApp:
             self.shell.sidebar.set_admin_mode(True)
             self.shell.sidebar.set_active_navigation(self.shell.sidebar.btn_manage_clients)
             self.search_win.set_admin_mode(True)
+            self.detail_win.set_admin_mode(True)
             self.admin_win.refresh()
             self.shell.set_current_page(1)
             self.shell.slide_panel.slide_out()
@@ -2335,6 +2725,7 @@ class SeraApp:
         self.shell.dismiss_detail_on_outside = False
         self.shell.sidebar.set_admin_mode(False)
         self.search_win.set_admin_mode(False)
+        self.detail_win.set_admin_mode(False)
         self.shell.set_current_page(0)
         self.shell.slide_panel.slide_out()
 
@@ -2677,6 +3068,7 @@ if __name__ == "__main__":
             sys.exit(0)     # Sera is already open in this session; the logon launch has nothing to add
         startup_boost.raise_priority()
     _setup_sync_log(APP_DIR)
+    _setup_os_assist_log(APP_DIR)
     SeraApp().run()
 
 

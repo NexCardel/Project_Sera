@@ -1061,14 +1061,14 @@ def test_sera_sync_dialog_add_pc_by_ip_validates_and_stores():
 
     # 1. Invalid IP entry -> warning shown, nothing added
     with patch("PySide6.QtWidgets.QInputDialog.getText", return_value=("not-an-ip", True)), \
-         patch("PySide6.QtWidgets.QMessageBox.warning") as mock_warn:
+         patch("ui.dialogs.sera_sync_dialog.show_message") as mock_warn:
         dialog._on_add_pc_by_ip()
         assert mock_warn.called
         assert "sync_manual_peers" not in mock_db.settings
 
     # 2. Valid IP entry -> stored in DB as JSON list, added to sync_service
     with patch("PySide6.QtWidgets.QInputDialog.getText", return_value=("192.168.5.120", True)), \
-         patch("PySide6.QtWidgets.QMessageBox.information") as mock_info:
+         patch("ui.dialogs.sera_sync_dialog.show_message") as mock_info:
         dialog._on_add_pc_by_ip()
         assert mock_info.called
         assert "sync_manual_peers" in mock_db.settings
@@ -1078,14 +1078,14 @@ def test_sera_sync_dialog_add_pc_by_ip_validates_and_stores():
 
     # 3. Duplicate IP entry -> informative message, not added twice
     with patch("PySide6.QtWidgets.QInputDialog.getText", return_value=("192.168.5.120", True)), \
-         patch("PySide6.QtWidgets.QMessageBox.information") as mock_info:
+         patch("ui.dialogs.sera_sync_dialog.show_message") as mock_info:
         dialog._on_add_pc_by_ip()
         saved_list = json.loads(mock_db.settings["sync_manual_peers"])
         assert saved_list.count("192.168.5.120") == 1
 
     # 4. Out-of-range port entry (e.g. :70000) -> warning shown, not saved
     with patch("PySide6.QtWidgets.QInputDialog.getText", return_value=("192.168.1.5:70000", True)), \
-         patch("PySide6.QtWidgets.QMessageBox.warning") as mock_warn:
+         patch("ui.dialogs.sera_sync_dialog.show_message") as mock_warn:
         dialog._on_add_pc_by_ip()
         assert mock_warn.called
         saved_list = json.loads(mock_db.settings["sync_manual_peers"])
@@ -1361,7 +1361,7 @@ def test_sera_sync_dialog_remove_pc_by_ip():
     """
     import json
     from unittest.mock import MagicMock, patch
-    from PySide6.QtWidgets import QApplication, QMessageBox
+    from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication([])
 
@@ -1386,7 +1386,7 @@ def test_sera_sync_dialog_remove_pc_by_ip():
     dialog = SeraSyncDialog(sync_service=mock_sync_service, db=mock_db)
 
     # 1. No manual IPs configured -> informative message shown
-    with patch("PySide6.QtWidgets.QMessageBox.information") as mock_info:
+    with patch("ui.dialogs.sera_sync_dialog.show_message") as mock_info:
         dialog._on_remove_pc_by_ip()
         assert mock_info.called
         assert "No manual" in mock_info.call_args[0][2]
@@ -1402,15 +1402,15 @@ def test_sera_sync_dialog_remove_pc_by_ip():
 
     # 3. User selects item but cancels confirmation -> nothing removed
     with patch("PySide6.QtWidgets.QInputDialog.getItem", return_value=("192.168.1.50", True)), \
-         patch("PySide6.QtWidgets.QMessageBox.question", return_value=QMessageBox.No):
+         patch("ui.dialogs.sera_sync_dialog.ask_confirm", return_value=False):
         dialog._on_remove_pc_by_ip()
         saved = json.loads(mock_db.settings["sync_manual_peers"])
         assert "192.168.1.50" in saved
 
     # 4. User selects item and confirms -> removed from DB and service
     with patch("PySide6.QtWidgets.QInputDialog.getItem", return_value=("192.168.1.50", True)), \
-         patch("PySide6.QtWidgets.QMessageBox.question", return_value=QMessageBox.Yes), \
-         patch("PySide6.QtWidgets.QMessageBox.information") as mock_info:
+         patch("ui.dialogs.sera_sync_dialog.ask_confirm", return_value=True), \
+         patch("ui.dialogs.sera_sync_dialog.show_message") as mock_info:
         dialog._on_remove_pc_by_ip()
         assert mock_info.called
         saved = json.loads(mock_db.settings["sync_manual_peers"])

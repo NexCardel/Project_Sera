@@ -10,6 +10,8 @@ import os
 import sys
 import shutil
 
+import sync_schema
+
 from sera_db.common import is_filed_dataset, payload_original_author, stamp_payload_original_author
 
 
@@ -584,6 +586,13 @@ class SchemaMixin:
             self._ensure_column(conn, "services", "arn_selector", "TEXT")
             self._ensure_column(conn, "services", "automation_mode_2", "TEXT DEFAULT ''")
             self._ensure_column(conn, "services", "browser", "TEXT DEFAULT ''")
+            # SCK: the portal's logged-in / welcome page. The new-password card leaves when this
+            # page is reached, so SCK knows where its widget belongs and where it ends.
+            self._ensure_column(conn, "services", "dashboard_page_link", "TEXT")
+            # SCA: the page where staff see a client's UID. Sera reads it by UIA and matches it to a client.
+            self._ensure_column(conn, "services", "uid_page_link", "TEXT")
+            # SCA: the node on that page that shows the UID (core/sca/uid_node fingerprint, JSON), set by the picker.
+            self._ensure_column(conn, "services", "uid_node", "TEXT")
             conn.execute("UPDATE services SET automation_mode = 'extension' WHERE automation_mode IN ('automated', 'playwright')")
 
             # 6. Client Services (Attachment table)
@@ -700,7 +709,8 @@ class SchemaMixin:
                 conn.execute("""
                     UPDATE mcl_columns SET is_internal_pk = 1 
                     WHERE UPPER(TRIM(label)) = 'PAN' 
-                       OR (LOWER(label) LIKE '%pan%' AND LOWER(label) NOT LIKE '%pass%')
+                       OR (' ' || REPLACE(REPLACE(LOWER(label), '_', ' '), '-', ' ') || ' ' LIKE '% pan %'
+                           AND LOWER(label) NOT LIKE '%pass%')
                 """)
 
             import sync_tables

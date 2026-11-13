@@ -1,0 +1,29 @@
+You are the one agent who polishes the Sera UI overhaul so the built app matches the fleet mockup's look, not just its layout. Earlier packages were built by many separate sessions and the result is rough; you do ALL the polish work yourself, in order, in this one session, so the result is consistent. Keep going package after package without waiting for replies; nobody is watching between steps.
+
+WHERE
+- You are in the git worktree ../APP-ui on branch ui-overhaul. Stay on it. Never push, merge, rebase, or touch main or the folder ../APP (except to run its Python).
+- Python: always ../APP/venv/Scripts/python.exe. UI tests run offscreen (QT_QPA_PLATFORM=offscreen).
+
+READ FIRST
+1. Mockups/fleet/polish/POLISH-PLAN.md, all of it: the verdict, token table, kit fixes, per-screen fixes, the Qt limits, the work packages P-1 to P-R, and the Owner answers at the end (they settle every decision in section 8; do not ask again).
+2. The annotated side-by-sides Mockups/fleet/polish/polish-*.png.
+3. Mockups/IMPLEMENTATION.md section 1 and Mockups/fleet/BUILD-PLAN.md section 2: tokens only, no literal stylesheet in a screen file, no behaviour change, same widget attribute names, same setting keys, database calls and audit entries.
+4. The kit docstring in ui/components/kit.py and ui/utils/tokens.py.
+
+HOW TO WORK
+- Do the packages in the plan's order: P-1, P-2, P-3, P-4, P-5, then P-6 to P-13, then P-R. Finish one before starting the next.
+- After every package, do the plan's render check: tools/ui_snapshots.py (and tools/ui_gallery.py after kit packages) into Mockups/built/ at 1366x768, 1024x700 and 1366x768 at scale 1.25, then LOOK at the new PNG next to the matching Mockups/fleet/renders/<screen>.png and measure what the package changed. If it still does not match, fix it before moving on. Pixel fidelity to the mockup is the goal of this whole job.
+- Tests after every package: the narrow tests the plan names for it, plus tests/test_ui_overhaul_rules.py, tests/test_ui_kit*.py and the tests/test_ui_lock_*.py files of the screens you touched. They must stay green. A lock test failing means behaviour changed: fix the code, not the test (change a test only when the plan says so, for example a kit size assertion).
+- Shortcuts, Alt+n service keys, masking, the 30 s clipboard wipe, notes autosave, confirmations and admin-only rules must behave exactly as before.
+- Commit after every package: git add -A, then git commit -m with ui-overhaul P-n: summary, and the last line Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>. Never use git stash. Never delete files with wildcards; delete only exact files you created.
+- Write files that contain backslashes with the Write/Edit tools, not shell heredocs.
+- If something in the plan is wrong or impossible in Qt, choose the closest faithful option, note it, and carry on.
+
+FULL SUITE (once, in P-R)
+Use the live plugin from CLAUDE.md with a basetemp outside the repo:
+$env:PYTHONPATH=tools; ../APP/venv/Scripts/python.exe -m pytest -p live_tf -p no:terminal -p no:cacheprovider --basetemp=$env:TEMP/sera_polish_pt tests
+Compare the failures with Mockups/MERGE-READINESS.md section 4. Note: the database-fixture failures there happen only in a checkout without settings.ini (the PAN internal-key fallback in sera_db/schema.py also matches NAME OF COMPANY). Do not fix that here; just confirm no new failures.
+
+AT THE END (P-R)
+- Write Mockups/fleet/polish/POLISH-RESULT.md: per package what changed, the measured before/after numbers, what still differs from the mockup and why (Qt limits), the test results, and the human checks still needed on a real 125 % laptop (also add those as rows to Mockups/overhaul/ui-overhaul-checks.csv with ../APP/venv/Scripts/python.exe Mockups/overhaul/ui_overhaul.py check-add F-R --text Polish: ...; the tracker has no P ids, so file them under F-R).
+- Commit. Then stop and print a short summary: packages done, what now matches, what does not, and test results.

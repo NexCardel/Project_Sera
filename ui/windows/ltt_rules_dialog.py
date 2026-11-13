@@ -11,14 +11,17 @@ from datetime import date
 
 from PySide6.QtCore import Qt, QDate
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDateEdit, QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QMessageBox, QPushButton, QVBoxLayout, QWidget,
+    QDateEdit, QDialog, QHBoxLayout, QListWidget, QListWidgetItem, QVBoxLayout, QWidget,
 )
 
 from core.ltt import feed
 from core.ltt.rules import (
     COVERS_CHOICES, EVERY_CHOICES, FormRule, load_rules, save_rules, validate,
 )
+from ui.components.kit import (
+    Banner, Card, DialogFrame, FieldLabel, Input, LabelledAction, Select, show_message,
+)
+from ui.utils.tokens import TOKENS
 
 
 class LttRulesDialog(QDialog):
@@ -28,29 +31,6 @@ class LttRulesDialog(QDialog):
         self.app_dir = db.app_dir
         self.setWindowTitle("LTT form rules")
         self.setMinimumSize(880, 600)
-        self.setStyleSheet("""
-            QDialog { background-color: #0A0A0A; }
-            QLabel { color: #C9D1D9; font-size: 12.5px; }
-            QLabel#title { color: #F0F6FC; font-size: 17px; font-weight: 700; }
-            QLabel#hint { color: #8B949E; font-size: 12px; }
-            QLabel#preview { color: #4CF9B7; font-size: 12.5px; font-weight: 600; }
-            QLabel#error { color: #FF6B6B; font-size: 12px; }
-            QLineEdit, QDateEdit, QComboBox { background-color: #0D1117; border: 1px solid #30363D;
-                border-radius: 6px; color: #F0F6FC; padding: 5px 8px; font-size: 12.5px; }
-            QLineEdit:focus, QDateEdit:focus, QComboBox:focus { border: 1px solid #2E9B5F; }
-            QComboBox QAbstractItemView { background-color: #0D1117; color: #F0F6FC;
-                selection-background-color: #2E9B5F; }
-            QListWidget { background-color: #0F0F0F; border: 1px solid #262626; border-radius: 8px;
-                color: #E6EDF3; font-size: 12.5px; outline: 0; }
-            QListWidget::item { padding: 5px 8px; }
-            QListWidget::item:selected { background-color: #1B2A22; color: #E6EDF3; }
-            QCheckBox { color: #C9D1D9; font-size: 12px; }
-            QPushButton { background-color: #1F1F1F; color: #E6EDF3; border: 1px solid #3A3A3A;
-                border-radius: 8px; padding: 8px 16px; font-size: 13px; }
-            QPushButton:hover { background-color: #2A2A2A; }
-            QPushButton#primary { background-color: #2E9B5F; color: #FFFFFF; font-weight: 700; border: none; }
-            QPushButton#primary:hover { background-color: #36B06D; }
-        """)
 
         self._rules = load_rules(self.app_dir)
         self._current = -1
@@ -62,98 +42,98 @@ class LttRulesDialog(QDialog):
 
     # ---------------- layout ----------------
     def _build(self):
-        root = QVBoxLayout(self)
-        root.setContentsMargins(22, 20, 22, 18)
-        root.setSpacing(12)
-        title = QLabel("LTT form rules")
-        title.setObjectName("title")
-        hint = QLabel("Choose the return forms the office tracks. For each one, say how often it is filed "
-                      "and give one real due date; Sera works out the current month from that. "
-                      "The dates below are only suggestions: please check them.")
-        hint.setObjectName("hint")
-        hint.setWordWrap(True)
-        root.addWidget(title)
-        root.addWidget(hint)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        frame = DialogFrame("LTT form rules", "Return forms the office tracks, and who files each one",
+                            self, icon="mdi.calendar-check-outline", full=True, scroll=True)
+        outer.addWidget(frame)
+        frame.closeRequested.connect(self.reject)
 
-        body = QHBoxLayout()
-        body.setSpacing(16)
-        root.addLayout(body, stretch=1)
+        frame.add_widget(Banner(
+            "Choose the return forms the office tracks. For each one, say how often it is filed "
+            "and give one real due date; Sera works out the current month from that. "
+            "The dates below are only suggestions: please check them.", "i"))
 
-        left = QVBoxLayout()
-        left.addWidget(QLabel("Return forms"))
+        wrap = QWidget()
+        body = QHBoxLayout(wrap)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(TOKENS["s_4"])
+        frame.add_widget(wrap, 1)
+
+        left = Card("Return forms")
         self.lst_forms = QListWidget()
-        self.lst_forms.setFixedWidth(200)
+        self.lst_forms.setObjectName("KitList")
+        self.lst_forms.setMinimumHeight(120)
         self.lst_forms.currentRowChanged.connect(self._on_form_selected)
-        left.addWidget(self.lst_forms, stretch=1)
-        row = QHBoxLayout()
-        btn_add = QPushButton("Add form")
+        left.add_widget(self.lst_forms)
+        row_w = QWidget()
+        row = QHBoxLayout(row_w)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(TOKENS["s_2"])
+        btn_add = LabelledAction("Add form", variant="secondary", icon="mdi.plus")
         btn_add.clicked.connect(self._add_form)
-        btn_del = QPushButton("Remove")
+        btn_del = LabelledAction("Remove", variant="secondary", icon="mdi.delete-outline")
         btn_del.clicked.connect(self._remove_form)
         row.addWidget(btn_add)
         row.addWidget(btn_del)
-        left.addLayout(row)
-        body.addLayout(left)
+        row.addStretch(1)
+        left.add_widget(row_w)
+        body.addWidget(left)
 
-        self.editor = QWidget()
-        ed = QVBoxLayout(self.editor)
-        ed.setContentsMargins(0, 0, 0, 0)
-        ed.setSpacing(8)
-        ed.addWidget(QLabel("Form name (as it appears on the portal, e.g. GSTR-3B)"))
-        self.txt_form = QLineEdit()
+        self.editor = Card("Selected form")
+        ed = self.editor
+        ed.add_widget(FieldLabel("Form name (as it appears on the portal, e.g. GSTR-3B)"))
+        self.txt_form = Input()
         self.txt_form.textChanged.connect(self._on_edited)
-        ed.addWidget(self.txt_form)
+        ed.add_widget(self.txt_form)
 
-        ed.addWidget(QLabel("How often is it filed?"))
-        self.cmb_every = QComboBox()
-        self.cmb_every.addItems(EVERY_CHOICES)
+        ed.add_widget(FieldLabel("How often is it filed?"))
+        self.cmb_every = Select(items=EVERY_CHOICES)
         self.cmb_every.currentIndexChanged.connect(self._on_edited)
-        ed.addWidget(self.cmb_every)
+        ed.add_widget(self.cmb_every)
 
-        ed.addWidget(QLabel("Any one real due date for this form (the others are worked out from it)"))
+        ed.add_widget(FieldLabel("Any one real due date for this form (the others are worked out from it)"))
         self.dt_due = QDateEdit()
         self.dt_due.setCalendarPopup(True)
         self.dt_due.setDisplayFormat("dd MMM yyyy")
         self.dt_due.dateChanged.connect(self._on_edited)
-        ed.addWidget(self.dt_due)
+        ed.add_widget(self.dt_due)
 
-        ed.addWidget(QLabel("Which month does a due date file for?"))
-        self.cmb_covers = QComboBox()
+        ed.add_widget(FieldLabel("Which month does a due date file for?"))
+        self.cmb_covers = Select()
         for key, text in COVERS_CHOICES:
             self.cmb_covers.addItem(text, key)
         self.cmb_covers.currentIndexChanged.connect(self._on_edited)
-        ed.addWidget(self.cmb_covers)
+        ed.add_widget(self.cmb_covers)
 
-        self.lbl_preview = QLabel("")
-        self.lbl_preview.setObjectName("preview")
-        self.lbl_preview.setWordWrap(True)
-        ed.addWidget(self.lbl_preview)
+        self.lbl_preview = Banner("", "i")
+        ed.add_widget(self.lbl_preview)
 
-        ed.addWidget(QLabel("Who files this form? (clients already seen filing it are ticked)"))
-        self.txt_find = QLineEdit()
-        self.txt_find.setPlaceholderText("Search clients by name or PAN…")
+        ed.add_widget(FieldLabel("Who files this form? (clients already seen filing it are ticked)"))
+        self.txt_find = Input(placeholder="Search clients by name or PAN…", icon="mdi.magnify")
         self.txt_find.textChanged.connect(self._filter_clients)
-        ed.addWidget(self.txt_find)
+        ed.add_widget(self.txt_find)
         self.lst_clients = QListWidget()
+        self.lst_clients.setObjectName("KitList")
+        self.lst_clients.setMinimumHeight(160)
         self.lst_clients.itemChanged.connect(self._on_client_toggled)
-        ed.addWidget(self.lst_clients, stretch=1)
-        body.addWidget(self.editor, stretch=1)
+        ed.add_widget(self.lst_clients)
+        body.addWidget(self.editor, 1)
 
-        self.lbl_error = QLabel("")
-        self.lbl_error.setObjectName("error")
-        self.lbl_error.setWordWrap(True)
-        root.addWidget(self.lbl_error)
+        self.lbl_error = Banner("", "r")
+        frame.add_widget(self.lbl_error)
+        self._set_note(self.lbl_preview, "")
+        self._set_note(self.lbl_error, "")
 
-        btns = QHBoxLayout()
-        btns.addStretch(1)
-        btn_cancel = QPushButton("Cancel")
+        btn_cancel = frame.add_action("Cancel", variant="secondary")
         btn_cancel.clicked.connect(self.reject)
-        self.btn_save = QPushButton("Save and update sheet")
-        self.btn_save.setObjectName("primary")
+        self.btn_save = frame.add_action("Save and update sheet", variant="primary", icon="mdi.content-save-outline")
         self.btn_save.clicked.connect(self._save)
-        btns.addWidget(btn_cancel)
-        btns.addWidget(self.btn_save)
-        root.addLayout(btns)
+
+    @staticmethod
+    def _set_note(banner, text):
+        banner.set_text(text)
+        banner.setVisible(bool(text))
 
     # ---------------- data ----------------
     def _load_clients(self):
@@ -161,7 +141,7 @@ class LttRulesDialog(QDialog):
             self._clients = feed.clients_from(self.db.get_srpf_containers(limit=1_000_000, slim=True))
         except Exception as e:
             self._clients = {}
-            self.lbl_error.setText(f"Could not read the client list: {e}")
+            self._set_note(self.lbl_error, f"Could not read the client list: {e}")
 
     def _refresh_form_list(self, select=-1):
         self.lst_forms.blockSignals(True)
@@ -174,7 +154,7 @@ class LttRulesDialog(QDialog):
             self.lst_forms.setCurrentRow(min(select, len(self._rules) - 1))
         else:
             self.editor.setEnabled(False)
-            self.lbl_preview.setText("")
+            self._set_note(self.lbl_preview, "")
 
     def _on_form_selected(self, row):
         self._commit_current()
@@ -254,13 +234,13 @@ class LttRulesDialog(QDialog):
             return
         r = self._rules[self._current]
         if r.problem():
-            self.lbl_preview.setText(r.problem())
+            self._set_note(self.lbl_preview, r.problem())
             return
         loc = r.engine().locate(date.today())
         cur = loc["current"]
-        self.lbl_preview.setText(
-            f"Right now: {cur.filing}  (due {cur.end:%d %b %Y}).   "
-            f"Last: {loc['previous'][0].filing}.   Next: {loc['upcoming'][0].filing}.")
+        self._set_note(self.lbl_preview,
+                       f"Right now: {cur.filing}  (due {cur.end:%d %b %Y}).   "
+                       f"Last: {loc['previous'][0].filing}.   Next: {loc['upcoming'][0].filing}.")
 
     # ---------------- add / remove / save ----------------
     def _add_form(self):
@@ -278,12 +258,12 @@ class LttRulesDialog(QDialog):
         self._commit_current()
         problem = validate(self._rules)
         if problem:
-            self.lbl_error.setText(problem)
+            self._set_note(self.lbl_error, problem)
             return
         try:
             save_rules(self.app_dir, self._rules)
             path, n = feed.export_feed(self.db, self.app_dir)
         except Exception as e:
-            QMessageBox.warning(self, "LTT form rules", f"Could not save: {e}")
+            show_message(self, "LTT form rules", f"Could not save: {e}", "warning")
             return
         self.accept()

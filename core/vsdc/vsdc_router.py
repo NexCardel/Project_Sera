@@ -544,12 +544,14 @@ class VSDCRouter:
         return self._sgt is not None and self._sgt.sessions_open()
 
     def set_scc_handlers(self, factory) -> None:
-        """factory() -> the handlers to register on SCC-U's host when it is created (once per run)."""
+        """factory() -> the handlers to register on SCC-U's host. Called each time the switch is
+        applied, so a handler that shares the host (SCK) can join while SCC-U's own rules are off."""
         self._scc_handlers = factory
 
     def _apply_scc(self) -> None:
         """Attaches SCC-U to SGT when switched on, the same way as SGT-I: one host per run, and
-        one that switched itself off after a failure stays off."""
+        one that switched itself off after a failure stays off. The host may be shared with a
+        handler that has its own switch (SCK), so the handler list is refreshed on every apply."""
         if self._sgt is None:
             return
         on = getattr(self, "_scc_on", False)
@@ -557,9 +559,13 @@ class VSDCRouter:
         if on and host is None:
             from core.scc import SccHost
             host = self._scc_host = SccHost()
+        if on and host is not None:
             factory = getattr(self, "_scc_handlers", None)
-            for handler in (factory() if factory else []):
-                host.register(handler)
+            if factory is not None:
+                try:
+                    host.set_handlers(factory())
+                except Exception as e:
+                    print(f"[vsdc_router] SCC handlers not refreshed: {type(e).__name__}")
         if host is not None:
             host.set_enabled(on)
             self._sgt.set_scc(host if on else None)

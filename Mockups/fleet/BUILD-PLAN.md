@@ -3,7 +3,7 @@
 Companion to `README.md` (the design) and `Mockups/IMPLEMENTATION.md` (rules, "kept as it is"
 checks, test plan). This file replaces the **order** of IMPLEMENTATION.md's phases 1 to 7 with a
 reuse-first order; its rules (section 1), behaviour checks (section 5) and engineering specs
-(section 4) still apply unchanged. Written 2026-10-10; nothing in the app has changed yet.
+(section 4) still apply unchanged. Status: built (Phases T, K, R, S, F completed October 2026).
 
 ## 1. The idea in one paragraph
 

@@ -155,12 +155,33 @@ class TestClipboardAssist(unittest.TestCase):
                          ("SCA_PASSWORD_DENIED", "too many password requests for this copy"))
 
     def test_an_old_or_expired_arm_gets_nothing(self):
+        other = self.db.add_client(values={self.pan_id: "XYZAB9876C", self.pwd_id: "Pw#Fictional2"},
+                                   notes="", service_ids=[self.gst])
+        self.watch._ensure_index_fresh()
         first = self.arm()
-        self.arm()
+        self.watch._last_copy = ("", 0.0)
+        self.watch._arm_client_services(other, str(other), "XYZAB9876C")      # ANOTHER client's arm
         self.assertIn("no such arm", self.request(first, self.gst, "services.gst.gov.in")["reason"])
+        self.arm()
         current = self.sent[-1]["arm"]
         self.watch._arm.expires_at = time.time() - 1
         self.assertEqual(self.request(current, self.gst, "services.gst.gov.in")["reason"], "the arm expired")
+
+    def test_a_card_of_the_replaced_arm_still_fills_for_the_same_client(self):
+        """The clipboard arm and the UID-page arm follow each other within a second: a click on the
+        first card in that gap must fill (the log showed 'no such arm' there), and for a short time only."""
+        first = self.arm()
+        second = self.arm()
+        third = self.arm()                                  # chain: first -> second -> third
+        self.assertNotEqual(first["arm_id"], third["arm_id"])
+        for old in (first, second):
+            reply = self.request(old, self.gst, "services.gst.gov.in")
+            self.assertEqual((reply["type"], reply["arm_id"]), ("SCA_PASSWORD_GRANT", third["arm_id"]))
+        self.watch.handle_fill_result({"arm_id": first["arm_id"], "service_id": self.gst, "result": "filled"})
+        self.assertEqual(self.watch._arm.fills, ["GST Portal"])
+        self.assertEqual(self.watch.client_for_arm(first["arm_id"]), self.client)
+        self.watch._superseded[first["arm_id"]] = (self.client, third["arm_id"], time.time() - 1)
+        self.assertIn("no such arm", self.request(first, self.gst, "services.gst.gov.in")["reason"])
 
     def test_an_unverified_itr_password_needs_a_confirmed_request(self):
         """User choice 2026-09-22: ask before filling an Income Tax password SCC has not verified."""

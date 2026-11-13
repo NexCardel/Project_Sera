@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from ui.components.kit import MessageBox
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="DPAPI is Windows-only")
 
@@ -59,10 +60,10 @@ def _dialog(tmp_path, monkeypatch, *, answer=True, pin=True, engine=None):
     dlg = SeraSyncDialog(_svc(tmp_path), db=db, actor="Tester", sync_engine=engine)
     dlg.sync_status_group.isVisible = lambda: True
     asked = []
-    monkeypatch.setattr(QMessageBox, "question",
+    monkeypatch.setattr(MessageBox, "question",
                         lambda *a, **k: (asked.append(a[2]), QMessageBox.Yes if answer else QMessageBox.No)[1])
-    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
-    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: asked.append(a[2]))
+    monkeypatch.setattr(MessageBox, "information", lambda *a, **k: None)
+    monkeypatch.setattr(MessageBox, "warning", lambda *a, **k: asked.append(a[2]))
     monkeypatch.setattr(SeraSyncDialog, "_confirm_admin_pin", lambda self: pin)
     return dlg, db, asked
 
@@ -160,7 +161,7 @@ def test_non_admin_download_declined_cancels(tmp_path, monkeypatch):
 
     dlg, db, _ = _dialog(tmp_path, monkeypatch, engine=MagicMock())
     answers = iter([QMessageBox.Yes, QMessageBox.No])
-    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: next(answers))
+    monkeypatch.setattr(MessageBox, "question", lambda *a, **k: next(answers))
     dlg._on_start_shadow_mode()
     assert _pump_until(lambda: cancelled)
     assert db.get_sync_mode() == "off"

@@ -9,6 +9,7 @@ import sys
 from unittest.mock import MagicMock
 
 import pytest
+from ui.components.kit import MessageBox
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="DPAPI is Windows-only")
 
@@ -53,10 +54,10 @@ def _dialog(tmp_path, monkeypatch, *, answer=True, pin=True):
     dlg = SeraSyncDialog(_svc(tmp_path), db=db, actor="Tester", sync_engine=engine)
     dlg.sync_status_group.isVisible = lambda: True
     asked, restarts = [], []
-    monkeypatch.setattr(QMessageBox, "question",
+    monkeypatch.setattr(MessageBox, "question",
                         lambda *a, **k: (asked.append(a[2]), QMessageBox.Yes if answer else QMessageBox.No)[1])
-    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
-    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: asked.append(a[2]))
+    monkeypatch.setattr(MessageBox, "information", lambda *a, **k: None)
+    monkeypatch.setattr(MessageBox, "warning", lambda *a, **k: asked.append(a[2]))
     monkeypatch.setattr(SeraSyncDialog, "_confirm_admin_pin", lambda self: pin)
     monkeypatch.setattr(version, "restart_app", lambda *a, **k: restarts.append(True))
     return dlg, db, engine, asked, restarts
@@ -113,7 +114,7 @@ def test_go_live_cancelled_changes_nothing(tmp_path, monkeypatch):
     dlg, db, engine, _, restarts = _dialog(tmp_path, monkeypatch)
     _start_shadow(dlg)
     from PySide6.QtWidgets import QMessageBox
-    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.No)
+    monkeypatch.setattr(MessageBox, "question", lambda *a, **k: QMessageBox.No)
     dlg._on_go_live()
     engine.stop.assert_not_called()
     assert restarts == []

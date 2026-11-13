@@ -232,6 +232,12 @@ class TestNotesMediaFix(unittest.TestCase):
                 pass
             def setPixmap(self, p):
                 pass
+            def set_text(self, text):
+                pass
+            def set_tone(self, tone):
+                pass
+            def setVisible(self, on):
+                pass
         dialog.lbl_save_status = DummyLbl()
         dialog.lbl_image_preview = DummyLbl()
 
@@ -418,12 +424,13 @@ class TestNotesMediaFix(unittest.TestCase):
         }
 
         # 1. PayloadInspectorDialog only has 2 tabs (Overview and Raw JSON), Tab 3 is scrapped
+        #    (the kit Segmented switch replaced the QTabWidget)
+        from ui.components.kit import Segmented
         insp = PayloadInspectorDialog(item, db=self.db, is_container=True)
-        tab_widget = insp.findChild(QTabWidget)
-        self.assertIsNotNone(tab_widget)
-        self.assertEqual(tab_widget.count(), 2, "Inspector should only have 2 tabs now")
-        self.assertIn("Overview", tab_widget.tabText(0))
-        self.assertIn("Raw JSON", tab_widget.tabText(1))
+        tab_switch = insp.findChild(Segmented)
+        self.assertIsNotNone(tab_switch)
+        self.assertEqual([t.text() for t in tab_switch.buttons], ["Overview", "Raw JSON"],
+                         "Inspector should only have 2 tabs now")
 
         # 2. NotesAndMediaDialog modal has notes editor, toolbar, and image preview
         dlg = NotesAndMediaDialog(item, db=self.db, is_container=True)
@@ -435,16 +442,13 @@ class TestNotesMediaFix(unittest.TestCase):
         self.assertIsNotNone(dlg.btn_clear_img)
         self.assertIsNotNone(dlg.btn_expand_img)
         self.assertIsNotNone(dlg.media_tabs)
-        self.assertEqual(dlg.media_tabs.count(), 2, "Notes & Media should offer two screenshot slots")
-        self.assertIn("Screenshot 1", dlg.media_tabs.tabText(0))
-        self.assertIn("Screenshot 2", dlg.media_tabs.tabText(1))
+        self.assertEqual([t.text() for t in dlg.media_tabs.buttons], ["Screenshot 1", "Screenshot 2"],
+                         "Notes & Media should offer two screenshot slots")
 
-        # 3. TrackerDumpWindow action cell has act_notes button ("switch")
+        # 3. TrackerDumpWindow offers the Notes & Media action (drawn by the grid, not a widget)
         win = TrackerDumpWindow.__new__(TrackerDumpWindow)
-        win.table = None
-        act_cell = win._build_action_cell(item, is_grouped=True)
-        btn_notes = act_cell.findChild(QPushButton, "act_notes")
-        self.assertIsNotNone(btn_notes, "Action cell MUST include act_notes button switch")
+        keys = [a.key for a in win._row_actions(item, is_grouped=True)]
+        self.assertIn("notes", keys, "Actions cell MUST include the notes action")
 
     def test_11_login_evidence_fills_second_slot_without_touching_first(self):
         """Login evidence goes to slot 2 only; slot 1 (filing evidence) and notes survive."""

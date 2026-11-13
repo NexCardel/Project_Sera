@@ -33,3 +33,33 @@ Mockup only — nothing in the app has changed yet.
 | Sync Selected / Sync To All / Refresh | Primary / secondary buttons; Refresh → "Scan again" |
 | Live Sync Activity Stream + Clear | Activity card on the right |
 | Close | The window's ✕ |
+
+## Addendum: feature map of the built dialog (S-12, 2026-10-11)
+
+Every control of `ui/dialogs/sera_sync_dialog.py` and where it went. Nothing was dropped; attribute
+names, handlers, setting keys and confirmations are unchanged.
+
+| Control (attribute) | Built place |
+|---|---|
+| Title, ✕ | `DialogFrame` header "Sera Sync" + Close (Esc) icon button; Esc / ✕ close the dialog |
+| "N devices online" (`status_label`) | Status strip, after the Sync on / off pill (`sync_pill`); then This PC name, version, Mode pill (`mode_pill`, office mode) |
+| Public-network warning (`network_warning_banner`) | Amber `Banner` above the strip |
+| Discovered LAN devices table (`table`, 7 columns, right-click menu) | Devices tab, `DarkListTable` in a card; status is a pill; every fact also in the row tooltip; narrow windows hide DB Modified, Version, Clients / Dumps (in that order); right-click menu unchanged |
+| Empty device list | `EmptyState` (`devices_empty`) with its own Add PC by IP (`btn_empty_add_ip`, same handler) + info banner "Not seeing a PC?" |
+| Refresh (`btn_refresh`) | Devices tab, relabelled **Scan again** |
+| Add PC by IP, Remove PC by IP, Rejoin office, Export recovery kit (`btn_add_ip`, `btn_remove_ip`, `btn_rejoin`, `btn_export_kit`) | Devices tab button row; Rejoin only in legacy mode, the kit only in office mode, as before |
+| Office Members table (`members_table`), members warning (`members_network_warning`) | Office members tab (office mode only): red `Banner`, card with the table (Online and This PC as pills) |
+| Add workstation, Remove, Hand over admin, Become admin | Office members tab; **Add workstation** is the dialog's one primary; off states say why |
+| Sync Status summary, parked warning (`sync_status_summary_label`, `sync_status_warning_label`) | Sync status tab, "Sync status" card; the warning is a `Banner` (amber > 1 h in shadow, red > 7 days) |
+| Shadow mode label, Start / Reset shadow mode, Go live, Run now, shadow checks label | Sync status tab, "Shadow mode" card (Go live soft); PIN confirmation unchanged |
+| Conflicts table, Keep, Use discarded value | Sync status tab, "Conflicts" card |
+| Live Sync Activity Stream (`log_list`) + Clear | "Live activity" card on the right: kit `LogView`, 400 lines kept, category as a coloured tag |
+| Close (`btn_close`) | Dialog footer |
+| Add workstation code window, Add / Remove PC by IP prompts, Become admin password, every confirmation | Unchanged Qt message boxes / input dialogs |
+
+Not built because the control does not exist in today's code: **Sync selected / Sync to all** (removed
+in P4-1, a test keeps them absent), the **Inv-Frames** switch (no such control or setting in the dialog;
+only an `INV_FRAMES` activity category, which keeps its amber tag), the per-device **tick** (only
+needed for Sync selected) and **ahead / behind** (the peer data carries no revision score; adding one
+is a sync-protocol change). Office mode opens on the Sync status tab (the old dialog put the office
+panels first); legacy mode shows the Devices content only, without the tab switch.

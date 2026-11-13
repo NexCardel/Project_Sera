@@ -348,7 +348,7 @@ def test_non_admin_pc_gets_the_message(monkeypatch):
     from ui.windows import tracker_dump_window as tdw
 
     shown = []
-    monkeypatch.setattr(tdw, "QMessageBox", SimpleNamespace(
+    monkeypatch.setattr(tdw, "MessageBox", SimpleNamespace(
         information=lambda parent, title, text: shown.append((title, text))))
     fake = SimpleNamespace(db=FakeDb(admin=False))
     tdw.TrackerDumpWindow._open_distill(fake)

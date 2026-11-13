@@ -2,115 +2,69 @@ try:
     import qtawesome as qta
 except Exception:
     qta = None
-from PySide6.QtCore import Qt, Signal, QSize, Property, QPropertyAnimation, QEasingCurve, QRectF
-from PySide6.QtGui import QPainter, QColor, QBrush, QPen
+from pathlib import Path
+
+from PySide6.QtCore import Qt, Signal, QSize, QTimer, QRectF
+from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QLabel,
-    QPushButton,
     QSizePolicy,
     QSpacerItem,
     QVBoxLayout,
     QHBoxLayout,
     QWidget,
-    QAbstractButton,
     QScrollArea
 )
 
-class ToggleSwitch(QAbstractButton):
-# (unchanged up to paintEvent end)
-    def __init__(self, parent=None):
+from ui.components.kit import IconButton, LabelledAction, NavItem, NavLabel, Switch, dot_icon, sidebar_qss
+from ui.utils.tokens import KIT, TOKENS
+
+SIDEBAR_WIDTH = TOKENS["w_side"]
+_LOGO_DIR = Path(__file__).resolve().parent.parent.parent / "assets" / "logo"
+_SYNC_IDLE_TEXT = "Auto-sync active"
+
+
+class _LogoMark(QWidget):
+    """The Sera mark, drawn from sera_mark.svg on every paint so it is sharp at whatever scale the
+    window really lands on (a bitmap made while the sidebar is built guesses the scale and gets
+    stretched by Qt afterwards). Aspect ratio is kept; sera_icon.png, then "PS", are the fallbacks."""
+
+    def __init__(self, side, parent=None):
         super().__init__(parent)
-        self.setCheckable(True)
-        self.setFixedSize(32, 16)
-        self._position = 0
-        
-        self.animation = QPropertyAnimation(self, b"position")
-        self.animation.setEasingCurve(QEasingCurve.InOutQuad)
-        self.animation.setDuration(150)
-        
-        self.toggled.connect(self._start_animation)
-
-    def _start_animation(self, checked):
-        self.animation.setEndValue(1.0 if checked else 0.0)
-        self.animation.start()
-
-    @Property(float)
-    def position(self):
-        return self._position
-
-    @position.setter
-    def position(self, pos):
-        self._position = pos
-        self.update()
+        self.setFixedSize(side, side)
+        self._renderer = None
+        self._png = None
+        try:
+            from PySide6.QtSvg import QSvgRenderer
+            renderer = QSvgRenderer(str(_LOGO_DIR / "sera_mark.svg"))
+            if renderer.isValid():
+                renderer.setAspectRatioMode(Qt.KeepAspectRatio)
+                self._renderer = renderer
+        except Exception:
+            self._renderer = None
+        if self._renderer is None:
+            png = _LOGO_DIR / "sera_icon.png"
+            if png.exists():
+                self._png = QPixmap(str(png))
 
     def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        
-        # Track background
-        bg_color = QColor("#444444") if not self.isChecked() else QColor("#2E9B5F") # Emerald accent when checked
-        painter.setBrush(QBrush(bg_color))
-        painter.setPen(Qt.NoPen)
-        painter.drawRoundedRect(0, 0, self.width(), self.height(), self.height()/2, self.height()/2)
-        
-        # Handle (Thumb)
-        handle_color = QColor("white")
-        painter.setBrush(QBrush(handle_color))
-        
-        handle_radius = self.height() / 2 - 2
-        start_x = 2
-        end_x = self.width() - handle_radius * 2 - 2
-        
-        current_x = start_x + (end_x - start_x) * self._position
-        
-        painter.drawEllipse(QRectF(current_x, 2, handle_radius*2, handle_radius*2))
-        painter.end()
-
-
-class AccordionHeader(QWidget):
-    toggled = Signal(bool)
-    
-    def __init__(self, text, icon_name, expanded=True, parent=None):
-        super().__init__(parent)
-        self.setObjectName("SidebarAccordionHeader")
-        self.setStyleSheet("background-color: transparent;")
-        self.is_expanded = expanded
-        self.setCursor(Qt.PointingHandCursor)
-        self.setMinimumHeight(32)
-        
-        self.layout = QHBoxLayout(self)
-        self.layout.setContentsMargins(8, 5, 8, 5)
-        self.layout.setSpacing(9)
-        
-        self.icon_lbl = QLabel()
-        self.icon_lbl.setStyleSheet("background-color: transparent;")
-        if icon_name:
-            self.icon_lbl.setPixmap(qta.icon(icon_name, color='#A0A0A0').pixmap(16, 16))
-        
-        self.text_lbl = QLabel(text)
-        self.text_lbl.setStyleSheet("background-color: transparent; font-weight: 600; color: #E0E0E0; border: none; font-size: 13px;")
-        
-        self.chevron_lbl = QLabel()
-        self.chevron_lbl.setStyleSheet("background-color: transparent;")
-        self._update_chevron()
-        
-        if icon_name:
-            self.layout.addWidget(self.icon_lbl)
-        self.layout.addWidget(self.text_lbl)
-        self.layout.addStretch()
-        self.layout.addWidget(self.chevron_lbl)
-        
-    def _update_chevron(self):
-        icon = "mdi.chevron-up" if self.is_expanded else "mdi.chevron-down"
-        self.chevron_lbl.setPixmap(qta.icon(icon, color='#707070').pixmap(14, 14))
-        
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.is_expanded = not self.is_expanded
-            self._update_chevron()
-            self.toggled.emit(self.is_expanded)
-        super().mousePressEvent(event)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        if self._renderer is not None:
+            self._renderer.render(p, QRectF(self.rect()))
+        elif self._png is not None and not self._png.isNull():
+            pix = self._png.scaled(self.size() * self.devicePixelRatioF(), Qt.KeepAspectRatio,
+                                   Qt.SmoothTransformation)
+            pix.setDevicePixelRatio(self.devicePixelRatioF())
+            x = (self.width() - pix.width() / pix.devicePixelRatio()) / 2
+            y = (self.height() - pix.height() / pix.devicePixelRatio()) / 2
+            p.drawPixmap(int(x), int(y), pix)
+        else:
+            p.setPen(Qt.white)
+            p.drawText(self.rect(), Qt.AlignCenter, "PS")
+        p.end()
 
 
 def _safe_qta_icon(icon_name, color=None):
@@ -121,13 +75,13 @@ def _safe_qta_icon(icon_name, color=None):
             return qta.icon(icon_name)
         except Exception:
             pass
-    from PySide6.QtGui import QIcon
     return QIcon()
+
 
 class Sidebar(QFrame):
     # Navigation Signals
     go_to_search = Signal()
-    
+
     # Action Signals
     action_import_csv = Signal()
     action_display_scale = Signal()
@@ -135,12 +89,11 @@ class Sidebar(QFrame):
     action_tracker_dump = Signal()
     action_open_drs = Signal()
     action_audit_log = Signal()
-    action_manage_staff = Signal()
-    
+
     action_settings = Signal()
     action_open_sera_sync = Signal()
     action_trigger_sync = Signal()
-    
+
     # Toggle Signal
     action_enter_admin = Signal()
     action_exit_admin = Signal()
@@ -151,137 +104,117 @@ class Sidebar(QFrame):
         super().__init__(parent)
         self.setObjectName("Sidebar")
         self.setAttribute(Qt.WA_StyledBackground, True)
-        # Keep the sidebar compact while giving its longest labels room to breathe.
-        self.setFixedWidth(172)
+        self.setFixedWidth(SIDEBAR_WIDTH)
+        self.setStyleSheet(sidebar_qss())
         self._admin_mode = False
+        self._sync_timer = QTimer(self)
+        self._sync_timer.setSingleShot(True)
+        self._sync_timer.timeout.connect(self._sync_back_to_idle)
         self._build_ui()
 
     def _build_ui(self):
         self.main_layout = QVBoxLayout(self)
-        self.main_layout.setContentsMargins(9, 13, 9, 8)
-        self.main_layout.setSpacing(5)
+        # side margins are per child (_pad_row) so the nav scroll area can reach the sidebar's edge
+        self.main_layout.setContentsMargins(0, KIT["pad_sb_top"], 0, KIT["pad_sb_bot"])
+        self.main_layout.setSpacing(0)
 
         # Title / Brand
         brand = QWidget()
-        brand.setStyleSheet("background-color: transparent;")
+        brand.setObjectName("SidebarBrand")
         brand_layout = QHBoxLayout(brand)
-        brand_layout.setContentsMargins(4, 3, 4, 8)
-        brand_layout.setSpacing(8)
-        
-        logo = QLabel()
-        logo.setObjectName("SidebarLogo")
-        logo.setAlignment(Qt.AlignCenter)
-        logo.setFixedSize(28, 28)
-        
-        from pathlib import Path
-        from PySide6.QtGui import QPixmap
-        logo_path = Path(__file__).resolve().parent.parent.parent / "assets" / "logo" / "icon_here.png"
-        if not logo_path.exists():
-            logo_path = Path(__file__).resolve().parent.parent.parent / "assets" / "logo" / "files" / "sera_icon_whitegold.png"
-        if not logo_path.exists():
-            logo_path = Path(__file__).resolve().parent.parent.parent / "assets" / "logo" / "sera_icon.png"
-            
-        if logo_path.exists():
-            pix = QPixmap(str(logo_path)).scaled(28, 28, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            logo.setPixmap(pix)
-        else:
-            logo.setText("PS")
-            logo.setStyleSheet("background-color: #164A68; border-radius: 5px; color: #FFFFFF; font-size: 10px; font-weight: 700;")
+        brand_layout.setContentsMargins(4, 0, 4, 10)
+        brand_layout.setSpacing(KIT["gap_brand"])
 
+        logo = _LogoMark(KIT["d_logo"])
+        logo.setObjectName("SidebarLogo")
+        self.logo = logo
+
+        names = QVBoxLayout()
+        names.setContentsMargins(0, 0, 0, 0)
+        names.setSpacing(0)
         title = QLabel("Aman Associates")
         title.setObjectName("SidebarTitle")
-        title.setStyleSheet("background-color: transparent; color: #FFFFFF; font-size: 14px; font-weight: 700;")
+        title.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
+        subtitle = QLabel("Project Sera")
+        subtitle.setObjectName("SidebarSub")
+        names.addWidget(title)
+        names.addWidget(subtitle)
+        self.brand_title = title
+
+        self.btn_toggle_sidebar = IconButton("mdi.dock-left", "Toggle / hide sidebar (Ctrl+B)", sm=True)
+        self.btn_toggle_sidebar.setObjectName("SidebarCollapseButton")
+        self.btn_toggle_sidebar.clicked.connect(self.toggle_requested.emit)
 
         brand_layout.addWidget(logo)
-        brand_layout.addWidget(title)
-        brand_layout.addStretch()
-
-        self.btn_toggle_sidebar = QPushButton()
-        self.btn_toggle_sidebar.setObjectName("SidebarCollapseButton")
-        if qta:
-            self.btn_toggle_sidebar.setIcon(qta.icon("mdi.dock-left", color="#A0A0A0"))
-            self.btn_toggle_sidebar.setIconSize(QSize(18, 18))
-        self.btn_toggle_sidebar.setFixedSize(28, 28)
-        self.btn_toggle_sidebar.setCursor(Qt.PointingHandCursor)
-        self.btn_toggle_sidebar.setToolTip("Toggle / Hide Sidebar (Ctrl+B)")
-        self.btn_toggle_sidebar.setStyleSheet("""
-            QPushButton#SidebarCollapseButton {
-                background: transparent;
-                border: none;
-                border-radius: 4px;
-                padding: 3px;
-            }
-            QPushButton#SidebarCollapseButton:hover {
-                background-color: #222222;
-            }
-        """)
-        self.btn_toggle_sidebar.clicked.connect(self.toggle_requested.emit)
+        brand_layout.addLayout(names, stretch=1)
         brand_layout.addWidget(self.btn_toggle_sidebar)
+        self._pad_row(brand)
 
-        self.main_layout.addWidget(brand)
-        
         # Admin Toggle (Top Area)
-        self.admin_layout = QHBoxLayout()
-        self.lbl_admin = QLabel("Admin Mode")
+        admin_row = QWidget()
+        admin_row.setObjectName("SidebarAdminRow")
+        self.admin_layout = QHBoxLayout(admin_row)
+        self.admin_layout.setContentsMargins(6, 8, 6, 10)
+        self.lbl_admin = QLabel("Admin mode")
         self.lbl_admin.setObjectName("SidebarSection")
-        self.lbl_admin.setStyleSheet("color: #A0A0A0; font-size: 12px; font-weight: 500;")
-        
-        self.toggle_admin = ToggleSwitch()
+
+        self.toggle_admin = Switch(tooltip="Admin Mode")
         self.toggle_admin.toggled.connect(self._on_admin_toggled)
-        
+
         self.admin_layout.addWidget(self.lbl_admin)
         self.admin_layout.addStretch()
         self.admin_layout.addWidget(self.toggle_admin)
-        self.main_layout.addLayout(self.admin_layout)
+        self._pad_row(admin_row)
 
         divider = QFrame()
         divider.setObjectName("SidebarDivider")
         divider.setFrameShape(QFrame.HLine)
-        divider.setStyleSheet("border: none; border-top: 1px solid #262626; min-height: 1px; max-height: 1px; margin: 4px 0;")
-        self.main_layout.addWidget(divider)
-        self.main_layout.addSpacing(1)
+        self._pad_row(divider)
 
         # Scroll Area for Buttons
         self.scroll_area = QScrollArea()
+        self.scroll_area.setObjectName("SidebarScroll")
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setFrameShape(QFrame.NoFrame)
-        self.scroll_area.setStyleSheet("QScrollArea { background: transparent; } QWidget#ScrollContent { background: transparent; }")
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        
+
         self.scroll_content = QWidget()
-        self.scroll_content.setObjectName("ScrollContent")
-        self.scroll_content.setStyleSheet("background-color: transparent;")
+        self.scroll_content.setObjectName("SidebarScrollContent")
         self.layout = QVBoxLayout(self.scroll_content)
-        self.layout.setContentsMargins(0, 0, 0, 0)
-        self.layout.setSpacing(3)
-        
+        # no left margin (the edge bar sits on the sidebar's edge); the right keeps the items 10 px in
+        self.layout.setContentsMargins(0, 0, KIT["pad_sb_h"], 0)
+        self.layout.setSpacing(0)
+
         self.scroll_area.setWidget(self.scroll_content)
         self.main_layout.addWidget(self.scroll_area)
 
         self.admin_widgets = []
         self._nav_buttons = []
-        
 
-        # --- Clients Group ---
-        self.lbl_clients, self.l_clients = self._create_accordion_group("Clients", "mdi.account-multiple-outline", expanded=True)
-        
-        self.btn_all_clients = self._create_sub_nav_button("All Clients", self.go_to_search, parent_layout=self.l_clients)
-        self.btn_search = self._create_sub_nav_button("Search", self.go_to_search, parent_layout=self.l_clients)
-        self._set_active_button(self.btn_search)
-        self.btn_manage_clients = self._create_admin_sub_nav_button(
-            "Manage Clients", self.action_manage_clients, parent_layout=self.l_clients
-        )
-        self.btn_tracker_dump = self._create_sub_nav_button("Tracker Dump", self.action_tracker_dump, parent_layout=self.l_clients)
-        self.btn_drs_system = self._create_sub_nav_button("DRS System", self.action_open_drs, parent_layout=self.l_clients)
-        self.btn_audit = self._create_admin_sub_nav_button("Audit Log", self.action_audit_log, parent_layout=self.l_clients)
+        # --- Clients ---
+        self.layout.addWidget(NavLabel("Clients"))
+        self.btn_all_clients = self._create_nav_button(
+            "All Clients", self.go_to_search, "mdi.account-multiple-outline", hint="Ctrl K")
+        self.btn_search = self.btn_all_clients  # one entry; "Search" was a second button for the same signal
+        self.btn_manage_clients = self._create_admin_nav_button(
+            "Manage Clients", self.action_manage_clients, "mdi.pencil-outline")
+        self.btn_tracker_dump = self._create_nav_button("Tracker Dump", self.action_tracker_dump, "mdi.radar")
+        self.btn_drs_system = self._create_nav_button("DRS System", self.action_open_drs, "mdi.bell-outline")
+        self.btn_audit = self._create_admin_nav_button("Audit Log", self.action_audit_log, "mdi.shield-outline")
+        self._set_active_button(self.btn_all_clients)
 
-        # --- Other Tabs ---
-        self.btn_settings = self._create_admin_nav_button("Options", self.action_settings, "mdi.cog-outline")
-        self.btn_manage_staff = self._create_admin_nav_button("Manage Staff Users", self.action_manage_staff, "mdi.briefcase-outline")
+        # --- Tools ---
+        self.layout.addWidget(NavLabel("Tools"))
         self.btn_new_clients = self._create_nav_button("Import CSV", self.action_import_csv, "mdi.database-outline")
         # Open to everyone (unlike Options): a PC's own screen scale is not an admin setting.
         self.btn_display_scale = self._create_nav_button("Display", self.action_display_scale, "mdi.monitor")
+
+        # --- Admin ---
+        self.lbl_admin_group = NavLabel("Admin")
+        self.layout.addWidget(self.lbl_admin_group)
+        self.admin_widgets.append(self.lbl_admin_group)
+        self.btn_settings = self._create_admin_nav_button("Options", self.action_settings, "mdi.cog-outline")
 
         # Spacer keeps the navigation at the top while the account area stays pinned.
         self.layout.addSpacerItem(QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding))
@@ -289,35 +222,35 @@ class Sidebar(QFrame):
         footer_divider = QFrame()
         footer_divider.setObjectName("SidebarDivider")
         footer_divider.setFrameShape(QFrame.HLine)
-        footer_divider.setStyleSheet("border: none; border-top: 1px solid #262626; min-height: 1px; max-height: 1px; margin: 4px 0;")
-        self.main_layout.addWidget(footer_divider)
+        self._pad_row(footer_divider)
+        self.main_layout.addSpacing(KIT["pad_sb_bot"])
         self.profile_row = QWidget()
-        self.profile_row.setStyleSheet("background-color: transparent;")
+        self.profile_row.setObjectName("SidebarProfileRow")
         profile_layout = QHBoxLayout(self.profile_row)
-        profile_layout.setContentsMargins(2, 2, 2, 2)
-        profile_layout.setSpacing(7)
+        profile_layout.setContentsMargins(4, 2, 4, 2)
+        profile_layout.setSpacing(8)
 
         profile = QLabel()
         profile.setObjectName("SidebarProfile")
         profile.setAlignment(Qt.AlignCenter)
-        profile.setFixedSize(26, 26)
-        profile.setStyleSheet("background: #2E9B5F; border-radius: 13px; color: #FFFFFF;")
-        profile.setPixmap(_safe_qta_icon("mdi.account", color="#FFFFFF").pixmap(14, 14))
+        profile.setFixedSize(KIT["d_avatar"], KIT["d_avatar"])
+        profile.setPixmap(_safe_qta_icon("mdi.account", color=KIT["white"]).pixmap(14, 14))
         self.profile_name = QLabel()
         self.profile_name.setObjectName("SidebarProfileName")
-        self.profile_name.setStyleSheet("background-color: transparent; color: #E0E0E0; font-size: 12px; font-weight: 600;")
         profile_layout.addWidget(profile)
         profile_layout.addWidget(self.profile_name, stretch=1)
+        self._show_profile_name()
         self.profile_row.installEventFilter(self)
-        self.main_layout.addWidget(self.profile_row)
+        self._pad_row(self.profile_row)
+        self.main_layout.addSpacing(8)
 
-        self.sync_status_badge = QPushButton("🟢 Auto-Sync Active")
+        self.sync_status_badge = LabelledAction(
+            _SYNC_IDLE_TEXT, variant="soft", sm=True, icon=dot_icon("ok"),
+            tooltip="Sera LAN Mesh • Live Link Active\nClick to Broadcast Sync with LAN Peers")
         self.sync_status_badge.setObjectName("SyncDeckPill")
-        self.sync_status_badge.setCursor(Qt.PointingHandCursor)
-        self.sync_status_badge.setToolTip("Sera LAN Mesh • Live Link Active\nClick to Broadcast Sync with LAN Peers")
-        self._style_sync_pill("idle")
         self.sync_status_badge.clicked.connect(self._on_sync_pill_clicked)
-        self.main_layout.addWidget(self.sync_status_badge)
+        self._pad_row(self.sync_status_badge)
+        self.main_layout.addSpacing(8)
 
         # App version, so staff (and a two-PC sync test) can tell which build a PC runs --
         # the window starts full-screen by default, which hides the title bar.
@@ -325,91 +258,40 @@ class Sidebar(QFrame):
         self.version_lbl = QLabel(f"v{APP_VERSION}")
         self.version_lbl.setObjectName("SidebarVersion")
         self.version_lbl.setAlignment(Qt.AlignCenter)
-        self.version_lbl.setStyleSheet("background-color: transparent; color: #6E6E6E; font-size: 10px; margin-top: 2px;")
-        self.main_layout.addWidget(self.version_lbl)
+        self._pad_row(self.version_lbl)
 
         self._update_visibility()
 
-    def _style_sync_pill(self, state: str = "idle"):
-        if state == "idle":
-            self.sync_status_badge.setStyleSheet("""
-                QPushButton#SyncDeckPill {
-                    color: #4CF9B7;
-                    font-size: 11px;
-                    font-weight: 600;
-                    padding: 5px 8px;
-                    background-color: #0E1F16;
-                    border: 1px solid #1E4D34;
-                    border-radius: 12px;
-                    margin-top: 4px;
-                    text-align: center;
-                }
-                QPushButton#SyncDeckPill:hover {
-                    background-color: #163626;
-                    border-color: #2E9B5F;
-                    color: #FFFFFF;
-                }
-                QPushButton#SyncDeckPill:pressed {
-                    background-color: #23794A;
-                }
-            """)
-        elif state == "syncing":
-            self.sync_status_badge.setStyleSheet("""
-                QPushButton#SyncDeckPill {
-                    color: #FFFFFF;
-                    font-size: 11px;
-                    font-weight: 700;
-                    padding: 5px 8px;
-                    background-color: #2E9B5F;
-                    border: 1px solid #34B76D;
-                    border-radius: 12px;
-                    margin-top: 4px;
-                    text-align: center;
-                }
-            """)
-        elif state == "received":
-            self.sync_status_badge.setStyleSheet("""
-                QPushButton#SyncDeckPill {
-                    color: #FFFFFF;
-                    font-size: 11px;
-                    font-weight: 700;
-                    padding: 5px 8px;
-                    background-color: #1F7846;
-                    border: 1px solid #2E9B5F;
-                    border-radius: 12px;
-                    margin-top: 4px;
-                    text-align: center;
-                }
-            """)
+    def _show_sync_state(self, state: str, text: str, tooltip: str = "", hold_ms: int = 0):
+        """The pill shows `text` in the emerald fill (syncing / received) or the soft idle look for hold_ms."""
+        self.sync_status_badge.set_variant("soft" if state == "idle" else "primary")
+        self.sync_status_badge.setText(text)
+        if state != "idle":
+            self.sync_status_badge.setToolTip(tooltip or text)
+            self._sync_timer.start(hold_ms)
+
+    def _sync_back_to_idle(self):
+        self._show_sync_state("idle", _SYNC_IDLE_TEXT)
+        self.sync_status_badge.setToolTip("Sera LAN Mesh • Live Link Active\nClick to Broadcast Sync with LAN Peers")
 
     def _on_sync_pill_clicked(self):
-        self._style_sync_pill("syncing")
-        self.sync_status_badge.setText("⚡ Syncing LAN Mesh...")
+        self._show_sync_state("syncing", "Syncing LAN mesh…", hold_ms=1600)
         self.action_trigger_sync.emit()
-        from PySide6.QtCore import QTimer
-        def _reset_idle():
-            self._style_sync_pill("idle")
-            self.sync_status_badge.setText("🟢 Auto-Sync Active")
-        QTimer.singleShot(1600, _reset_idle)
 
     def notify_sync_sent(self, count: int, total: int):
         """Visual badge indicator when local changes are pushed to LAN peers."""
         import datetime
-        from PySide6.QtCore import QTimer
-        now_t = datetime.datetime.now().strftime("%H:%M:%S")
+        now = datetime.datetime.now()
         target_str = f"{count}/{total} PCs" if total > 1 else f"{count} PC"
-        self._style_sync_pill("syncing")
-        self.sync_status_badge.setText(f"⬆️ Synced {target_str} ({now_t})")
-        QTimer.singleShot(3500, lambda: (self._style_sync_pill("idle"), self.sync_status_badge.setText("🟢 Auto-Sync Active")))
+        self._show_sync_state("syncing", f"Synced {target_str} · {now:%H:%M}",
+                              f"Synced {target_str} at {now:%H:%M:%S}", hold_ms=3500)
 
     def notify_sync_received(self, sender_username: str, sender_host: str):
         """Visual badge indicator when incoming live auto-sync is received."""
         import datetime
-        from PySide6.QtCore import QTimer
-        now_t = datetime.datetime.now().strftime("%H:%M:%S")
-        self._style_sync_pill("received")
-        self.sync_status_badge.setText(f"⬇️ Live Sync ({now_t})")
-        QTimer.singleShot(3500, lambda: (self._style_sync_pill("idle"), self.sync_status_badge.setText("🟢 Auto-Sync Active")))
+        now = datetime.datetime.now()
+        self._show_sync_state("received", f"Live sync · {now:%H:%M}",
+                              f"Live sync received at {now:%H:%M:%S}", hold_ms=3500)
 
     def eventFilter(self, watched, event):
         try:
@@ -432,7 +314,7 @@ class Sidebar(QFrame):
         self._admin_mode = active
         for w in self.admin_widgets:
             w.setVisible(active)
-            
+
         if hasattr(self, "profile_row"):
             if active:
                 self.profile_row.setCursor(Qt.PointingHandCursor)
@@ -443,13 +325,20 @@ class Sidebar(QFrame):
 
         self.toggle_admin.blockSignals(True)
         self.toggle_admin.setChecked(active)
-        self.toggle_admin.position = 1.0 if active else 0.0
         self.toggle_admin.blockSignals(False)
+        self._show_profile_name()
 
+    def _show_profile_name(self):
+        """The label beside the avatar: a name given through set_user_name, else the role (mockup "Admin")."""
+        if hasattr(self, "profile_name"):
+            role = "Admin" if self._admin_mode else "Staff"
+            self.set_user_name(getattr(self, "_user_name", None) or role, remember=False)
 
-    def set_user_name(self, user_name: str):
+    def set_user_name(self, user_name: str, remember: bool = True):
         """Show the signed-in staff label without allowing it to overflow the sidebar."""
-        available_width = max(60, self.width() - 58)
+        if remember:
+            self._user_name = user_name
+        available_width = max(60, SIDEBAR_WIDTH - 2 * KIT["pad_sb_h"] - KIT["d_avatar"] - 20)
         self.profile_name.setText(
             self.profile_name.fontMetrics().elidedText(user_name or "Staff", Qt.ElideRight, available_width)
         )
@@ -457,98 +346,41 @@ class Sidebar(QFrame):
     def _update_visibility(self):
         for w in self.admin_widgets:
             w.setVisible(self._admin_mode)
-        
+
         self.toggle_admin.blockSignals(True)
         self.toggle_admin.setChecked(self._admin_mode)
-        self.toggle_admin.position = 1.0 if self._admin_mode else 0.0
         self.toggle_admin.blockSignals(False)
 
-    def _create_accordion_group(self, text, icon_name, expanded=True):
-        header = AccordionHeader(text, icon_name, expanded)
-        self.layout.addWidget(header)
-        
-        container = QWidget()
-        container.setStyleSheet("background-color: transparent;")
-        container_layout = QVBoxLayout(container)
-        container_layout.setContentsMargins(0, 0, 0, 0)
-        container_layout.setSpacing(3)
-        
-        container.setVisible(expanded)
-        header.toggled.connect(container.setVisible)
-        
-        self.layout.addWidget(container)
-        return header, container_layout
+    def _pad_row(self, widget):
+        """Adds a widget to the sidebar column with the sidebar's side padding."""
+        row = QWidget()
+        # named so sidebar_qss() keeps it transparent (the app theme paints unnamed QWidgets grey)
+        row.setObjectName("SidebarPadRow")
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(KIT["pad_sb_h"], 0, KIT["pad_sb_h"], 0)
+        lay.setSpacing(0)
+        lay.addWidget(widget)
+        self.main_layout.addWidget(row)
 
-    def _create_nav_button(self, text, signal, icon_name=None, parent_layout=None) -> QPushButton:
-        btn = QPushButton(f" {text}")
-        if icon_name:
-            btn.setIcon(_safe_qta_icon(icon_name, color='#F8F5F2'))
-            btn.setIconSize(QSize(17, 17))
-        btn.setObjectName("SidebarButton")
-        btn.setProperty("sidebar_sub", False)
-        self._style_nav_button(btn, active=False)
-        btn.setCursor(Qt.PointingHandCursor)
+    def _create_nav_button(self, text, signal, icon_name=None, hint=None) -> NavItem:
+        # the mockup's .nav::before bar sits on the sidebar's edge, 10 px left of the item
+        btn = NavItem(text, icon=icon_name, hint=hint, edge_inset=KIT["pad_sb_h"])
         btn.clicked.connect(signal.emit)
         btn.clicked.connect(lambda _checked=False, button=btn: self._set_active_button(button))
-        
-        target_layout = parent_layout if parent_layout else self.layout
-        target_layout.addWidget(btn)
+        self.layout.addWidget(btn)
         self._nav_buttons.append(btn)
         return btn
 
-    def _create_sub_nav_button(self, text, signal, parent_layout=None) -> QPushButton:
-        btn = QPushButton(text)
-        btn.setObjectName("SidebarSubButton")
-        btn.setProperty("sidebar_sub", True)
-        self._style_nav_button(btn, active=False)
-        btn.setCursor(Qt.PointingHandCursor)
-        btn.clicked.connect(signal.emit)
-        btn.clicked.connect(lambda _checked=False, button=btn: self._set_active_button(button))
-        
-        target_layout = parent_layout if parent_layout else self.layout
-        target_layout.addWidget(btn)
-        self._nav_buttons.append(btn)
-        return btn
-
-    def _set_active_button(self, selected: QPushButton):
+    def _set_active_button(self, selected: NavItem):
         """Keep a single, clear navigation selection visible at a time."""
         for button in self._nav_buttons:
-            is_active = button is selected
-            button.setProperty("active", is_active)
-            self._style_nav_button(button, active=is_active)
+            button.set_active(button is selected)
 
-    def set_active_navigation(self, button: QPushButton):
+    def set_active_navigation(self, button: NavItem):
         """Synchronize the visual selection when navigation is changed in code."""
         self._set_active_button(button)
 
-    @staticmethod
-    def _style_nav_button(button: QPushButton, active: bool):
-        is_sub = bool(button.property("sidebar_sub"))
-        padding = "4px 8px 4px 34px"
-        size = "12px"
-        if not is_sub:
-            padding = "5px 8px"
-            size = "13px"
-
-        if active:
-            button.setStyleSheet(
-                f"QPushButton {{ background-color: #2E9B5F; color: #FFFFFF; border: none; "
-                f"border-radius: 4px; padding: {padding}; font-size: {size}; font-weight: 600; text-align: left; }}"
-                "QPushButton:hover { background-color: #34B76D; }"
-            )
-        else:
-            button.setStyleSheet(
-                f"QPushButton {{ background-color: transparent; color: #A0A0A0; border: none; "
-                f"border-radius: 4px; padding: {padding}; font-size: {size}; font-weight: 500; text-align: left; }}"
-                "QPushButton:hover { background-color: #222222; color: #FFFFFF; }"
-            )
-
-    def _create_admin_nav_button(self, text, signal, icon_name=None, parent_layout=None) -> QPushButton:
-        btn = self._create_nav_button(text, signal, icon_name, parent_layout)
-        self.admin_widgets.append(btn)
-        return btn
-
-    def _create_admin_sub_nav_button(self, text, signal, parent_layout=None) -> QPushButton:
-        btn = self._create_sub_nav_button(text, signal, parent_layout)
+    def _create_admin_nav_button(self, text, signal, icon_name=None, hint=None) -> NavItem:
+        btn = self._create_nav_button(text, signal, icon_name, hint)
         self.admin_widgets.append(btn)
         return btn

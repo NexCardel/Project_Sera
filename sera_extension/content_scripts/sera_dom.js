@@ -24,6 +24,19 @@
     return !!el && el.tagName === 'INPUT' && String(el.type || '').toLowerCase() === 'password';
   }
 
+  // A password box the portal's own "show password" eye switched to type=text: the field keeps
+  // its name/id/autocomplete, so those still say what it is. Tight enough not to catch a
+  // username box (panAdhaarUserId, username, userId, ...).
+  function isRevealedPassword(el) {
+    if (!el || el.tagName !== 'INPUT') return false;
+    const type = String(el.type || '').toLowerCase();
+    if (type !== 'text' && type !== '') return false;
+    const hint = [el.name, el.id, el.getAttribute('autocomplete'),
+                  el.getAttribute('formcontrolname'), el.getAttribute('aria-label'),
+                  el.getAttribute('placeholder')].join(' ').toLowerCase();
+    return /(password|passwd|pwd)/.test(hint);
+  }
+
   function cleanSelector(sel) {
     return (sel || '').trim().replace(/\s+\[/g, '[').replace(/input\s+/g, 'input');
   }
@@ -70,6 +83,9 @@
     if (!isUser) {
       const hit = queryVisible(doc, 'input[type="password"]', isPasswordInput)[0];
       if (hit) return hit;
+      // "Show password" turned the box into type=text; fill it instead of reporting "no field".
+      const shown = queryVisible(doc, 'input', isRevealedPassword)[0];
+      if (shown) return shown;
     }
     try {
       const active = doc.activeElement;

@@ -15,19 +15,17 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QDialog,
-    QDialogButtonBox,
-    QFormLayout,
     QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
-    QPushButton,
-    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
 import sync_rejoin
+from ui.components.kit import MessageBox, Banner, Card, Checkbox, DialogFrame, FieldLabel, Input, SectionLabel
+from ui.utils.tokens import TOKENS
 
 TITLE = "Aman Associates — Rejoin Office"
 MAX_PASSWORD_ATTEMPTS = 5
@@ -41,6 +39,16 @@ class RejoinDetails:
     legacy_password: str | None
 
 
+def _field(label: FieldLabel, widget: QWidget) -> QWidget:
+    box = QWidget()
+    lay = QVBoxLayout(box)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(TOKENS["s_1"])
+    lay.addWidget(label)
+    lay.addWidget(widget)
+    return box
+
+
 class RejoinOfficeDialog(QDialog):
     """Old password (only if the saved one doesn't work), admin PC address, pairing code, PC name."""
 
@@ -52,46 +60,56 @@ class RejoinOfficeDialog(QDialog):
         self.setWindowTitle("Rejoin Office")
         self.setMinimumWidth(500)
 
-        layout = QVBoxLayout(self)
-        intro = QLabel(
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        frame = DialogFrame("Rejoin office",
+                            "Get the office database from the admin PC again.",
+                            self, icon="mdi.lan-connect", scroll=True)
+        outer.addWidget(frame)
+        frame.closeRequested.connect(self.reject)
+
+        frame.add_widget(Banner(
             "This PC gets the office database from the admin PC. Its current files are moved to a "
             "\"legacy\" folder first (nothing is deleted). Afterwards Sera shows what only this PC has "
-            "(clients, audit entries, tracker filings) and imports it after you confirm.\n\n"
-            "On the admin PC, open Sera Sync → \"Add workstation\" to get a 6-digit code."
-        )
-        intro.setWordWrap(True)
-        layout.addWidget(intro)
+            "(clients, audit entries, tracker filings) and imports it after you confirm.<br><br>"
+            "On the admin PC, open Sera Sync → \"Add workstation\" to get a 6-digit code.",
+            "i"))
 
-        form = QFormLayout()
-        self.legacy_pw = QLineEdit()
+        self.legacy_pw = Input(placeholder="Only asked when the saved key fails")
         self.legacy_pw.setEchoMode(QLineEdit.Password)
-        if self._verify is not None:
-            form.addRow("This PC's current master password:", self.legacy_pw)
-        self.host = QLineEdit()
-        self.host.setPlaceholderText("e.g. 192.168.1.10")
-        form.addRow("Admin PC address (IP):", self.host)
-        self.code = QLineEdit()
-        self.code.setPlaceholderText("123 456")
+        self.legacy_pw.setAccessibleName("This PC's current master password")
+        if self._verify is None:
+            self.legacy_pw.setEnabled(False)
+            self.legacy_pw.setToolTip("Not needed: this PC's saved key still opens its database")
+        frame.add_widget(_field(FieldLabel("This PC's current master password", for_widget=self.legacy_pw),
+                                self.legacy_pw))
+
+        self.host = Input(placeholder="e.g. 192.168.1.10")
+        self.host.setAccessibleName("Admin PC address (IP)")
+        frame.add_widget(_field(FieldLabel("Admin PC address (IP)", for_widget=self.host), self.host))
+        self.code = Input(placeholder="123 456")
         self.code.setMaxLength(7)
-        form.addRow("Pairing code:", self.code)
-        self.device_name = QLineEdit(default_name)
+        self.code.setAccessibleName("Pairing code")
+        frame.add_widget(_field(FieldLabel("Pairing code", for_widget=self.code), self.code))
+        self.device_name = Input()
+        self.device_name.setText(default_name)
         self.device_name.setMaxLength(64)
-        form.addRow("This PC's name:", self.device_name)
-        layout.addLayout(form)
+        self.device_name.setAccessibleName("This PC's name")
+        frame.add_widget(_field(FieldLabel("This PC's name", for_widget=self.device_name), self.device_name))
 
-        self.error = QLabel("")
-        self.error.setWordWrap(True)
-        self.error.setStyleSheet("color: #E5534B;")
-        layout.addWidget(self.error)
+        self.error = Banner("", "r")
+        self.error.hide()
+        frame.add_widget(self.error)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.button(QDialogButtonBox.Ok).setText("Rejoin")
-        buttons.accepted.connect(self._on_ok)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        cancel = frame.add_action("Cancel")
+        cancel.clicked.connect(self.reject)
+        rejoin = frame.add_action("Rejoin", variant="primary", icon="mdi.lan-connect")
+        rejoin.setDefault(True)
+        rejoin.clicked.connect(self._on_ok)
 
     def show_error(self, text: str) -> None:
-        self.error.setText(text)
+        self.error.set_text(text)
+        self.error.show()
 
     def _on_ok(self) -> None:
         import sync_pairing
@@ -142,9 +160,15 @@ class SalvageDialog(QDialog):
 
         r = report
         pk = r.pk_label or "PAN"
-        layout = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        frame = DialogFrame("Import this PC's data",
+                            "What only this PC has, found in its old files.",
+                            self, icon="mdi.database-import-outline", scroll=True)
+        outer.addWidget(frame)
+        frame.closeRequested.connect(self.reject)
         summary = [
-            f"Found on this PC but not in the office database:",
+            "Not in the office database:",
             f"  • {len(r.to_insert)} client(s) to add",
             f"  • {r.audit_new} audit log entries",
             f"  • {r.tracker_new} tracker filing(s), {r.timelines_new} session timeline(s)",
@@ -162,37 +186,35 @@ class SalvageDialog(QDialog):
         summary += r.notes
         text = QLabel("\n".join(summary))
         text.setWordWrap(True)
-        layout.addWidget(text)
+        summary_card = Card("Found on this PC")
+        summary_card.add_widget(text)
+        frame.add_widget(summary_card)
 
         if r.conflicts:
-            hdr = QLabel(f"{len(r.conflicts)} client(s) have different values here. The office values are kept "
-                         "unless you tick \"take this PC's values\" (empty values here never erase office values):")
+            frame.add_widget(SectionLabel(f"{len(r.conflicts)} client(s) with different values"))
+            hdr = QLabel("The office values are kept unless you tick \"take this PC's values\" "
+                         "(empty values here never erase office values):")
             hdr.setWordWrap(True)
-            layout.addWidget(hdr)
+            frame.add_widget(hdr)
+            conflicts = Card()
             inner = QWidget()
             inner_layout = QVBoxLayout(inner)
+            inner_layout.setContentsMargins(0, 0, 0, 0)
+            inner_layout.setSpacing(TOKENS["s_2"])
             for c in r.conflicts:
-                box = QCheckBox(f"{c.key} — take this PC's values ({', '.join(c.labels)})")
+                box = Checkbox(f"{c.key} — take this PC's values ({', '.join(c.labels)})")
                 self._boxes[c.key] = box
                 inner_layout.addWidget(box)
-            inner_layout.addStretch()
-            scroll = QScrollArea()
-            scroll.setWidgetResizable(True)
-            scroll.setWidget(inner)
-            scroll.setMinimumHeight(min(260, 40 + 28 * len(r.conflicts)))
-            layout.addWidget(scroll)
+            conflicts.add_widget(inner)
+            frame.add_widget(conflicts)
 
-        buttons = QDialogButtonBox()
-        self.btn_import = QPushButton("Import")
-        self.btn_later = QPushButton("Not now")
-        self.btn_skip = QPushButton("Don't import")
-        buttons.addButton(self.btn_import, QDialogButtonBox.AcceptRole)
-        buttons.addButton(self.btn_later, QDialogButtonBox.RejectRole)
-        buttons.addButton(self.btn_skip, QDialogButtonBox.DestructiveRole)
-        self.btn_import.clicked.connect(self._on_import)
-        self.btn_later.clicked.connect(self.reject)
+        self.btn_skip = frame.add_action("Don't import", icon="mdi.close")
         self.btn_skip.clicked.connect(self._on_skip)
-        layout.addWidget(buttons)
+        frame.add_footer_spacer()
+        self.btn_later = frame.add_action("Not now")
+        self.btn_later.clicked.connect(self.reject)
+        self.btn_import = frame.add_action("Import", variant="primary", icon="mdi.database-import-outline")
+        self.btn_import.clicked.connect(self._on_import)
 
     def _on_import(self) -> None:
         self.take_legacy = {k for k, box in self._boxes.items() if box.isChecked()}
@@ -200,7 +222,7 @@ class SalvageDialog(QDialog):
         self.accept()
 
     def _on_skip(self) -> None:
-        reply = QMessageBox.question(
+        reply = MessageBox.question(
             self, "Don't import",
             "Don't import anything from this PC's old data?\n\nThe old files stay in the legacy folder, "
             "but Sera won't offer the import again.",
@@ -261,15 +283,15 @@ def _undo(app: Path) -> str | None:
     try:
         sync_rejoin.undo_rejoin(app)
     except Exception as e:
-        QMessageBox.critical(None, TITLE, f"The rejoin could not be undone: {e}\n\n"
+        MessageBox.critical(None, TITLE, f"The rejoin could not be undone: {e}\n\n"
                              "Sera will close so nothing is damaged. Contact the office administrator.")
         return "exit"
-    QMessageBox.information(None, TITLE, "The rejoin was undone. This PC uses its own files again.")
+    MessageBox.information(None, TITLE, "The rejoin was undone. This PC uses its own files again.")
     return None
 
 
 def _download_failed(app: Path, error) -> str | None:
-    reply = QMessageBox.question(
+    reply = MessageBox.question(
         None, TITLE,
         f"This PC joined the office, but the office database could not be downloaded:\n\n{error}\n\n"
         "Yes: undo the rejoin and keep using this PC's own files for now.\n"
@@ -302,12 +324,12 @@ def _run_salvage(app: Path, password: str | None) -> None:
                 return                          # asked again at the next start
         except sync_rejoin.SalvageError as e:
             _busy(False)
-            QMessageBox.critical(None, TITLE, f"{e}\n\nThis PC's old data is in:\n{state.get('legacy_dir', '')}\n\n"
+            MessageBox.critical(None, TITLE, f"{e}\n\nThis PC's old data is in:\n{state.get('legacy_dir', '')}\n\n"
                                  "Please report this to the owner. Sera will offer the import again next time.")
             return
         except Exception as e:
             _busy(False)
-            QMessageBox.warning(None, TITLE, f"Could not read this PC's old data: {e}\n\n"
+            MessageBox.warning(None, TITLE, f"Could not read this PC's old data: {e}\n\n"
                                 "Sera will offer the import again next time.")
             return
         finally:
@@ -319,7 +341,7 @@ def _run_salvage(app: Path, password: str | None) -> None:
     dlg.exec()
     if dlg.choice == "skip":
         path = sync_rejoin.skip_salvage(app)
-        QMessageBox.information(None, TITLE, f"Nothing was imported. The old files stay in:\n{report.legacy_dir}"
+        MessageBox.information(None, TITLE, f"Nothing was imported. The old files stay in:\n{report.legacy_dir}"
                                 + (f"\n\nReport: {path}" if path else ""))
         return
     if dlg.choice != "import":
@@ -329,12 +351,12 @@ def _run_salvage(app: Path, password: str | None) -> None:
         done = sync_rejoin.salvage_after_rejoin(app, dry_run=False, password=password, take_legacy=dlg.take_legacy)
     except Exception as e:
         _busy(False)
-        QMessageBox.warning(None, TITLE, f"The import failed and was undone: {e}\n\n"
+        MessageBox.warning(None, TITLE, f"The import failed and was undone: {e}\n\n"
                             "Sera will offer it again next time.")
         return
     finally:
         _busy(False)
-    QMessageBox.information(
+    MessageBox.information(
         None, TITLE,
         f"Imported {len(done.to_insert)} client(s), {done.audit_new} audit entries, {done.tracker_new} tracker "
         f"filing(s) and {done.timelines_new} session timeline(s).\n\nReport: {done.report_path}\n"
@@ -343,20 +365,13 @@ def _run_salvage(app: Path, password: str | None) -> None:
 
 def _ask_pending_join() -> str:
     """"finish", "undo" or "quit"."""
-    box = QMessageBox(QMessageBox.Question, TITLE,
-                      "This PC joined the office but the office database hasn't been downloaded yet.\n\n"
-                      "Connect to the admin PC now and finish? If the admin PC can't provide it, you can "
-                      "undo the rejoin and keep using this PC's own files.")
-    btn_finish = box.addButton("Finish now", QMessageBox.AcceptRole)
-    btn_undo = box.addButton("Undo rejoin", QMessageBox.DestructiveRole)
-    box.addButton("Close Sera", QMessageBox.RejectRole)
-    box.setDefaultButton(btn_finish)
-    box.exec()
-    if box.clickedButton() is btn_finish:
-        return "finish"
-    if box.clickedButton() is btn_undo:
-        return "undo"
-    return "quit"
+    clicked = MessageBox.choose(
+        None, TITLE,
+        "This PC joined the office but the office database hasn't been downloaded yet.\n\n"
+        "Connect to the admin PC now and finish? If the admin PC can't provide it, you can "
+        "undo the rejoin and keep using this PC's own files.",
+        [("Undo rejoin", "secondary"), ("Close Sera", "secondary"), ("Finish now", "primary")])
+    return {2: "finish", 0: "undo"}.get(clicked, "quit")
 
 
 def run_pending_rejoin(app_dir, requested: bool) -> str | None:
@@ -367,19 +382,19 @@ def run_pending_rejoin(app_dir, requested: bool) -> str | None:
     try:
         outcome = sync_rejoin.resume_interrupted_rejoin(app)
     except Exception as e:
-        QMessageBox.critical(None, TITLE, f"An earlier rejoin can't be finished automatically:\n\n{e}\n\n"
+        MessageBox.critical(None, TITLE, f"An earlier rejoin can't be finished automatically:\n\n{e}\n\n"
                              "Sera will close so nothing is damaged. Contact the office administrator.")
         return "exit"
     if outcome == "rolled_back":
-        QMessageBox.warning(None, TITLE, "An interrupted rejoin was undone. This PC still uses its own files.")
+        MessageBox.warning(None, TITLE, "An interrupted rejoin was undone. This PC still uses its own files.")
 
     password = None
     if requested and outcome is None:
         if sera_keys.load_office(app) is not None:
-            QMessageBox.information(None, TITLE, "This PC already uses the office key.")
+            MessageBox.information(None, TITLE, "This PC already uses the office key.")
             return None
         if not (app / sync_rejoin.MASTER_DB).exists():
-            QMessageBox.information(None, TITLE, "This PC has no database to rejoin with. Use \"Join office\" instead.")
+            MessageBox.information(None, TITLE, "This PC has no database to rejoin with. Use \"Join office\" instead.")
             return None
         outcome, password = _run_wizard(app)
         if outcome == "exit":

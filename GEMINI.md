@@ -1,7 +1,14 @@
 # User Rules & Project Guidelines
 
+- **Never Read SQLite Database Files**: STRICTLY FORBIDDEN to open, read, query, inspect, hex-dump, or cat raw SQLite database files on disk (including but not limited to `master.db`, `rawPayload.db`, `test_master.db`, `*.db`, `*.sqlite`, `*.sqlite3`, `*-wal`, `*-shm`). Never run shell queries, file reading tools, or scripts directly against live database files. All database functionality must be tested and validated exclusively via programmatic fixtures and automated test suites.
+- **Always Ask Before Reading Corpus or Logs**: ALWAYS ask for explicit user permission and confirmation before opening, inspecting, scanning, or reading any log files (such as `logs/*`, `*.log`, `vsdc.log`, `net.log`), debug dumps, or historical corpus/dataset capture files. Clearly specify the exact target file path and purpose, and wait for confirmation before reading.
 - **Always Ask Before Pushing**: ALWAYS ask for explicit user permission and confirmation before executing `git push` or pushing updates/code changes to GitHub or any remote repository.
 - **Always Ask Before Packaging**: ALWAYS ask for explicit user permission and confirmation before building executable packages (`build_package.py`), running PyInstaller, compiling installers (`ISCC.exe` / Inno Setup), or packaging the application for release.
+- **Unified Release Workflow ("make the installer <version>")**: Whenever the user commands `make the installer <version>`, execute the end-to-end release pipeline with just **one single confirmation**:
+  1. Bump version numbers in `version.py`, `build_tools/installer_setup.iss`, `sera_extension/manifest.json`, `sera_extension_firefox/manifest.json`, and set `mandatory: true` with the target version in `version.json`.
+  2. Sync `sera_extension/` to `C:\Users\Nex\AmanAssociates_Sera\sera_extension\`.
+  3. Ask for a single confirmation covering the entire pipeline (package build, installer compile, SHA-256 update, git commit, and `git push origin main`).
+  4. Once confirmed, run the entire sequence to completion without stopping for intermediate prompts: `build_package.py` -> `ISCC.exe` -> update `sha256` in `version.json` via `release_manifest.py` -> `git commit` -> `git push origin main`.
 - **Strictly Use Google Material Icons**: ALWAYS and exclusively use Google Material Design icons (`mdi.*` via QtAwesome / Material Symbols) for all UI components, buttons, navigation items, dialogs, tables, and system tray menus across the entire application. Do not use FontAwesome or other icon libraries.
 - **Retired Sera SAD**: Sera SAD (API Detector / `net_interceptor.js`) is permanently retired and removed from the active workspace. Capture operations rely exclusively on Sera SDC (DOM Crosshairs) and Visual SDC (VSDC).
 - **Retired Sera SDS**: Sera SDS (Dataset Scanner / `sds_core.js`) is permanently retired and completely removed from the extension and active workspace.
@@ -28,7 +35,7 @@
   - Do not post per-test progress in chat (too noisy); report the final summary and any failed tests when the run concludes.
   - To inspect failure tracebacks, rerun individual failing tests with plain `.\venv\Scripts\python.exe -m pytest <nodeid>`.
 - **Tool & Command Execution Allowlist**: The following tools and command patterns are explicitly authorized for routine development operations:
-  - **File Tools**: `view_file`, `replace_file_content`, `write_to_file`, `Read`, `Edit`, `Write`, `Glob`, `Grep`, `TodoWrite`
+  - **File Tools**: `view_file`, `replace_file_content`, `write_to_file`, `Read`, `Edit`, `Write`, `Glob`, `Grep`, `TodoWrite` (excluding SQLite and unauthorized log/corpus files)
   - **Python Runtime & Tests**: `../APP/venv/Scripts/python.exe`, `pytest`
   - **Safe Git Inspections**: `git status`, `git diff`, `git log`, `git add`, `git commit`, `git show`, `git rev-parse`, `git stash`
   - **Safe Shell Utilities**: `ls`, `dir`, `cat`, `head`, `tail`, `wc`, `grep`, `find`, `mkdir`, `cp`, `mv`, `rm`, `echo`, `date`, `node`
@@ -36,3 +43,5 @@
   - `git push`, `git merge`, `git rebase`, `git reset --hard`, `git checkout main`, `git switch main`, `git branch -D`
   - Packaging / Compiling tools: `build_package.py`, `PyInstaller`, `ISCC.exe` / Inno Setup
   - Unauthorized web requests / external search on sensitive code context.
+  - Direct reading, opening, querying, or inspecting SQLite files (`master.db`, `rawPayload.db`, `*.db`, `*.sqlite*`).
+  - Reading or inspecting any corpus or log files without prior explicit user confirmation.
