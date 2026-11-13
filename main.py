@@ -241,6 +241,8 @@ class SeraApp:
         self._update_announced = set()      # staged versions already shown on the HUD (once each)
         self._capture_ui_refresh_pending = False
         self._capture_queue = queue.Queue()
+        import time as _time
+        self._last_capture_at = _time.monotonic()   # start-up counts as a capture: no close in the first 30 s
         # fleet_health pulls in the core.vsdc package; import it here on the main thread so the
         # capture thread's own import finds it loaded (two threads importing core.vsdc deadlock).
         from core import capture_outbox, fleet_health  # noqa: F401
@@ -570,7 +572,7 @@ class SeraApp:
         if update_agent.is_available():
             self._agent_update_timer = QTimer(self.app)
             self._agent_update_timer.timeout.connect(self._check_agent_update)
-            self._agent_update_timer.start(30_000)
+            self._agent_update_timer.start(update_agent.CHECK_INTERVAL_MS)
         else:
             self.update_manager = version.BackgroundUpdateManager(
                 check_interval_seconds=7200,
@@ -968,6 +970,8 @@ class SeraApp:
     def _handle_extension_result(self, msg: dict):
         # Queue all captures (SGT/VSDC, via vsdc_worker.filing_captured); the database/report
         # pipeline is too expensive to execute in the Qt signal handler during burst traffic.
+        import time as _time
+        self._last_capture_at = _time.monotonic()   # the update agent waits for 30 s without one
         self._capture_queue.put(msg)
 
     def _process_extension_result(self, msg: dict):
@@ -2127,7 +2131,8 @@ class SeraApp:
                 version.apply_and_restart(installer, silent=True)
 
     def _check_agent_update(self):
-        """The update agent has staged a newer version: close at an idle moment so it can install.
+        """The update agent has staged a newer version: close after 30 s without a capture (PC idle or
+        not) so it can install.
         A helper reopens the app once the install is done."""
         from core import update_agent
         if self._update_applied:
@@ -2137,13 +2142,16 @@ class SeraApp:
         if router is not None:
             router.health.set_pending_update(staged or "")
         if update_agent.should_announce(self._update_announced, staged) and getattr(self, "vsdc_hud", None):
-            self.vsdc_hud.show_event("prompt", f"Update v{staged} ready", "Sera restarts itself when idle",
-                                     duration_ms=4000)
+            self.vsdc_hud.show_event("prompt", f"Update v{staged} ready",
+                                     "Sera restarts itself after 30 s without a capture", duration_ms=4000)
+        import time as _time
+        quiet = _time.monotonic() - self._last_capture_at
         ver = update_agent.should_close_now(APP_DIR, captures_busy=bool(self._capture_queue.unfinished_tasks),
-                                            sessions_open=bool(router is not None and router.sessions_open()))
+                                            seconds_since_capture=quiet)
         if not ver:
             return
-        print(f"[AutoUpdater] Closing for the staged v{ver} update (PC idle); it reopens after the install.")
+        print(f"[AutoUpdater] Closing for the staged v{ver} update (no capture for {quiet:.0f} s); "
+              "it reopens after the install.")
         update_agent.record_close(APP_DIR, ver)
         self._update_applied = True
         self._agent_update_timer.stop()
