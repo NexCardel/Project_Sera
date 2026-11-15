@@ -199,7 +199,6 @@ class AuditLogDialog(WidthAware, QDialog):
         self.host_badge = Pill("Host aggregator active", "emerald", dot=True)
         self.host_badge.setToolTip("This PC collects the other workstations' entries")
         self.frame.add_header_widget(self.host_badge)
-        self.frame.add_close_button()
 
         body = QWidget()
         body_row = QHBoxLayout(body)

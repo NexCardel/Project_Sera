@@ -93,6 +93,8 @@ from .sgt_toolbox import MERGES, SUBMIT_LEVELS, submit_level
 from .sgt_containers import (KEYED_MINIMUM, Carrier, ContainerSession, Instance, evidence_of, info_signature,
                              load_doc, sdis_info, split_hits)
 from core.dataset_key import SDIS_INFO_METHOD, compute_dataset_key
+from . import sgt_evidence
+from .sgt_evidence import SessionEv
 
 SHADOW_DIR_ENV = "SGT_SHADOW_DIR"
 MODE_SHADOW = "shadow"
@@ -152,6 +154,7 @@ _BLIND_PLACEHOLDER = re.compile(r"^\s*enable\s+accessibility\s*$", re.IGNORECASE
 # such as ".../myProfile/aadhaarOtpLogin" does not end the session.
 _LOGOUT = re.compile(r"(?:^|[/#=])(?:log-?out|log-?off|sign-?out)(?=$|[/?#.&])", re.IGNORECASE)
 _LOGIN = re.compile(r"(?:^|[/#=])(?:log-?in|sign-?in)(?=$|[/?#.&])", re.IGNORECASE)
+_EV_IDLE = {"tab": None, "source": "", "late": False, "lag": 0.0}   # evidence context outside a page read
 
 
 def shadow_dir() -> Path:
@@ -196,6 +199,8 @@ class _Slot:
     # read shows the same ARN. first_seen_as: what first saw it.
     evidence_source: str = "uia"
     first_seen_as: str = ""
+    # form / period / arn / status -> the stamp of the read that set it (sgt_evidence)
+    ev: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     @property
     def arn(self) -> Optional[str]:
@@ -281,6 +286,8 @@ class _Session:
     unread_tabs: Set[str] = field(default_factory=set)   # joined, not read yet (see _observe's clash)
     # SDIS dataset containers and Others values (core/sgt/sgt_containers.py, blueprint S.2/S.4)
     sdis: ContainerSession = field(default_factory=ContainerSession)
+    # How it was born, what happened to it and what named its client: goes on every row (sgt_evidence)
+    ev: SessionEv = field(default_factory=SessionEv)
 
     @property
     def has_content(self) -> bool:
@@ -409,12 +416,79 @@ class SgtShadow:
         self._closed: "OrderedDict[str, Tuple[float, _Session, str]]" = OrderedDict()
         self._policy: Dict[str, str] = SOURCE_POLICY["uia"]    # the source policy of the read being absorbed
         self._url_changed = False                # the last observe_window moved its session to another page
+        # The read being absorbed, for evidence stamps (sgt_evidence): its tab and source, whether its
+        # session was no longer in view, and how long the read took to come back.
+        self._ev_ctx: Dict[str, Any] = dict(_EV_IDLE)
+        self._ev_lag = 0.0
         if self._state_path is not None:
             self._recover()
 
     def _stamp(self, now: float) -> float:
         """A reading of SgtShadow's clock as a wall-clock time, for the page corpus (replay sorts by it)."""
         return now + (time.time() - time.monotonic()) if self._monotonic else now
+
+    # ── Evidence (core/sgt/sgt_evidence.py): never allowed to disturb capture ─────
+    def _trail(self, s: _Session, code: str, tab: Optional[str] = None, detail: str = "") -> None:
+        try:
+            s.ev.note(self._stamp(self._clock()), code, tab, detail)
+        except Exception:
+            pass
+
+    def _ev_born(self, s: _Session, born: str, parent: Optional[_Session], tab: Optional[str]) -> None:
+        """`s` was just made out of `parent` (a clash, a tab of its own)."""
+        s.ev.born = born
+        s.ev.parent = parent.session_id if parent is not None else ""
+        self._trail(s, born, tab)
+
+    def _ev_stamp(self, url: str, source: str) -> Dict[str, Any]:
+        try:
+            c = self._ev_ctx
+            return sgt_evidence.stamp(self._stamp(self._clock()), c["tab"], url, c["source"] or source,
+                                      c["late"], c["lag"])
+        except Exception:
+            return {}
+
+    def _ev_identity(self, s: _Session, fld: str, value: str, spec: str, url: str, source: str) -> None:
+        """The read that named the client: where, how, and how many other PANs that page printed."""
+        try:
+            st = self._ev_stamp(url, source)
+            st["spec"] = spec
+            if spec != CLIENT_LINK_SPEC:
+                others = len(self._page_pans - {value if fld == "pan" else value[2:12]})
+                if others:
+                    st["others"] = others
+            s.ev.ident[fld] = st
+        except Exception:
+            pass
+
+    def _ev_fields(self, slot: _Slot, values: Dict[str, str], keys: Iterable[str], pieces: Any,
+                   url: str, source: str) -> None:
+        """Stamps the dataset fields just set. A field the dataset in progress supplied keeps the
+        stamp of the page that gave it (`pieces`: _Draft.pieces), not this page's."""
+        try:
+            for k in keys:
+                if k not in sgt_evidence.DATA_FIELDS or not values.get(k):
+                    continue
+                piece = (pieces or {}).get(k)
+                if isinstance(piece, dict) and isinstance(piece.get("ev"), dict) and piece.get("value") == values[k]:
+                    slot.ev[k] = dict(piece["ev"])
+                else:
+                    slot.ev[k] = self._ev_stamp(url, source)
+        except Exception:
+            pass
+
+    def _attach_evidence(self, s: _Session, slot: Any, payload: Dict[str, Any]) -> None:
+        try:
+            raw = payload.get("raw_payload")
+            if not isinstance(raw, dict):
+                return
+            from version import APP_VERSION
+            raw[sgt_evidence.EV_KEY] = sgt_evidence.build(
+                s.ev, getattr(slot, "ev", None), sid=s.session_id, tabs=len(s.tabs),
+                client_known=bool(self._client_ids(s)), version=APP_VERSION, pc=device_name(),
+                at=datetime.now().isoformat(timespec="seconds"))
+        except Exception as e:
+            self._echo(f"[SGT] {self._tag} evidence not attached: {type(e).__name__}")
 
     # ── Mode ─────────────────────────────────────────────────────────────────────
     def set_mode(self, mode: str) -> None:
@@ -578,6 +652,7 @@ class SgtShadow:
         """Sets the window's session in view aside. An empty one has nothing to keep."""
         if s.has_content:
             self._shelf.setdefault(hwnd, []).append(s)
+            self._trail(s, "shelved")
 
     def _bring_back(self, hwnd: int, back: _Session, url: str, h: Any, now: float) -> _Session:
         """`back` (a session this window had set aside) is the one in view again."""
@@ -605,6 +680,7 @@ class SgtShadow:
         aside.remove(pick)
         if not aside:
             self._shelf.pop(hwnd, None)
+        self._trail(pick, "back", tab, key or "")
         return pick
 
     def _claim_tab(self, hwnd: int, s: _Session, tab: Optional[str]) -> None:
@@ -708,10 +784,15 @@ class SgtShadow:
         portal = vsdc_scope.portal_for_url(url) or ctx.portal or s.portal
         if in_view:
             s.last_read = when                  # SGT's clock; the result's own times are the reader's
-        out = self._absorb_lines(hwnd, s, portal, url, ctx.title or "", r.tab_after, list(r.lines or []),
-                                 r.source or "uia", docs=r.docs, own_read=False, read_ms=r.ms, t0=t0,
-                                 frame=frame, ocr=ocr, now=when, h=None, blind_retries=blind_retries,
-                                 in_view=in_view)
+        asked = float(ctx.asked_at or r.started_at or 0.0)
+        self._ev_lag = max(0.0, now - asked) if now is not None and asked else 0.0
+        try:
+            out = self._absorb_lines(hwnd, s, portal, url, ctx.title or "", r.tab_after, list(r.lines or []),
+                                     r.source or "uia", docs=r.docs, own_read=False, read_ms=r.ms, t0=t0,
+                                     frame=frame, ocr=ocr, now=when, h=None, blind_retries=blind_retries,
+                                     in_view=in_view)
+        finally:
+            self._ev_lag = 0.0
         if ended and isinstance(out, PageResult):
             # Late, after an idle end or a closed window: the read was asked while this session was the
             # window's, and its tab and page did not change during it. Its rows go out as usual.
@@ -759,6 +840,7 @@ class SgtShadow:
                 # it joins that session (claimed below). Until its first page is read: one that
                 # names another client makes it that client's tab (a tab open before Sera started).
                 s.unread_tabs.add(tab)
+                self._trail(s, "tab+", tab)
         if s is not None and portal and s.portal and portal != s.portal:
             # The window is on another portal (another tab). That is NOT a boundary: this
             # session is set aside, and the one the window had on that portal comes back. An
@@ -834,6 +916,8 @@ class SgtShadow:
                             s.sdis.carrier = None
                     self._sessions[hwnd] = s
                     idle_sec = max(0.0, round(gap, 1))
+                    s.ev.born, s.ev.parent = sgt_evidence.BORN_PARKED, str(old_id)
+                    self._trail(s, "resumed", tab, str(old_id))
                     self._event(s, "session_resumed", from_session=old_id, idle_sec=idle_sec)
                     self._echo(f"[SGT] {self._tag} session resumed (from session {old_id}, idled {int(idle_sec)}s)")
             if not resumed:
@@ -846,6 +930,8 @@ class SgtShadow:
         if not s.started:
             s.started = now
         self._claim_tab(hwnd, s, tab)
+        if not s.ev.trail:
+            self._trail(s, s.ev.born, tab)      # a session just made here
 
         url_changed = url != s.last_url
         self._url_changed = url_changed         # for observe()'s change gate
@@ -901,17 +987,21 @@ class SgtShadow:
         if not lines:
             return None
         self._policy = SOURCE_POLICY.get(source, SOURCE_POLICY["ocr"])
+        self._ev_ctx = {"tab": tab, "source": source, "late": not in_view, "lag": self._ev_lag}
         try:
             return self._absorb_page(hwnd, s, portal, url, title, tab, lines, source, docs, own_read,
                                      now, h, in_view, sgt_i, scc)
         finally:
             self._policy = SOURCE_POLICY["uia"]
+            self._ev_ctx = dict(_EV_IDLE)
 
     def _absorb_page(self, hwnd: int, s: _Session, portal: str, url: str, title: str, tab: Optional[str],
                      lines: List[str], source: str, docs: Optional[List[Any]], own_read: bool, now: float,
                      h: Any, in_view: bool, sgt_i: Any, scc: Any) -> Optional[PageResult]:
         policy = self._policy
         today = self._today()
+        if not in_view:
+            self._trail(s, "late", tab)
         # The capture loop's read carries the nodes of the same read: no second read for them.
         nodes = (list(docs or []) or None) if source == "uia" else None
         if self._recorder is not None:
@@ -961,8 +1051,11 @@ class SgtShadow:
             s.tabs.discard(tab)
             s.unread_tabs.discard(tab)
             self._shelf.setdefault(hwnd, []).append(s)
+            left = s
+            self._trail(left, "split", tab)
             s = self._sessions[hwnd] = _Session(portal=portal, last_url=url, last_hash=h, last_read=now,
                                                 timeline=[url] if url else [])
+            self._ev_born(s, sgt_evidence.BORN_SPLIT, left, tab)
             self._claim_tab(hwnd, s, tab)
         clash = None if res.is_list or not policy["identity_check"] else self._identity_conflict(s, res)
         if clash and not in_view:
@@ -984,6 +1077,8 @@ class SgtShadow:
                 # The same tab now shows someone else: a read this session asked for and has not had
                 # back may show them too (R1). A new tab's first page is only a tab switch.
                 self._cut(s.session_id, "another client")
+            left = s
+            self._trail(left, "clash", tab, clash)
             self._shelve(hwnd, s)
             back = self._unshelve(hwnd, portal, key=clash, value=seen) if seen else None
             if back is not None:
@@ -993,6 +1088,7 @@ class SgtShadow:
                 # that client's tab, named from this page like any session's first page.
                 s = self._sessions[hwnd] = _Session(portal=portal, last_url=url, last_hash=h, last_read=now,
                                                     timeline=[url] if url else [])
+                self._ev_born(s, sgt_evidence.BORN_TAB, left, tab)
             else:
                 # The re-reads of this page are blocked too, but only when the tab is known: then a
                 # switch to another client's tab never comes this way (each tab has its session), so
@@ -1005,6 +1101,7 @@ class SgtShadow:
                     portal=portal, strict=True, last_url=url, last_hash=h, last_read=now,
                     timeline=[url] if url else [],
                     strict_block={"url": url, "values": {k: v for k, v in blocked.items() if v}} if tab else {})
+                self._ev_born(s, sgt_evidence.BORN_STRICT, left, tab)
                 for k in _CLIENT_KEYS:
                     res.profile.pop(k, None)
             self._claim_tab(hwnd, s, tab)
@@ -1164,7 +1261,10 @@ class SgtShadow:
                 old["page"], old["source"], old["misses"], old["missing_since"] = url, hit.source, 0, None
                 continue
             d.pieces[fld] = {"value": hit.value, "page": url, "source": hit.source, "spec": hit.spec,
-                             "evidence": hit.evidence, "misses": 0, "missing_since": None}
+                             "evidence": hit.evidence, "misses": 0, "missing_since": None,
+                             "ev": self._ev_stamp(url, source)}
+            if hit.source == "link":
+                d.pieces[fld]["ev"]["src"] = "link"     # read from the page link, not its text
             self._event(s, "current", change="changed" if old else "set", field=fld, value=hit.value,
                         previous=old["value"] if old else None, spec=hit.spec, via=hit.source, page=url, source=source,
                         evidence=hit.evidence if hit.evidence != hit.value else None)
@@ -1190,6 +1290,7 @@ class SgtShadow:
                 # its own return (GST), is never moved: a new period is a new dataset.
                 old = dict(prev.values)
                 prev.values.update(vals)
+                self._ev_fields(prev, prev.values, [k for k in vals if old.get(k) != vals[k]], d.pieces, url, source)
                 self._queue(s, prev)
                 self._event(s, "dataset", change="moved", record=CURRENT_RECORD, previous=old,
                             values=prev.values, page=url, source=source)
@@ -1197,7 +1298,8 @@ class SgtShadow:
             else:
                 st = d.pieces.get("status")
                 d.slot = self._merge_values(s, vals, CURRENT_RECORD, 85, url, source, claimed=d.claims or None,
-                                            follow=True, status_explicit=bool(st and st.get("page") == url))
+                                            follow=True, status_explicit=bool(st and st.get("page") == url),
+                                            pieces=d.pieces)
 
     @staticmethod
     def _draft_as_dataset(d: _Draft, rules: Any) -> Tuple[Dict[str, str], List[str]]:
@@ -1233,7 +1335,7 @@ class SgtShadow:
             self._event(s, "current", change="incomplete - not dispatched", values=vals, missing=missing, reason=reason)
             self._echo(f"[SGT] {self._tag} dataset in progress dropped ({reason}): missing {', '.join(missing)}")
             return
-        self._merge_values(s, vals, CURRENT_RECORD, 85, url, "pages", claimed=d.claims or None)
+        self._merge_values(s, vals, CURRENT_RECORD, 85, url, "pages", claimed=d.claims or None, pieces=d.pieces)
 
     def _fill_from_draft(self, s: _Session, values: Dict[str, str], rules: Any) -> bool:
         """
@@ -1515,7 +1617,9 @@ class SgtShadow:
         while self._outbox:
             _, (s, slot) = self._outbox.popitem(last=False)
             try:
-                return self._tracker_payload(s, slot)
+                payload = self._tracker_payload(s, slot)
+                self._attach_evidence(s, slot, payload)
+                return payload
             except Exception as e:                  # never let one bad row block the rest
                 self._echo(f"[SGT] could not build a tracker row: {e}")
         return None
@@ -1699,6 +1803,7 @@ class SgtShadow:
         self._event(s, "profile", field=fld, value=value, spec=spec, confidence=confidence, page=url, source=source)
         self._echo(f"[SGT] {self._tag} profile {fld} = {value}  [{spec}]")
         if fld in _CLIENT_KEYS:
+            self._ev_identity(s, fld, value, spec, url, source)
             self._sighted(s, fld, url)
         if fld in ("pan", "gstin", "name"):
             self._queue_all(s)                  # rows written before the client was known get their identity
@@ -1772,6 +1877,8 @@ class SgtShadow:
         if old.confirm_note:
             s.confirm_note = f"{s.confirm_note}; earlier session: {old.confirm_note}"
         idle_sec = max(0.0, round(now - float(snap.get("last_seen") or c[0]), 1))
+        s.ev.parent = s.ev.parent or str(snap.get("session_id") or "")
+        self._trail(s, "resumed-client", None, str(snap.get("session_id") or ""))
         self._event(s, "session_resumed", from_session=snap.get("session_id"), idle_sec=idle_sec, by="client")
         self._echo(f"[SGT] {self._tag} same client as a parked session: its dataset in progress carries on "
                    f"(idled {int(idle_sec)}s)")
@@ -1973,10 +2080,12 @@ class SgtShadow:
         add_only = self._policy["datasets"] == "merge_add_only"
         if message_only and add_only:
             return                              # OCR wording with no ARN of its own never promotes (R6)
+        pieces = None
         if message_only:
             if not self._tie_message(s, values, url, source):
                 return
         elif rules is not None and self._fill_from_draft(s, values, rules):
+            pieces = s.draft.pieces             # its form and period were read on the draft's pages
             self._echo(f"[SGT] {self._tag} {ds.record}: form/period taken from the dataset in progress")
             if values.get("arn"):
                 # Submitted: the dataset being built is this one, and it is finished.
@@ -1984,7 +2093,7 @@ class SgtShadow:
                 self._event(s, "current", change="completed by a submission", arn=values["arn"], page=url)
         self._merge_values(s, values, ds.record, ds.confidence, url, source, claimed=claimed,
                            follow=whole and not add_only, status_explicit=bool(values.get("status")),
-                           recovered=not whole)
+                           recovered=not whole, pieces=pieces)
 
     def _request_demotion(self, s: _Session, slot: _Slot, old: str, new: str, evidence: str,
                           stamp: str, url: str) -> None:
@@ -2047,7 +2156,8 @@ class SgtShadow:
 
     def _merge_values(self, s: _Session, values: Dict[str, str], record: str, confidence: int,
                       url: str, source: str, claimed: Optional[List[str]] = None, follow: bool = False,
-                      status_explicit: bool = False, recovered: bool = False) -> Optional[_Slot]:
+                      status_explicit: bool = False, recovered: bool = False,
+                      pieces: Any = None) -> Optional[_Slot]:
         """
         follow: this is a page read of one dataset (a whole-page record, the return being built), not a card
         of a list: a value the SAME page, still in view, now shows differently replaces the one it set.
@@ -2074,6 +2184,7 @@ class SgtShadow:
             slot = _Slot(dict(values), record, confidence, url, claimed=claimed)
             slot.owner = {} if add_only else {k: stamp for k in values}
             slot.evidence_source = slot.first_seen_as = "ocr" if add_only else "recovered" if recovered else "uia"
+            self._ev_fields(slot, values, values, pieces, url, source)
             s.slots.append(slot)
             if add_only:
                 if self._stats is not None:
@@ -2136,6 +2247,7 @@ class SgtShadow:
                     changes[k] = [old, v]
                 else:
                     changes[k] = [old, v, "disagrees - kept the first"]
+        self._ev_fields(slot, slot.values, [k for k, c in changes.items() if len(c) == 2], pieces, url, source)
         if any(len(c) == 2 for c in changes.values()):     # a real change, not just a disagreement
             self._queue(s, slot)
         if changes:
@@ -2178,6 +2290,7 @@ class SgtShadow:
         """`s` (already off the window's lists) sat idle: it ends, and when it had a client (a PAN or
         GSTIN) and content it is also kept in `_parked` - and on disk - to be resumed within
         RESUME_WINDOW_SEC (same window and tab, or the same client named by any window)."""
+        self._trail(s, "parked")
         snap = copy.deepcopy(_session_to_json(s))
         has_content = s.has_content
         gap = now - s.last_seen
@@ -2210,6 +2323,7 @@ class SgtShadow:
         }
 
     def _finish(self, s: _Session, reason: str) -> None:
+        self._trail(s, "end", None, reason)
         self._retire_tabs(s)
         # Kept a while for a read it asked for that has not come back (absorb); after a logout, a
         # login page or the like, such a read is dropped instead (R1).
@@ -2513,7 +2627,8 @@ def _session_to_json(s: _Session) -> Dict[str, Any]:
         "slots": [{"values": sl.values, "record": sl.record, "confidence": sl.confidence,
                    "first_page": sl.first_page, "sent_key": sl.sent_key, "held": sl.held,
                    "claimed": sl.claimed, "waived": sl.waived, "evidence_source": sl.evidence_source,
-                   "first_seen_as": sl.first_seen_as} for sl in s.slots],
+                   "first_seen_as": sl.first_seen_as, "ev": sl.ev} for sl in s.slots],
+        "ev": s.ev.to_json(),
         "draft": {f: {k: v for k, v in piece.items() if isinstance(v, (str, int, float, bool, type(None)))}
                   for f, piece in s.draft.pieces.items()},
         "draft_slot": s.slots.index(s.draft.slot) if s.draft.slot in s.slots else None,
@@ -2536,7 +2651,9 @@ def _session_from_json(raw: Dict[str, Any]) -> _Session:
         s.slots.append(_Slot(dict(sl["values"]), sl.get("record") or CURRENT_RECORD, int(sl.get("confidence") or 0),
                              sl.get("first_page") or "", sl.get("sent_key"), sl.get("held"), sl.get("claimed"),
                              waived=bool(sl.get("waived")), evidence_source=str(sl.get("evidence_source") or "uia"),
-                             first_seen_as=str(sl.get("first_seen_as") or "")))
+                             first_seen_as=str(sl.get("first_seen_as") or ""),
+                             ev={k: dict(v) for k, v in (sl.get("ev") or {}).items() if isinstance(v, dict)}))
+    s.ev = SessionEv.from_json(raw.get("ev"))
     s.draft = _Draft(pieces={f: dict(pc) for f, pc in (raw.get("draft") or {}).items()},
                      claims=list(raw.get("draft_claims") or []))
     idx = raw.get("draft_slot")

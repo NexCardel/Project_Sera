@@ -3,7 +3,8 @@ ui/components/sca_notice_popup.py - SCA warnings where staff are looking: always
 =====================================================================================================
 A UID-page warning ("no client has this UID", "the UID box changed", ...) happens while the BROWSER is in
 front, so Sera's own bottom-left alert (inside its window, behind the browser) is never seen. This small
-card sits above every window at the bottom-right of the screen the cursor is on, never takes focus (the
+card sits above every window at the top-right of the screen the cursor is on (SCA's corner;
+bottom-right is SCK's card), below a browser's tab strip and address bar, never takes focus (the
 portal keeps the keyboard), and fades after DURATION_MS; a click closes it. A new notice replaces the
 one showing. Text only: the caller never puts a client's name or a password in it.
 """
@@ -17,6 +18,7 @@ from ui.utils.tokens import TOKENS as T
 DURATION_MS = 9000
 WIDTH = 380
 MARGIN = 24
+TOP_CLEAR = 120          # below a maximised browser's tabs + address bar (its window buttons stay usable)
 
 
 class ScaNoticePopup(QWidget):
@@ -79,7 +81,7 @@ class ScaNoticePopup(QWidget):
         if screen is None:
             return
         g = screen.availableGeometry()
-        self.move(g.right() - self.width() - MARGIN, g.bottom() - self.height() - MARGIN)
+        self.move(g.right() - self.width() - MARGIN, g.top() + TOP_CLEAR)
 
     def mousePressEvent(self, event):          # a click closes it (it never takes focus)
         self._timer.stop()

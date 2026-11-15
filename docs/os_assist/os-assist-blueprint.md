@@ -46,7 +46,7 @@ only *where they live* and *how a box gets its text* change.
 | 5 | Fast Autofill | Stays on the extension. Not part of this project. |
 | 6 | Legal / ToS | The owner handles it. Not tracked here; workers don't raise it. |
 
-Out of scope: Fast Autofill; porting the SCK card itself (the ✎ button keeps calling it, D3); anything in rule 1's "never" list.
+Out of scope: Fast Autofill; anything in rule 1's "never" list. (The SCK card was out of scope here; it is now an OS card too, see `docs/sck/sck-os-plan.md`.)
 
 ## 2. What exists today (read before building)
 
@@ -148,7 +148,7 @@ fill(hwnd, element, text, kind, service):
   existing scale helpers; see `tests/test_ui_scale.py`).
 - Cards: `smti_card.py` (normal + Flutter steps), `mecp_card.py` (plain + SCC mode),
   `sca_card.py` (Inject + needs_confirm note), `sca_chip.py`.
-- **✎ button** — kept; opens the SCK widget as today (D3).
+- **✎ button** — kept; opens the SCK card for that client and service (D3). In OS mode that is the docked `SckCard` on the same browser window (the card sends its `hwnd`).
 
 ### 4.5 MECP specifics
 
@@ -195,7 +195,7 @@ The UID-node / UID-source work (`core/sca/page_nodes.py`, `core/sca/uid_source_w
 - OS mode: `automation.trigger_manual_assist` / `trigger_mecp` / `send_scc_card` go to the OS path;
   arms go to the SCA engine, not to the browsers; the desktop sends
   `update_extension_settings(sca_enabled=False)` so the extension's SCA can't fill as well.
-- Fast Autofill and SCK keep using the extension in both modes.
+- Fast Autofill keeps using the extension in both modes. SCK follows the engine setting: `os` -> the docked `SckCard` (`ui/os_assist/sck_card.py`, `core/os_assist/sck_engine.py`) and the portal's password box is filled through `fill.py`; `extension` -> the in-page card as before. The SCK card is the one OS card that takes focus (`DockCard.ACCEPTS_FOCUS`) because it has a text box.
 
 ## 5. Work packages
 

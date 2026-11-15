@@ -9,7 +9,8 @@ The docked, no-focus base window every OS Assist card is built on (blueprint §4
 - `attach(browser_hwnd, service)` makes the browser window its owner (GWLP_HWNDPARENT): above that
   browser only, minimises with it.
 - While presented, the card follows the browser's GetWindowRect and docks top-right of the page
-  area (top 18 px, right 24 px, as the in-page card). The page rect and the address-bar host come
+  area (top 18 px, right 24 px, as the in-page card); a card with DOCK_CORNER "bottom-right" (SCK)
+  docks DOCK_BOTTOM px above the page area's bottom instead. The page rect and the address-bar host come
   from the UIA worker (locate.page_rect / host_matches_service), never on the Qt thread. Hidden
   while the browser is minimised or the host stops matching the service (shown again when it
   matches; the timer keeps running); dismissed when it closes.
@@ -107,11 +108,23 @@ def to_logical(x: int, y: int) -> QPoint:
     for screen in QGuiApplication.screens():
         g = screen.geometry()
         dpr = screen.devicePixelRatio() or 1.0
-        if g.x() <= x < g.x() + g.width() * dpr and g.y() <= y < g.y() + g.height() * dpr:
+        # inclusive: a page's right / bottom edge is the screen's own edge (1920 on a 1920 screen)
+        if g.x() <= x <= g.x() + g.width() * dpr and g.y() <= y <= g.y() + g.height() * dpr:
             return QPoint(round(g.x() + (x - g.x()) / dpr), round(g.y() + (y - g.y()) / dpr))
     screen = QGuiApplication.primaryScreen()
     dpr = (screen.devicePixelRatio() if screen else 1.0) or 1.0
     return QPoint(round(x / dpr), round(y / dpr))
+
+
+PAGE_SLACK_PX = 16                               # a maximised window overhangs the screen by its frame
+
+
+def page_fits_window(page: Rect, wr: Rect, slack: int = PAGE_SLACK_PX) -> bool:
+    """The probed page rect lies inside the browser window (as locate.rect_inside; not imported
+    here to keep the UIA stack out of the Qt module). Chrome's UIA bounds can be stale."""
+    return (page[2] > page[0] and page[3] > page[1]
+            and page[0] >= wr[0] - slack and page[1] >= wr[1] - slack
+            and page[2] <= wr[2] + slack and page[3] <= wr[3] + slack)
 
 
 class Win32:
@@ -185,7 +198,7 @@ def wire_sck_edit(card: "DockCard", client_id, service_id, portal: str = "",
     def _open():
         fn = handler or _sck_edit_handler
         if fn is not None:
-            fn(dict(msg))
+            fn(dict(msg, hwnd=int(getattr(card, "browser_hwnd", 0) or 0)))
 
     card.edit_requested.connect(_open)
 
@@ -333,6 +346,8 @@ class DockCard(QWidget):
     ACCENT = "#2E9B5F"
     # Geometry of the extension's card, in CSS px; the MECP and SCA cards override what differs.
     DOCK_TOP, DOCK_RIGHT = TOP_PX, RIGHT_PX      # `top` / `right` of the in-page card
+    DOCK_CORNER = "top-right"                    # or "bottom-right" (SCK: top-right is SCA's corner)
+    DOCK_BOTTOM = 24                             # `bottom` when DOCK_CORNER is "bottom-right"
     PADDING = (16, 18)                           # vertical, horizontal
     HEADER_GAP = 8                               # .header margin-bottom
     TIMER_GAP, TIMER_HEIGHT = 12, 3.5            # .timer-container margin-top, height
@@ -340,12 +355,16 @@ class DockCard(QWidget):
     CLOSE_TEXT = "✕"
     SLIDE_IN_MS, FADE_IN_MS = SLIDE_MS, FADE_MS  # 0 = shown at once (MECP has no slide-in)
     TIMER_INTERACTIVE = True                     # pause on hover, reset on click (the SCA card's doesn't)
+    ACCEPTS_FOCUS = False                        # True: a card with a text box (SCK) takes focus on click
 
     def __init__(self, badge: Optional[str] = None, timeout_ms: Optional[int] = None,
                  locator=None, win: Optional[Win32] = None,
                  clock: Callable[[], float] = time.monotonic, parent=None, events=None):
         super().__init__(parent)
-        self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowDoesNotAcceptFocus)
+        flags = Qt.Tool | Qt.FramelessWindowHint
+        if not self.ACCEPTS_FOCUS:
+            flags |= Qt.WindowDoesNotAcceptFocus
+        self.setWindowFlags(flags)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_DeleteOnClose, False)
@@ -538,7 +557,8 @@ class DockCard(QWidget):
         hwnd = self._native_hwnd()
         if not hwnd:
             return
-        self._win.add_ex_style(hwnd, WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)
+        self._win.add_ex_style(hwnd, WS_EX_TOOLWINDOW if self.ACCEPTS_FOCUS
+                               else WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)
         if self.browser_hwnd:
             self._win.set_owner(hwnd, self.browser_hwnd)
 
@@ -654,19 +674,50 @@ class DockCard(QWidget):
         self._probe_job = None
         self._host_ok = bool(host_ok)
         if page is not None and wr is not None:
-            self._page_inset = (page[0] - wr[0], page[1] - wr[1], page[2] - wr[2], page[3] - wr[3])
+            if page_fits_window(page, wr):
+                self._page_inset = (page[0] - wr[0], page[1] - wr[1], page[2] - wr[2], page[3] - wr[3])
+            else:
+                self._page_inset = None              # stale UIA bounds: dock on the window itself
 
     def _dock_to(self, wr: Rect) -> None:
-        """Top-right of the page area: the page rect's last known place inside the window,
+        """DOCK_CORNER of the page area: the page rect's last known place inside the window,
         moved with the window, so a drag is followed every tick, not every probe."""
         if self._page_inset is not None:
             top, right = wr[1] + self._page_inset[1], wr[2] + self._page_inset[2]
+            bottom = wr[3] + self._page_inset[3]
         else:
-            top, right = wr[1], wr[2]
-        tr = to_logical(right, top)
-        pos = QPoint(tr.x() - css_px(self.DOCK_RIGHT) - self.width(), tr.y() + css_px(self.DOCK_TOP))
+            top, right, bottom = wr[1], wr[2], wr[3]
+        if self.DOCK_CORNER == "bottom-right":
+            br = to_logical(right, bottom)
+            pos = QPoint(br.x() - css_px(self.DOCK_RIGHT) - self.width(),
+                         br.y() - css_px(self.DOCK_BOTTOM) - self.height())
+        else:
+            tr = to_logical(right, top)
+            pos = QPoint(tr.x() - css_px(self.DOCK_RIGHT) - self.width(), tr.y() + css_px(self.DOCK_TOP))
+        pos = self._clamp(pos, wr)
         if pos != self.pos():
             self.move(pos)
+
+    def _clamp(self, pos: QPoint, wr: Rect) -> QPoint:
+        """Keep the card inside the browser window and inside that screen's work area, whatever
+        the page rect said (a bad one once put the cards off the left edge, 2026-11-15)."""
+        tl, br = to_logical(wr[0], wr[1]), to_logical(wr[2], wr[3])
+        left, top, right, bottom = tl.x(), tl.y(), br.x(), br.y()
+        g = self._work_area(QPoint((left + right) // 2, (top + bottom) // 2))
+        if g is not None:
+            left, top = max(left, g.left()), max(top, g.top())
+            right, bottom = min(right, g.x() + g.width()), min(bottom, g.y() + g.height())
+
+        def _fit(v: int, lo: int, hi: int) -> int:
+            return lo if hi < lo else max(lo, min(hi, v))   # too big to fit: keep its left / top edge
+
+        return QPoint(_fit(pos.x(), left, right - self.width()), _fit(pos.y(), top, bottom - self.height()))
+
+    @staticmethod
+    def _work_area(center: QPoint):
+        """The work area (logical) of the screen under the window's centre; tests stub it."""
+        screen = QGuiApplication.screenAt(center) or QGuiApplication.primaryScreen()
+        return screen.availableGeometry() if screen is not None else None
 
     def _set_hidden(self, reason: str) -> None:
         self.hidden_reason = reason

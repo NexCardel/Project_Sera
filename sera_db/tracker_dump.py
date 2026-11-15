@@ -19,6 +19,30 @@ from sera_db.common import (
 )
 
 
+SCK_LOGIN = "SCK_Login"         # capture_method of a login SCK kept (not a filing); see core/rotation/new_client.py
+REDACTED = "[hidden]"
+
+
+def redact_payload(raw):
+    """`raw` (a JSON string or a dict) with the SCK login password hidden (decision D2). The one
+    helper every reader of a tracker-dump payload goes through; a payload that holds no
+    `sck_login` comes back unchanged, untouched and unparsed."""
+    if isinstance(raw, str):
+        if "sck_login" not in raw:
+            return raw
+        try:
+            data = json.loads(raw)
+        except Exception:
+            return raw
+        out = redact_payload(data)
+        return json.dumps(out)
+    if isinstance(raw, dict):
+        login = raw.get("sck_login")
+        if isinstance(login, dict) and login.get("password"):
+            return {**raw, "sck_login": {**login, "password": REDACTED}}
+    return raw
+
+
 RECOVERED_NAME_MARK = "/-"      # follows the client name of a row the ARN fixer corrected
 
 COMPLETE_RANK = 4               # "Submitted & Verified" and above (get_status_rank)
@@ -281,15 +305,19 @@ class TrackerDumpMixin:
         # Only from a capture of THIS PC (see re_resolve_all_tracker_dumps): another PC's screen says
         # nothing about who this one was on.
         device = payload_device_name(raw_payload_json)
+        near = False                    # the client came from a capture made shortly before
         if not candidates and portal and device and not is_sgt_capture(capture_method):
             prox_cand = self._resolve_session_proximity_candidate(portal, now, max_seconds=900, session_id=session_id,
                                                                   device=device)
             if prox_cand:
                 candidates = [prox_cand]
+                near = True
 
         valid_id = None
         valid_gid = None
         unassigned_identity = None
+        matched_cand = None             # the candidate a saved client holds (core/sgt/sgt_evidence)
+        ex_json = None                  # the payload of the row this one replaces
 
         # 1. Authoritative Match: Resolve identity against master.db vault
         with self._connect() as m_conn:
@@ -307,6 +335,7 @@ class TrackerDumpMixin:
                 ).fetchone()
                 if row:
                     valid_id = row[0]
+                    matched_cand = cand_clean
                     if has_gid and len(row) > 1:
                         valid_gid = row[1]
                     break
@@ -603,6 +632,17 @@ class TrackerDumpMixin:
                                     break
                             except Exception:
                                 pass
+
+            # SGT's evidence block: how this row's client record was chosen, the blocks of the row it
+            # replaces, and the user's wrong-client mark. Never allowed to stop the row being written.
+            if isinstance(p_obj, dict):
+                try:
+                    from core.sgt import sgt_evidence
+                    if sgt_evidence.finish_row(p_obj, candidates, matched_cand, near,
+                                               bool(valid_id) and matched_cand is None, ex_json):
+                        raw_payload_json = json.dumps(p_obj, ensure_ascii=False)
+                except Exception as e:
+                    print(f"[database] insert_tracker_dump: evidence notice: {e}")
 
             cur = r_conn.execute(
                 """INSERT INTO tracker_dump
@@ -1363,7 +1403,7 @@ class TrackerDumpMixin:
                 "client_name": info["name"], "pan": info["pan"],
                 "service_id": r[3], "service_name": r[4] or "Portal", "portal": r[4] or "",
                 "period_label": r[5] or "", "arn_number": r[6] or "N/A", "capture_method": r[7] or "DOM_Tracker",
-                "status": r[8] or "submitted", "raw_payload_json": r[9] or "{}", "captured_by": r[10] or "System",
+                "status": r[8] or "submitted", "raw_payload_json": redact_payload(r[9] or "{}"), "captured_by": r[10] or "System",
                 "created_at": r[11], "dataset_key": r[12] if len(r) > 12 else "", "notes": r[13] if len(r) > 13 else ""
             }
             if slim:
@@ -1388,6 +1428,92 @@ class TrackerDumpMixin:
         # Default chronological entry organisation: latest entry at top
         results.sort(key=lambda x: (str(x.get("created_at") or ""), x.get("id") or 0), reverse=True)
         return results
+
+    def get_sck_login(self, dump_id: int) -> dict:
+        """The unredacted `sck_login` block (user_id, identity, name_found, password) of an
+        SCK_Login row, for creating the client from it. {} for any other row."""
+        with self._connect_raw() as conn:
+            row = conn.execute("SELECT capture_method, raw_payload_json FROM tracker_dump WHERE id = ?",
+                               (dump_id,)).fetchone()
+        if not row or row[0] != SCK_LOGIN:
+            return {}
+        try:
+            data = json.loads(row[1] or "{}")
+        except Exception:
+            return {}
+        login = data.get("sck_login") if isinstance(data, dict) else None
+        return dict(login) if isinstance(login, dict) else {}
+
+    def strip_sck_password(self, dump_id: int) -> bool:
+        """Remove `sck_login.password` from the row once the client was saved with it."""
+        with self._connect_raw() as conn:
+            row = conn.execute("SELECT raw_payload_json FROM tracker_dump WHERE id = ? AND capture_method = ?",
+                               (dump_id, SCK_LOGIN)).fetchone()
+            if not row:
+                return False
+            try:
+                data = json.loads(row[0] or "{}")
+            except Exception:
+                return False
+            login = data.get("sck_login") if isinstance(data, dict) else None
+            if not isinstance(login, dict) or "password" not in login:
+                return False
+            login.pop("password", None)
+            login["password_moved_to_client"] = True
+            conn.execute("UPDATE tracker_dump SET raw_payload_json = ? WHERE id = ?",
+                         (json.dumps(data), dump_id))
+            conn.commit()
+        return True
+
+    # ── SGT evidence (core/sgt/sgt_evidence.py) ──────────────────────────────────
+    def is_tracker_dump_marked_wrong(self, dump_id: int) -> bool:
+        with self._connect_raw() as conn:
+            row = conn.execute("SELECT raw_payload_json FROM tracker_dump WHERE id = ?", (dump_id,)).fetchone()
+        from core.sgt import sgt_evidence
+        return bool(row) and sgt_evidence.is_marked_wrong(row[0] or "")
+
+    def mark_tracker_dump_wrong_client(self, dump_id: int, wrong: bool = True) -> bool:
+        """Sets or clears the user's "this row is on the wrong client" mark. It lives in the payload,
+        so Sera Sync carries it to every PC. Nothing else about the row changes."""
+        from core.sgt import sgt_evidence
+        from core.vsdc.vsdc_alerts import device_name
+        with self._connect_raw() as conn:
+            row = conn.execute("SELECT raw_payload_json FROM tracker_dump WHERE id = ?", (dump_id,)).fetchone()
+            if not row:
+                return False
+            new_json = sgt_evidence.set_wrong_mark(row[0], wrong, device_name(),
+                                                   datetime.datetime.now().isoformat(timespec="seconds"))
+            if new_json is None:
+                return False
+            conn.execute("UPDATE tracker_dump SET raw_payload_json = ? WHERE id = ?", (new_json, dump_id))
+        self._bump_sync_revision_if_configured()
+        return True
+
+    def sgt_evidence_entries(self) -> list[dict]:
+        """The SGT tracker rows worth a look, for the evidence export: rows marked wrong, rows whose
+        evidence block carries a flag, and rows sitting on a client that does not hold the row's own
+        PAN / GSTIN (this last check also covers rows older than the evidence block)."""
+        from core.sgt import sgt_evidence
+        cols = ("id", "client_id", "unassigned_identity", "portal", "period_label", "arn_number",
+                "capture_method", "status", "raw_payload_json", "captured_by", "created_at", "dataset_key")
+        with self._connect_raw() as r_conn:
+            rows = [dict(zip(cols, r)) for r in r_conn.execute(
+                f"SELECT {', '.join(cols)} FROM tracker_dump WHERE capture_method LIKE 'SGT%' "
+                f"AND {NOT_CARRIER_SQL} ORDER BY created_at DESC, id DESC").fetchall()]
+        ids_by_client = {}
+        wanted = {r["client_id"] for r in rows if r["client_id"]}
+        if wanted:
+            with self._connect() as m_conn:
+                for cid, value in m_conn.execute("SELECT client_id, value FROM client_values").fetchall():
+                    if cid in wanted:
+                        ids_by_client.setdefault(cid, set()).update(sgt_evidence.id_forms([value]))
+        out = []
+        for r in rows:
+            cid = r["client_id"]
+            entry = sgt_evidence.export_entry(r, ids_by_client.get(cid, set()) if cid else None)
+            if entry is not None:
+                out.append(entry)
+        return out
 
     def get_tracker_dump_media(self, dump_id: int) -> dict:
         with self._connect_raw() as conn:

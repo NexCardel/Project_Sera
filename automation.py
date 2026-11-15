@@ -393,14 +393,33 @@ def update_scc_card(attempt_id: str, failed: list, next_label, message: str, sto
 
 # ── SCK: the persistent new-password card ─────────────────────────────────────
 
-def show_sck_widget(service: dict, client_id, client_name: str, portal: str = "") -> bool:
-    """SCK: a login the portal refused. Ask for the NEW password for `client_id` in the portal's
-    own tab. Carries no password and no countdown: the card stays until the desktop clears it
-    (saved), the extension reaches the service's dashboard page, or staff press x. Broadcast to
-    every connected browser - each one shows it only in a tab on the service's login site."""
-    from ui import ws_bridge
+def _sck_os_engine():
+    """The OS-mode SCK engine (None before the app installed it)."""
+    from core.os_assist import sck_engine
+    return sck_engine.default()
+
+
+def show_sck_widget(service: dict, client_id, client_name: str, portal: str = "", hwnd: int = 0,
+                    attempt_id: str = "", kind: str = "rotation", user_id: str = "",
+                    identity: str = "", edit: bool = False) -> bool:
+    """SCK: a login the portal refused (or an ID Sera does not know). Ask for the NEW password in
+    the portal's own browser window. Carries no password and no countdown: the card stays until the
+    desktop clears it (saved), the service's dashboard page is reached, or staff press x.
+
+    Engine `os`: a docked desktop card on browser window `hwnd` (core/os_assist/sck_engine.py);
+    nothing is sent to the extension. Engine `extension`: broadcast to every connected browser -
+    each one shows it only in a tab on the service's login site."""
     if not service or service.get("id") is None:
         return False
+    if assist_engine() == "os":
+        eng = _sck_os_engine()
+        att = eng.attempts.by_id(attempt_id) if eng is not None and attempt_id else None
+        if eng is None or att is None or not att.hwnd:
+            return False
+        svc = dict(service)
+        eng.call(lambda: eng.show(att, svc, edit))
+        return True
+    from ui import ws_bridge
     bridge = ws_bridge.get_active_bridge()
     if not bridge:
         return False
@@ -412,38 +431,68 @@ def show_sck_widget(service: dict, client_id, client_name: str, portal: str = ""
         "client_name": str(client_name or ""),
         "login_page_link": service.get("login_page_link", ""),
         "dashboard_page_link": service.get("dashboard_page_link", ""),
+        "kind": str(kind or "rotation"),
+        "attempt_id": str(attempt_id or ""),
+        "user_id": str(user_id or ""),
+        "identity": str(identity or ""),
     }
     return bridge.broadcast(payload) > 0
 
 
-def hide_sck_widget(service_id) -> bool:
-    """SCK: take the card for this service down in every browser (saved, dismissed, or the
-    service's dashboard page was reached)."""
+def hide_sck_widget(service_id, attempt_id: str = "") -> bool:
+    """SCK: take the card down (saved, dismissed, or the service's dashboard page was reached).
+    `attempt_id` limits it to one card in OS mode; without it every card of the service goes."""
+    if service_id is None:
+        return False
+    if assist_engine() == "os":
+        eng = _sck_os_engine()
+        if eng is None:
+            return False
+        ids = [attempt_id] if attempt_id else [a.attempt_id for a in eng.attempts.for_service(service_id)]
+        for aid in ids:
+            eng.call(lambda aid=aid: eng.hide(aid))
+        return bool(ids)
     from ui import ws_bridge
     bridge = ws_bridge.get_active_bridge()
-    if not bridge or service_id is None:
+    if not bridge:
         return False
     return bridge.broadcast({"type": "sck_clear", "service_id": service_id}) > 0
 
 
-def sck_save_result(service_id, ok: bool, message: str = "") -> bool:
+def sck_save_result(service_id, ok: bool, message: str = "", attempt_id: str = "") -> bool:
     """SCK: tells the card whether the new password was saved. `message` is staff wording only -
     never a password."""
+    if service_id is None:
+        return False
+    if assist_engine() == "os":
+        eng = _sck_os_engine()
+        if eng is None or not attempt_id:
+            return False
+        eng.call(lambda: eng.save_result(attempt_id, bool(ok), str(message or "")))
+        return True
     from ui import ws_bridge
     bridge = ws_bridge.get_active_bridge()
-    if not bridge or service_id is None:
+    if not bridge:
         return False
     return bridge.broadcast({"type": "sck_save_result", "service_id": service_id,
                              "ok": bool(ok), "message": str(message or "")}) > 0
 
 
-def sck_outcome(service_id, kind: str) -> bool:
+def sck_outcome(service_id, kind: str, attempt_id: str = "") -> bool:
     """SCK: tell the card one page outcome (worked / wrong_password / locked) the desktop
-    watcher read on the portal. Metadata only - never a password. Broadcast to every connected
-    browser; each card ignores a service that is not its own."""
+    watcher read on the portal. Metadata only - never a password. Extension: broadcast to every
+    connected browser; each card ignores a service that is not its own."""
+    if service_id is None:
+        return False
+    if assist_engine() == "os":
+        eng = _sck_os_engine()
+        if eng is None or not attempt_id:
+            return False
+        eng.call(lambda: eng.outcome(attempt_id, str(kind or "")))
+        return True
     from ui import ws_bridge
     bridge = ws_bridge.get_active_bridge()
-    if not bridge or service_id is None:
+    if not bridge:
         return False
     return bridge.broadcast({"type": "sck_outcome", "service_id": service_id,
                              "kind": str(kind or "")}) > 0

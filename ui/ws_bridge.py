@@ -196,8 +196,9 @@ class WSBridge(QObject):
     # Carries the password - the handler must never log, print or store the message.
     sck_candidate_received = Signal(dict)
     # SCK: internal only - one page outcome from the watcher (SCC-U's thread), marshalled to the
-    # Qt thread. (service_id, kind) where kind is worked / wrong_password / locked.
-    sck_outcome_received = Signal(object, str)
+    # Qt thread. (service_id, kind, hwnd, identity, profile) where kind is worked / wrong_password /
+    # locked, hwnd the browser window it was seen in and profile what SGT read (a name, an ID).
+    sck_outcome_received = Signal(object, str, object, str, object)
     extension_settings_updated_received = Signal(dict)
 
     # automation.py calls broadcast()/send_first() from plain background threads (autofill

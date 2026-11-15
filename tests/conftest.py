@@ -95,6 +95,14 @@ def _assist_engine_from_tmp(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _dock_cards_ignore_the_test_screen(monkeypatch):
+    """OS Assist cards clamp themselves to the screen's work area. The tests' fake browser windows
+    (e.g. 100,50 - 1300,850) are bigger than the screen Qt gives a test run, so that clamp is off
+    here; the window clamp stays on. test_os_assist_dock_corner tests the screen clamp itself."""
+    monkeypatch.setattr("ui.os_assist.dock_card.DockCard._work_area", staticmethod(lambda center: None))
+
+
+@pytest.fixture(autouse=True)
 def _reconciliation_log_in_tmp(monkeypatch, tmp_path):
     """The accountant reconciliation log (core/vsdc/vsdc247_reconciler) goes to the test's own
     folder, never to the real ~/AmanAssociates_Sera/logs/gst_reconciliation.txt."""

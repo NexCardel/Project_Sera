@@ -110,7 +110,7 @@ def test_edit_opens_sck(app):
     c = make_card(card_mod.ScaCard, 11, 7, "Fict Traders", "A. Owner", "GST", client_id=5,
                   sck_handler=calls.append)
     c.edit_btn.click()
-    assert calls == [{"client_id": 5, "service_id": 7, "portal": "GST"}]
+    assert calls == [{"client_id": 5, "service_id": 7, "portal": "GST", "hwnd": BROWSER}]
     c.dismiss()
 
 

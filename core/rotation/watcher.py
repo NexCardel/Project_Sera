@@ -24,7 +24,7 @@ the dashboard page is reached, the portal itself says the login worked, the pass
 (``mark_resolved``) or ``PENDING_TTL_SEC`` passes. The card is persistent: no countdown, no
 repeated firing.
 
-While a failure is pending, ``on_outcome(service_id, kind)`` reports a retry rejection
+While a failure is pending, ``on_outcome(service_id, kind, hwnd, identity, profile)`` reports a retry rejection
 (``wrong_password`` / ``locked``) and the success transition (``worked``) to the desktop
 card. A ``worked`` on a dashboard page is reported even with nothing pending, because the card
 can stay open after its pending failure was cleared or expired.
@@ -41,13 +41,30 @@ Captcha wording is stripped before classification: a bad CAPTCHA is not a bad pa
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 from urllib.parse import urlsplit
 
 from core.scc.scc_rules import RuleSet, get_rules
+
+PAN_RE = re.compile(r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+TAN_RE = re.compile(r"^[A-Z]{4}[0-9]{5}[A-Z]$")
+GSTIN_RE = re.compile(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$")
+
+
+def pk_identity(value: str) -> str:
+    """The PK-shaped identity a typed/read value stands for, upper-case: a PAN or TAN as is, the PAN
+    inside a GSTIN; "" when the value is none of those."""
+    v = str(value or "").strip().upper()
+    if PAN_RE.match(v) or TAN_RE.match(v):
+        return v
+    if GSTIN_RE.match(v):
+        return v[2:12]
+    return ""
+
 
 PENDING_TTL_SEC = 900.0     # 15 min: a card nobody resolved stops blocking new ones
 
@@ -102,6 +119,14 @@ def on_site(url: str, link: str) -> bool:
     return host_match and _under(cur[1], ref[1])
 
 
+def same_site(url: str, link: str) -> bool:
+    """True when `url` is on the same host as `link` (any page of it)."""
+    cur, ref = _parts(url), _parts(link)
+    if not cur or not ref:
+        return False
+    return cur[0] == ref[0] or cur[0].endswith("." + ref[0]) or ref[0].endswith("." + cur[0])
+
+
 def on_dashboard(url: str, link: str) -> bool:
     """True when `url` is the service's dashboard/welcome page (or a page below it)."""
     return bool(link) and on_site(url, link)
@@ -120,6 +145,9 @@ class SckFailure:
     rule: str
     line: str
     pan: str = ""                    # the PAN/GSTIN read on the page, when there is one
+    identity: str = ""               # the PK-shaped ID read on the page ("" when none)
+    user_id: str = ""                # the login ID read on the page ("" when none)
+    unregistered: bool = False       # an ID that belongs to no client (new-client offer)
 
 
 Lookup = Callable[[Dict[str, Any], Any], Tuple[Optional[int], str]]
@@ -134,7 +162,8 @@ class SckWatcher:
                  resolve_client: Optional[Lookup] = None,
                  on_failure: Optional[Callable[[SckFailure], Any]] = None,
                  on_clear: Optional[Callable[[SckFailure], Any]] = None,
-                 on_outcome: Optional[Callable[[int, str], Any]] = None,
+                 on_outcome: Optional[Callable[..., Any]] = None,
+                 on_unregistered: Optional[Callable[[SckFailure], Any]] = None,
                  rules: Optional[Callable[[], RuleSet]] = None,
                  ttl_sec: float = PENDING_TTL_SEC,
                  monotonic: Callable[[], float] = time.monotonic) -> None:
@@ -143,6 +172,7 @@ class SckWatcher:
         self._on_failure = on_failure
         self._on_clear = on_clear
         self._on_outcome = on_outcome
+        self._on_unregistered = on_unregistered
         self._rules = rules or get_rules
         self._ttl = float(ttl_sec)
         self._now = monotonic
@@ -150,16 +180,20 @@ class SckWatcher:
         # service id -> (fired at, the SckFailure it fired with). One card per service: the page
         # card is per service too (one host element), so a second client on the same service
         # would only replace the first one's card.
-        self._pending: Dict[int, Tuple[float, SckFailure]] = {}
+        self._pending: Dict[Tuple[int, int], Tuple[float, SckFailure]] = {}
         # (service id, outcome kind) -> monotonic time of the last on_outcome call. The card
         # needs to hear about a retry rejection and the dashboard transition while staff are
         # still working; the page keeps showing the same line, so it must be throttled.
-        self._last_outcome: Dict[Tuple[int, str], float] = {}
+        self._last_outcome: Dict[Tuple[int, int, str], float] = {}
         # service id -> (kind, line) of the page last read. A rejection line that is still on
         # screen is not a new rejection: the card would otherwise call the password it just filled
         # "rejected" while staff are still solving the CAPTCHA. The line is forgotten as soon as
         # the page shows something else (a submit reloads the page).
-        self._last_page_outcome: Dict[int, Tuple[str, str]] = {}
+        self._last_page_outcome: Dict[Tuple[int, int], Tuple[str, str]] = {}
+        # (service id, hwnd, identity) already offered as a new client; (service id, identity)
+        # staff dismissed - not offered again for the run.
+        self._offered: set = set()
+        self._declined: set = set()
 
     # ── Read side (any thread) ───────────────────────────────────────────────────
     def pending(self) -> List[SckFailure]:
@@ -167,13 +201,23 @@ class SckWatcher:
         with self._lock:
             return [f for _, f in self._pending.values()]
 
-    def mark_resolved(self, service_id: Any, client_id: Any = None) -> None:
-        """The password was saved (or staff dealt with it): the next failure may fire again."""
+    def mark_resolved(self, service_id: Any, client_id: Any = None, hwnd: Any = None) -> None:
+        """The password was saved (or staff dealt with it): the next failure may fire again.
+        `hwnd` limits it to that window; None = every window of the service."""
         sid = _as_int(service_id)
         if sid is None:
             return
         with self._lock:
-            self._pending.pop(sid, None)
+            for key in [k for k in self._pending if k[0] == sid and (hwnd is None or k[1] == int(hwnd or 0))]:
+                self._pending.pop(key, None)
+
+    def decline_offer(self, service_id: Any, identity: str) -> None:
+        """Staff dismissed the new-client card: do not offer this ID again for the run."""
+        sid = _as_int(service_id)
+        ident = pk_identity(identity)
+        if sid is not None and ident:
+            with self._lock:
+                self._declined.add((sid, ident))
 
     def reset_outcome_throttle(self, service_id: Any) -> None:
         """A new attempt started for this service (staff pressed Fill & Test). Clear the time
@@ -206,20 +250,35 @@ class SckWatcher:
         sid = _as_int(svc.get("id"))
         if sid is None:
             return "no_service"
+        hwnd = int(hwnd or 0)
+        key = (sid, hwnd)
 
         url = str(getattr(obs, "url", "") or "")
         if on_dashboard(url, svc.get("dashboard_page_link")):
-            cleared = self._clear(sid)
+            cleared = self._clear(key)
             if cleared is not None:
                 self._send(self._on_clear, cleared)
             # The card may still be open after its pending failure was cleared or expired,
             # so the dashboard is also reported as an outcome rather than only through on_clear.
-            self._notify(sid, "worked", throttle_sec=10.0)
+            self._notify(key, "worked", 10.0, obs)
             return "cleared" if cleared is not None else None
 
         login_link = (svc.get("login_page_link") or "").strip()
         if login_link and not on_site(url, login_link):
-            return None
+            # Off the login route. Most services have no dashboard link, so a successful login is
+            # recognised here by the portal's own logged-in wording on any page of the same site.
+            # Only "worked" counts off the login page: a failure is read on the login page alone.
+            if not same_site(url, login_link):
+                return None
+            clean = [line for line in (getattr(obs, "lines", ()) or ()) if not _is_captcha_line(line)]
+            out = self._rules().classify(clean, url, str(getattr(obs, "portal", "") or ""))
+            if out is None or out.kind != "worked":
+                return None
+            cleared = self._clear(key)
+            if cleared is not None:
+                self._send(self._on_clear, cleared)
+            self._notify(key, "worked", 10.0, obs)
+            return "cleared" if cleared is not None else None
 
         # On the login page: keep reading it on every tick, so a refusal that appears and is
         # replaced quickly is still seen (SGT otherwise re-reads only every 15 s).
@@ -229,89 +288,141 @@ class SckWatcher:
             except Exception:
                 pass
 
-        pending = self._is_pending(sid)
+        pending = self._is_pending(key)
         clean = [line for line in (getattr(obs, "lines", ()) or ()) if not _is_captcha_line(line)]
         out = self._rules().classify(clean, url, str(getattr(obs, "portal", "") or ""))
         if out is None:
             with self._lock:
-                self._last_page_outcome.pop(sid, None)
-            return "pending" if pending else None
+                self._last_page_outcome.pop(key, None)
+            if pending:
+                return "pending"
+            return self._offer_unregistered(svc, sid, hwnd, obs, url)
 
         page_key = (out.kind, out.line)
         with self._lock:
-            same_page = self._last_page_outcome.get(sid) == page_key
-            self._last_page_outcome[sid] = page_key
+            same_page = self._last_page_outcome.get(key) == page_key
+            self._last_page_outcome[key] = page_key
 
         if out.kind == "worked":
             # The portal's own wording says the login succeeded (some portals keep the login
             # route and swap the form for a welcome page). The failure is resolved and the
             # desktop saves the candidate the card filled.
-            cleared = self._clear(sid)
+            cleared = self._clear(key)
             if cleared is not None:
                 self._send(self._on_clear, cleared)
-            self._notify(sid, "worked", throttle_sec=10.0)
+            self._notify(key, "worked", 10.0, obs)
             return "cleared" if cleared is not None else None
 
         if pending:
             # The card already exists; it still needs to know a retry was rejected - but
             # only when the page actually changed, not while the old error line is still shown.
             if out.kind in ("wrong_password", "locked") and not same_page:
-                self._notify(sid, out.kind, throttle_sec=5.0)
+                self._notify(key, out.kind, 5.0, obs)
             return "pending"
+
+        if out.kind == "neutral":
+            # A step that says nothing about the password (the Income Tax password page always
+            # shows its "Secure Access Message"): the same as no verdict for the new-client offer.
+            return self._offer_unregistered(svc, sid, hwnd, obs, url)
 
         if out.kind != "wrong_password":
             return None
 
         client_id, client_name = self._identify(svc, obs)
-        portal = str(getattr(obs, "portal", "") or svc.get("name") or "").strip()
-        pan = profile_value(obs, "pan")
-        if not pan:
-            gstin = profile_value(obs, "gstin")
-            pan = gstin[2:12] if len(gstin) == 15 else ""
-        failure = SckFailure(service=dict(svc), service_id=sid, client_id=client_id,
-                            client_name=client_name, portal=portal, hwnd=int(hwnd or 0),
-                            url=url, rule=out.rule, line=out.line, pan=pan)
+        failure = self._failure(svc, sid, client_id, client_name, hwnd, obs, url, out.rule, out.line,
+                                unregistered=client_id is None)
+        if client_id is None and failure.identity:
+            if (sid, failure.identity) in self._declined:
+                return "no_client"
+            with self._lock:
+                self._offered.add((sid, hwnd, failure.identity))
         with self._lock:
-            self._pending[sid] = (self._now(), failure)
+            self._pending[key] = (self._now(), failure)
         try:
             if self._on_failure is not None:
                 self._on_failure(failure)
         except Exception:
             with self._lock:
-                self._pending.pop(sid, None)
+                self._pending.pop(key, None)
             return None
         return "wrong_password" if client_id is not None else "no_client"
 
-    # ── Internals ────────────────────────────────────────────────────────────────
-    def _is_pending(self, sid: int) -> bool:
+    def _failure(self, svc, sid, client_id, client_name, hwnd, obs, url, rule, line,
+                 unregistered=False) -> SckFailure:
+        portal = str(getattr(obs, "portal", "") or svc.get("name") or "").strip()
+        pan = profile_value(obs, "pan")
+        if not pan:
+            gstin = profile_value(obs, "gstin")
+            pan = gstin[2:12] if len(gstin) == 15 else ""
+        return SckFailure(service=dict(svc), service_id=sid, client_id=client_id,
+                          client_name=client_name, portal=portal, hwnd=int(hwnd or 0),
+                          url=url, rule=rule, line=line, pan=pan, identity=page_identity(obs),
+                          user_id=page_user_id(obs), unregistered=unregistered)
+
+    def _offer_unregistered(self, svc, sid: int, hwnd: int, obs: Any, url: str) -> Optional[str]:
+        """On a login page with no verdict: an ID that is PK-shaped and belongs to no client is
+        offered once per (service, window, ID) - and not again once staff dismissed it."""
+        if self._on_unregistered is None:
+            return None
+        ident = page_identity(obs)
+        if not ident:
+            return None
+        if (sid, ident) in self._declined:
+            return None
         with self._lock:
-            hit = self._pending.get(sid)
+            if (sid, hwnd, ident) in self._offered:
+                return None
+        client_id, _name = self._identify(svc, obs)
+        if client_id is not None:
+            return None
+        with self._lock:
+            if (sid, hwnd, ident) in self._offered:
+                return None
+            self._offered.add((sid, hwnd, ident))
+        failure = self._failure(svc, sid, None, "", hwnd, obs, url, "unregistered", "", unregistered=True)
+        with self._lock:
+            self._pending[(sid, hwnd)] = (self._now(), failure)
+        try:
+            self._on_unregistered(failure)
+        except Exception:
+            with self._lock:
+                self._pending.pop((sid, hwnd), None)
+            return None
+        return "unregistered"
+
+    # ── Internals ────────────────────────────────────────────────────────────────
+    def _is_pending(self, key: Tuple[int, int]) -> bool:
+        with self._lock:
+            hit = self._pending.get(key)
             if hit is None:
                 return False
             if self._now() - hit[0] <= self._ttl:
                 return True
-            self._pending.pop(sid, None)
+            self._pending.pop(key, None)
             return False
 
-    def _clear(self, sid: int) -> Optional[SckFailure]:
+    def _clear(self, key: Tuple[int, int]) -> Optional[SckFailure]:
         with self._lock:
-            hit = self._pending.pop(sid, None)
+            hit = self._pending.pop(key, None)
         return hit[1] if hit else None
 
-    def _notify(self, sid: int, kind: str, throttle_sec: float) -> None:
+    def _notify(self, key: Tuple[int, int], kind: str, throttle_sec: float, obs: Any = None) -> None:
         """Send one page outcome to the desktop (for the card), at most once per `throttle_sec`
-        per kind."""
+        per kind and window. Carries the window, the identity read on the page and the page's
+        profile (a name, for a new client): metadata only, never a password."""
         if self._on_outcome is None:
             return
+        sid, hwnd = key
         now = self._now()
-        key = (sid, kind)
+        tkey = (sid, hwnd, kind)
         with self._lock:
-            last = self._last_outcome.get(key)
+            last = self._last_outcome.get(tkey)
             if last is not None and now - last < throttle_sec:
                 return
-            self._last_outcome[key] = now
+            self._last_outcome[tkey] = now
         try:
-            self._on_outcome(sid, kind)
+            self._on_outcome(sid, kind, hwnd, page_identity(obs) if obs is not None else "",
+                             profile_dict(obs) if obs is not None else {})
         except Exception:
             pass
 
@@ -369,7 +480,7 @@ def profile_value(obs: Any, key: str) -> str:
         hit = (result.get("profile") or {}).get(key) or {}
     except AttributeError:
         hit = {}
-    if isinstance(hit, dict):
+    if isinstance(hit, Mapping):         # SGT's observations are frozen (MappingProxyType)
         val = str(hit.get("value") or "").strip().upper()
         if val:
             return val
@@ -378,6 +489,41 @@ def profile_value(obs: Any, key: str) -> str:
         return str(profile.get(key) or "").strip().upper()
     except AttributeError:
         return ""
+
+
+def page_identity(obs: Any) -> str:
+    """The PK-shaped identity the page shows: the PAN, then the PAN inside a GSTIN, then a PAN /
+    GSTIN / TAN typed as the login ID. "" when there is none."""
+    for key in ("pan", "gstin", "tan", "username", "userid"):
+        ident = pk_identity(profile_value(obs, key))
+        if ident:
+            return ident
+    return ""
+
+
+def page_user_id(obs: Any) -> str:
+    return profile_value(obs, "username") or profile_value(obs, "userid")
+
+
+def profile_dict(obs: Any) -> Dict[str, str]:
+    """Everything SGT read as {key: value} (strings), the page result first."""
+    out: Dict[str, str] = {}
+    profile = getattr(obs, "profile", None) or {}
+    try:
+        for k, v in profile.items():
+            if v not in (None, ""):
+                out[str(k)] = str(v)
+    except AttributeError:
+        pass
+    result = getattr(obs, "result", None) or {}
+    try:
+        for k, hit in (result.get("profile") or {}).items():
+            val = hit.get("value") if isinstance(hit, Mapping) else hit
+            if val not in (None, ""):
+                out[str(k)] = str(val)
+    except AttributeError:
+        pass
+    return out
 
 
 def _as_int(value: Any) -> Optional[int]:
