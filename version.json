@@ -1,8 +1,8 @@
 {
-  "version": "2.13.8",
+  "version": "2.13.9",
   "min_required_version": "2.9.9",
   "mandatory": true,
-  "download_url": "https://github.com/NexCardel/Project_Sera/releases/download/v2.13.8/Amas_Sera_Setup_v2.13.8.exe",
-  "sha256": "36ef54d833f39a5579bb23fe104a4b5b24faeab5f5e91df83fe66490bc1a4661",
-  "release_notes": "Project Sera v2.13.8 - OS assist fill/locate/launcher updates and UI polish"
+  "download_url": "https://github.com/NexCardel/Project_Sera/releases/download/v2.13.9/Amas_Sera_Setup_v2.13.9.exe",
+  "sha256": "95a378e1b6220091b8b2aa9a2c8f565333a851c50ee1c47e41f016fa41317147",
+  "release_notes": "Project Sera v2.13.9 - SCK rotation rework, SGT v2 evidence, OS-assist SCK card, and UI polish"
 }
