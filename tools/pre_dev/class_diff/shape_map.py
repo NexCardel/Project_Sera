@@ -5,8 +5,13 @@ Builds on render.py --outline: every container (a node with children and a box i
 shape (its key without the [n] counters: types, ids, classes) and a loose shape (types only). This tool
 groups the containers of one page by shape and reads the groups the way a person reads the outline view:
 
-  record set   a shape with 2+ instances that do not contain each other, each hold 2+ texts and are alike
-               (fewest texts >= LIKE x most), and that does not sit inside another record set (top level).
+  record set   found from the boxes, not from types, ids or classes: 2+ containers of 2+ texts that line up
+               (one column: same left edge and width; one row: same top and height; a grid links both
+               ways; the size along the line is free, so a card with one more line still belongs) and
+               whose contents match (card_match.structural_score >= MATCH_MIN). Two page bands of one
+               width do not match inside and are no set. A set inside another set's members is a part of
+               those records (top level only); a set of cards that leaves one card out loses to the part
+               found in every card. The members may be of several strict shapes (a class that differs).
   layout       column (same left edge), row (same top), grid (both repeat), scattered; the gaps between
                neighbours and the spread of the sizes.
   lift         when the instances' ancestors one level or more up are still one per instance, disjoint and
@@ -24,7 +29,9 @@ bytes. The console gets counts, sizes and the last two steps of each shape (temp
 page text. The HTML map draws text boxes as grey bars, never their text.
 
 Usage:
-    python tools/pre_dev/class_diff/shape_map.py FILE [--snapshot N] [--doc N] [--no-match] [--open]
+    python tools/pre_dev/class_diff/shape_map.py FILE [--snapshot N] [--doc N] [--no-match]
+                                                 [--match-min PCT] [--open]
+--match-min: how much two lined-up boxes must match inside to be one record set (default MATCH_MIN).
 FILE: a comp page, a key_probe capture or read (.json), or a record file (.jsonl, with --record N).
 Writes output/shape_map_<file>.html.
 """
@@ -44,9 +51,9 @@ import render  # noqa: E402
 
 TOL = 4                 # pixels: two edges this close are the same line (render boxes are whole pixels)
 MIN_TEXTS = 2           # a record holds at least this many drawn texts
-LIKE = 0.5              # PROVISIONAL, not measured: members are alike when fewest texts >= LIKE x most texts.
-                        # Keeps a generic layout wrapper that repeats with unlike contents (a page "row" of 3
-                        # texts and one of 23) from being a record set that swallows the real one inside it.
+MATCH_MIN = 50.0        # PROVISIONAL: two lined-up boxes are the same record when their leaves match this much
+                        # (card_match.structural_score, percent). Keeps two page bands of one width (a header
+                        # strip and a footer strip) from being a record set.
 
 
 def page_containers(raw: List[Dict[str, Any]], comp_view: str = "present") -> Dict[str, Any]:
@@ -124,8 +131,10 @@ def layout(insts: List[Dict[str, Any]]) -> Dict[str, Any]:
             "w_spread": _spread([e["w"] for e in insts]), "h_spread": _spread([e["h"] for e in insts])}
 
 
-def infer(pc: Dict[str, Any], match: bool = True) -> Dict[str, Any]:
-    """Record sets, their parts and nested lists, lifts and loose merges (module doc)."""
+def infer(pc: Dict[str, Any], match: bool = True, match_min: Optional[float] = None) -> Dict[str, Any]:
+    """Record sets, their parts and nested lists, lifts and loose merges (module doc). match_min: the
+    percentage two lined-up boxes must match inside (None = MATCH_MIN)."""
+    match_min = MATCH_MIN if match_min is None else float(match_min)
     ols, by_k = pc["ols"], pc["by_k"]
     anc = {e["k"]: set(_ancestors(by_k, e["k"])) for e in ols}
     groups: Dict[int, List[Dict[str, Any]]] = {}
@@ -138,20 +147,19 @@ def infer(pc: Dict[str, Any], match: bool = True) -> Dict[str, Any]:
 
     repeated = {sh: sorted(v, key=lambda e: (e["y"], e["x"], e["k"])) for sh, v in groups.items()
                 if len(v) >= 2 and disjoint(v) and min(e["nt"] for e in v) >= MIN_TEXTS}
-    alike = {sh: v for sh, v in repeated.items()
-             if min(e["nt"] for e in v) >= LIKE * max(e["nt"] for e in v)}
-    rec_of = {e["k"]: sh for sh, v in alike.items() for e in v}
 
-    # top level: an alike repeated shape with no ancestor that is a member of another alike one
-    top = [sh for sh, v in alike.items() if not any(a in rec_of for e in v for a in anc[e["k"]])]
     sets = []
-    for sh in sorted(top, key=lambda s: (-sum(e["nt"] for e in repeated[s]), s)):
-        insts = repeated[sh]
+    found, weakest, boxes = _box_sets(pc, anc, match_min)
+    for insts in _top_sets(found, anc):
+        n_sh: Dict[int, int] = {}
+        for e in insts:
+            n_sh[e["sh"]] = n_sh.get(e["sh"], 0) + 1
+        sh = min(n_sh, key=lambda s: (-n_sh[s], s))          # the members' most common strict shape
         members = {e["k"] for e in insts}
         # parts and nested lists: repeated shapes inside the members, counted per member
         inner = []
         for sh2, v2 in sorted(repeated.items()):
-            if sh2 == sh:
+            if sh2 in n_sh:
                 continue
             per = {m: 0 for m in members}
             outside = 0
@@ -180,11 +188,106 @@ def infer(pc: Dict[str, Any], match: bool = True) -> Dict[str, Any]:
         inner = _tree_order(inner, inner_ks, repeated, anc)
         lift = _lift(pc, insts, anc)
         sets.append({"shape": sh, "tail": _tail(pc["shapes"][sh]), "type": insts[0]["t"], "count": len(insts),
+                     "strict_shapes": len(n_sh), "link_min": weakest[min(e["k"] for e in insts)],
                      "texts": [e["nt"] for e in insts], "members": [e["k"] for e in insts],
                      "layout": layout(insts), "lift": lift, "inner": inner,
                      "match": card_match.match_set([e["k"] for e in insts], pc["nodes"], pc["flat"])
                      if match and "nodes" in pc else None})
-    return {"sets": sets, "merges": _loose_merges(pc, groups, anc), "repeated": len(repeated)}
+    return {"sets": sets, "merges": _loose_merges(pc, groups, anc), "repeated": len(repeated), "boxes": boxes}
+
+
+def _lined_up(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+    """Two boxes of one column (same left edge and width, one below the other) or of one row (same top
+    and height, side by side). The size along the line is free: a card with one more line is taller."""
+    col = (abs(a["x"] - b["x"]) <= TOL and abs(a["w"] - b["w"]) <= TOL
+           and (a["y"] + a["h"] <= b["y"] + TOL or b["y"] + b["h"] <= a["y"] + TOL))
+    row = (abs(a["y"] - b["y"]) <= TOL and abs(a["h"] - b["h"]) <= TOL
+           and (a["x"] + a["w"] <= b["x"] + TOL or b["x"] + b["w"] <= a["x"] + TOL))
+    return col or row
+
+
+def _box_sets(pc: Dict[str, Any], anc: Dict[int, set], match_min: float = MATCH_MIN):
+    """Candidate record sets from the boxes alone, confirmed by what is inside them. Two containers of 2+
+    texts are linked when they line up (_lined_up), neither holds the other, and their leaves match
+    (card_match.structural_score >= match_min). A set is a group of linked containers, so a grid is one
+    set: its rows link across, its columns link down. No type, id or class is read here.
+
+    Returns (sets, weakest, boxes): weakest maps a set's lowest member index to the lowest score among the
+    links that joined it; boxes counts the pairs (lined up, scored, linked) and holds the highest score
+    that was turned down, which shows how near match_min is to a wrong call."""
+    cand = sorted((e for e in pc["ols"] if e["nt"] >= MIN_TEXTS), key=lambda e: (e["y"], e["x"], e["k"]))
+    kids: Dict[int, List[int]] = {}
+    for x in pc["nodes"]:
+        if x["p"] >= 0:
+            kids.setdefault(x["p"], []).append(x["i"])
+    leaves: Dict[int, List[Dict[str, Any]]] = {}
+
+    def lv(k):
+        if k not in leaves:
+            leaves[k] = card_match.structural(card_match.card_leaves(k, pc["nodes"], pc["flat"], kids))
+        return leaves[k]
+
+    root = {e["k"]: e["k"] for e in cand}
+
+    def find(k):
+        while root[k] != k:
+            root[k] = root[root[k]]
+            k = root[k]
+        return k
+
+    low: Dict[int, float] = {}                                   # set root -> weakest link that joined it
+    boxes = {"candidates": len(cand), "lined_up": 0, "scored": 0, "linked": 0, "best_rejected": None,
+             "match_min": match_min}
+    for i, a in enumerate(cand):
+        for b in cand[i + 1:]:
+            if not _lined_up(a, b) or a["k"] in anc[b["k"]] or b["k"] in anc[a["k"]]:
+                continue
+            boxes["lined_up"] += 1
+            ra, rb = find(a["k"]), find(b["k"])
+            if ra == rb:                                         # already one set through other boxes
+                continue
+            boxes["scored"] += 1
+            score = card_match.structural_score(lv(a["k"]), lv(b["k"]), match_min)
+            if score >= match_min:
+                boxes["linked"] += 1
+                root[max(ra, rb)] = min(ra, rb)
+                low[min(ra, rb)] = min(score, low.get(ra, 100.0), low.get(rb, 100.0))
+            elif boxes["best_rejected"] is None or score > boxes["best_rejected"]:
+                boxes["best_rejected"] = score
+    comps: Dict[int, List[Dict[str, Any]]] = {}
+    for e in cand:
+        comps.setdefault(find(e["k"]), []).append(e)
+    out = []
+    weakest: Dict[int, float] = {}
+    for r, v in comps.items():
+        ks = {e["k"] for e in v}
+        v = [e for e in v if not (anc[e["k"]] & ks)]             # a wrapper and the box in it: the outer one
+        if len(v) >= 2:
+            out.append(v)
+            weakest[min(e["k"] for e in v)] = low[r]
+    return out, weakest, boxes
+
+
+def _top_sets(found: List[List[Dict[str, Any]]], anc: Dict[int, set]) -> List[List[Dict[str, Any]]]:
+    """The sets that are not ruled out by another one. A set wholly inside another set's members is a part
+    of those records. Two sets that overlap otherwise (some members of one inside members of the other):
+    the one with more members stays, the outer one on a tie (cards of which one is unlike the rest lose
+    to the part that is alike in all of them; the lift then walks back up to the cards)."""
+    keys = [{e["k"] for e in v} for v in found]
+    out = []
+    for i, v in enumerate(found):
+        ruled_out = False
+        for j, w in enumerate(found):
+            if i == j:
+                continue
+            inside = sum(1 for e in v if anc[e["k"]] & keys[j])          # members of v inside members of w
+            holds = sum(1 for e in w if anc[e["k"]] & keys[i])           # members of w inside members of v
+            if inside == len(v) or (inside and len(w) >= len(v)) or (holds and holds < len(w) and len(w) > len(v)):
+                ruled_out = True
+                break
+        if not ruled_out:
+            out.append(v)
+    return sorted(out, key=lambda v: (-sum(e["nt"] for e in v), min(e["k"] for e in v)))
 
 
 def _tree_order(inner, inner_ks, repeated, anc):
@@ -258,11 +361,20 @@ def _loose_merges(pc, groups, anc) -> List[Dict[str, Any]]:
 def report(inf: Dict[str, Any]) -> List[str]:
     """Counts, sizes and shape tails only."""
     lines = [f"repeated shapes {inf['repeated']}, top-level record sets {len(inf['sets'])}, loose merges {len(inf['merges'])}"]
+    bx = inf.get("boxes")
+    if bx:
+        rej = "none" if bx["best_rejected"] is None else f"{bx['best_rejected']}%"
+        lines.append(f"boxes: {bx['candidates']} containers of {MIN_TEXTS}+ texts, {bx['lined_up']} pairs line up, "
+                     f"{bx['linked']} of {bx['scored']} scored pairs match inside (>= {bx['match_min']:g}%), "
+                     f"highest turned down {rej}")
     for i, s in enumerate(inf["sets"]):
         lay = s["layout"]
         gaps = "" if lay["gap_min"] is None else f", gaps {lay['gap_min']}..{lay['gap_max']} px"
-        lines.append(f"set {i}: {s['count']} x {s['type']}  texts {sorted(set(s['texts']))}  {lay['kind']}{gaps}, "
+        mixed = f" ({s['strict_shapes']} strict shapes)" if s.get("strict_shapes", 1) > 1 else ""
+        lines.append(f"set {i}: {s['count']} x {s['type']}{mixed}  texts {sorted(set(s['texts']))}  {lay['kind']}{gaps}, "
                      f"size spread {lay['w_spread']}x{lay['h_spread']} px   ...{s['tail'][-70:]}")
+        if s.get("link_min") is not None:
+            lines.append(f"    found by boxes: {lay['kind']}, weakest link {s['link_min']}%")
         if s["lift"]:
             L = s["lift"]
             lines.append(f"    lift: {L['levels']} level(s) up to {L['type']} (texts {sorted(set(L['texts']))}, "
@@ -305,7 +417,7 @@ def build_html(pc: Dict[str, Any], inf: Dict[str, Any], meta: Dict[str, Any]) ->
     data = {"W": pc["W"], "H": pc["H"], "page": meta.get("page", ""), "source": meta.get("source", ""),
             "texts": [[t["x"], t["y"], t["w"], t["h"]] for t in pc["texts"]],
             "boxes": {str(e["k"]): [e["x"], e["y"], e["w"], e["h"]] for e in pc["ols"]},
-            "sets": inf["sets"], "merges": inf["merges"], "report": report(inf)}
+            "sets": inf["sets"], "merges": inf["merges"], "how": inf.get("boxes"), "report": report(inf)}
     blob = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":")).replace("</", "<\\/")
     return TEMPLATE.replace("/*DATA*/null", blob)
 
@@ -319,12 +431,14 @@ def main(argv=None) -> int:
     ap.add_argument("--comp-view", default="present", choices=["present", "all"])
     ap.add_argument("--open", action="store_true")
     ap.add_argument("--no-match", action="store_true", help="leave out the card match (card_match.py)")
+    ap.add_argument("--match-min", type=float, default=None, metavar="PCT",
+                    help=f"lined-up boxes are one record set when they match inside this much (default {MATCH_MIN:g})")
     a = ap.parse_args(argv)
     src = Path(a.src)
     docs, meta = render.load(src, snapshot=a.snapshot, record=a.record)
     k = render._pick_docs(docs, a.doc if a.doc in ("auto", "all") else int(a.doc))[0]
     pc = page_containers(docs[k], a.comp_view)
-    inf = infer(pc, match=not a.no_match)
+    inf = infer(pc, match=not a.no_match, match_min=a.match_min)
     for line in report(inf):
         print(line)
     out = render.PRE_DEV_OUT / f"shape_map_{src.stem}.html"
@@ -356,7 +470,7 @@ TEMPLATE = r"""<!doctype html>
   .set { background:var(--card); border:1px solid var(--line); border-left:6px solid; border-radius:6px; padding:8px 10px; margin-bottom:8px; cursor:pointer; }
   .set.on { box-shadow:0 0 0 2px #e8590c; }
   .set .h { font-weight:600; }
-  .set .s { color:var(--muted); font:12px/1.4 ui-monospace, Consolas, monospace; overflow-wrap:anywhere; }
+  .set .s, .how .s { color:var(--muted); font:12px/1.4 ui-monospace, Consolas, monospace; overflow-wrap:anywhere; }
   .part { margin:4px 0 0 10px; font:12px/1.4 ui-monospace, Consolas, monospace; }
   pre { background:var(--card); border:1px solid var(--line); padding:8px; overflow:auto; font-size:12px; }
   label { display:inline-flex; gap:6px; align-items:center; margin-right:12px; cursor:pointer; }
@@ -372,6 +486,9 @@ TEMPLATE = r"""<!doctype html>
   .chip.label { color:var(--muted); }
   .chip.value { border-color:#2f9e44; color:#2f9e44; font-weight:600; }
   .chip.part { border-style:dashed; }
+  .how { background:var(--card); border:1px solid var(--line); border-radius:6px; padding:8px 10px; margin-bottom:8px; }
+  .how b { font-weight:600; }
+  .found { color:var(--muted); font:12px/1.4 ui-monospace, Consolas, monospace; margin-top:2px; }
   .bar { display:inline-block; height:8px; background:#2f9e44; vertical-align:middle; border-radius:2px; margin-left:4px; }
 </style>
 </head>
@@ -384,7 +501,7 @@ TEMPLATE = r"""<!doctype html>
 </header>
 <div class="wrap">
   <svg class="map" id="map"></svg>
-  <div class="side"><div id="sets"></div><pre id="rep"></pre></div>
+  <div class="side"><div class="how" id="how"></div><div id="sets"></div><pre id="rep"></pre></div>
 </div>
 <script>
 const D = /*DATA*/null;
@@ -520,8 +637,10 @@ D.sets.forEach((s, i) => {
   const lay = s.layout;
   const gaps = lay.gap_min === null ? '' : ', gaps ' + lay.gap_min + '..' + lay.gap_max + ' px';
   el.innerHTML = '<div class="h"></div><div class="s"></div>';
-  el.querySelector('.h').textContent = 'set ' + i + ': ' + s.count + ' × ' + s.type + ' · ' + lay.kind + gaps;
+  el.querySelector('.h').textContent = 'set ' + i + ': ' + s.count + ' × ' + s.type + (s.strict_shapes > 1 ? ' (' + s.strict_shapes + ' strict shapes)' : '') + ' · ' + lay.kind + gaps;
   el.querySelector('.s').textContent = 'texts ' + [...new Set(s.texts)].sort((a, b) => a - b).join(', ') + ' · size spread ' + lay.w_spread + '×' + lay.h_spread + ' px\n…' + s.tail;
+  if (s.link_min !== null && s.link_min !== undefined)
+    el.appendChild(el_('div', 'found', 'found by boxes: ' + lay.kind + ' · weakest link ' + s.link_min + '%'));
   if (s.lift) {
     const p = document.createElement('div'); p.className = 'part';
     p.textContent = 'lift ' + s.lift.levels + ' up → ' + s.lift.type + ' (texts ' + [...new Set(s.lift.texts)].join(', ') + ', ' + s.lift.strict_shapes + ' strict shape(s))';
@@ -537,6 +656,14 @@ D.sets.forEach((s, i) => {
   el.addEventListener('click', ev => { if (ev.target.closest('.cm')) return; sel = sel === i ? null : i; apply(); });
   box.appendChild(el);
 });
+const how = document.getElementById('how');
+if (D.how) {
+  const b = D.how;
+  how.appendChild(el_('b', '', 'Record sets from boxes'));
+  how.appendChild(el_('div', 's', 'A set = boxes that line up (a column: same left edge and width; a row: same top and height; a grid: both) and match inside at least ' + b.match_min + '%. Types, ids and classes are not read.'));
+  how.appendChild(el_('div', 'found', b.candidates + ' containers of 2+ texts · ' + b.lined_up + ' pairs line up · ' + b.linked + ' of ' + b.scored
+    + ' scored pairs match inside · highest turned down ' + (b.best_rejected === null ? 'none' : b.best_rejected + '%')));
+} else how.style.display = 'none';
 document.getElementById('showparts').addEventListener('change', apply);
 document.getElementById('showlift').addEventListener('change', apply);
 document.getElementById('showpct').addEventListener('change', apply);

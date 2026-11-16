@@ -162,6 +162,24 @@ def compare(a: List[Dict[str, Any]], b: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {"layers": layers, "overall": round(sum(layers.values()) / len(layers), 1)}
 
 
+CONTROLS = frozenset(CONTROL_KIND.values())
+
+
+def structural(leaves: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The leaves with every plain text read as one kind ("text"): a field whose value is a date and one
+    whose value is a name are the same structure. Controls keep their kind."""
+    return [x if x["kind"] in CONTROLS or not x["text"] else {**x, "kind": "text"} for x in leaves]
+
+
+def structural_score(a: List[Dict[str, Any]], b: List[Dict[str, Any]], floor: float = 0.0) -> float:
+    """compare()'s overall percentage on structural leaves (pass structural() lists). Adjacency never
+    exceeds composition, so a pair whose composition alone is under floor is returned without aligning."""
+    comp = 100 * composition(a, b)
+    if comp < floor:
+        return round(comp / len(LAYERS), 1)
+    return compare(a, b)["overall"]
+
+
 # ── a record set ──────────────────────────────────────────────────────────────
 
 def structure(leaves: List[List[Dict[str, Any]]], ref: int) -> Dict[str, Any]:

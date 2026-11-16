@@ -144,6 +144,20 @@ def test_views_window_card_match_view():
     assert views_ui.CARD_MATCH in views_ui.DEFAULT_TICKS
 
 
+def test_views_window_match_inside_box():
+    import views_ui
+    assert views_ui.MATCH_MIN == shape_map.MATCH_MIN, "the window shows the tool's default"
+    by = {v[0]: v for v in views_ui.VIEWS}
+    f = Path("comp_x.json")
+    assert views_ui.match_min_args("50") == [] and views_ui.match_min_args("") == []
+    assert views_ui.match_min_args("abc") == [] and views_ui.match_min_args("140") == []
+    assert views_ui.command(by[views_ui.CARD_MATCH], f, "65")[-2:] == ["--match-min", "65"]
+    assert views_ui.command(by[views_ui.SHAPE_MAP], f, "65")[-3:] == ["--no-match", "--match-min", "65"]
+    assert "--match-min" not in views_ui.command(by[views_ui.CARD_MATCH], f, "50")
+    assert "--match-min" not in views_ui.command(by[views_ui.CARD_MATCH], f)
+    assert "--match-min" not in views_ui.command(by["outline (container shapes)"], f, "65"), "shape_map.py only"
+
+
 def test_clear_all_captures_takes_captures_and_views_only(tmp_path, monkeypatch):
     import views_ui
     for name in ("capture_1.json", "comp_1.json", "comp_1.csv", "key_probe_2.txt", "render_comp_1.html",

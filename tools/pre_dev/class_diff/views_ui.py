@@ -15,6 +15,11 @@ lines, which hold counts only.
                                              with both ticked only this one runs: same page)
   tables                tables.py CAPTURE --html   (a comp page is mapped to its capture_ file: same stamp)
 
+Both shape map views find the record sets from the boxes (lined up, and matching inside). "match inside"
+is that percentage: it goes to shape_map.py as --match-min when it is not shape_map.MATCH_MIN. Lower it
+and unlike boxes become one set; raise it and cards that differ a little fall apart. The page says how
+many pairs lined up, how many matched and the highest score that was turned down.
+
 New capture runs key_probe.py in its own console window (switch to the browser within 8 s); the list
 refreshes when it ends. Clear all captures sends every capture, comp page and view page in output/ to the
 Recycle Bin after a yes (CLEAR_PREFIXES; other files and sub-folders stay). Launch with views.bat (tools/pre_dev/class_diff/views.bat).
@@ -46,6 +51,19 @@ VIEWS = [
 ]
 SHAPE_MAP, CARD_MATCH = "shape map (record sets)", "card match (shape map + %)"
 DEFAULT_TICKS = ("outline (container shapes)", CARD_MATCH)
+MATCH_MIN = 50.0        # shape_map.MATCH_MIN (a test keeps the two equal; this window imports no tool)
+
+
+def match_min_args(text) -> list:
+    """The --match-min arguments for the "match inside" box: none for the default, an empty box or
+    anything that is not a percentage from 0 to 100."""
+    try:
+        v = float(str(text).strip())
+    except ValueError:
+        return []
+    if not 0 <= v <= 100 or v == MATCH_MIN:
+        return []
+    return ["--match-min", f"{v:g}"]
 
 
 def picked(views):
@@ -114,10 +132,12 @@ def capture_of(path: Path) -> Path:
     return path
 
 
-def command(view, path: Path):
+def command(view, path: Path, match_min=None):
+    """The child command of one view. match_min (the "match inside" box) goes to shape_map.py only."""
     _, script, extra, raw = view
     src = capture_of(path) if raw else path
-    return [child_python(), str(HERE / script), str(src)] + extra
+    more = match_min_args(match_min) if script == "shape_map.py" and match_min is not None else []
+    return [child_python(), str(HERE / script), str(src)] + extra + more
 
 
 class App:
@@ -162,10 +182,17 @@ class App:
             var = tk.BooleanVar(value=v[0] in DEFAULT_TICKS)
             ttk.Checkbutton(vf, text=v[0], variable=var).grid(row=i // 3, column=i % 3, sticky="w", padx=(0, 18))
             self.ticks.append(var)
+        last = (len(VIEWS) + 2) // 3
+        mf = ttk.Frame(vf)
+        mf.grid(row=last, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Label(mf, text="Record sets from boxes: lined-up boxes must match inside").pack(side="left")
+        self.match_var = tk.StringVar(value=f"{MATCH_MIN:g}")
+        ttk.Spinbox(mf, from_=0, to=100, increment=5, width=5, textvariable=self.match_var).pack(side="left", padx=4)
+        ttk.Label(mf, text=f"%  (default {MATCH_MIN:g}; shape map and card match views)").pack(side="left")
         self.open_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(vf, text="open pages when done", variable=self.open_var).grid(row=(len(VIEWS) + 2) // 3, column=0, sticky="w", pady=(6, 0))
+        ttk.Checkbutton(vf, text="open pages when done", variable=self.open_var).grid(row=last + 1, column=0, sticky="w", pady=(6, 0))
         btns = ttk.Frame(vf)
-        btns.grid(row=(len(VIEWS) + 2) // 3, column=1, columnspan=2, sticky="e", pady=(6, 0))
+        btns.grid(row=last + 1, column=1, columnspan=2, sticky="e", pady=(6, 0))
         ttk.Button(btns, text="All", command=lambda: [t.set(True) for t in self.ticks]).pack(side="left")
         ttk.Button(btns, text="None", command=lambda: [t.set(False) for t in self.ticks]).pack(side="left", padx=4)
         self.go = ttk.Button(btns, text="Make views", command=self.run)
@@ -217,14 +244,15 @@ class App:
             return
         self.busy = True
         self.go.configure(state="disabled")
-        threading.Thread(target=self._work, args=(path, views, self.open_var.get()), daemon=True).start()
+        threading.Thread(target=self._work, args=(path, views, self.open_var.get(), self.match_var.get()),
+                         daemon=True).start()
 
-    def _work(self, path, views, open_pages):
+    def _work(self, path, views, open_pages, match_min=None):
         env = dict(os.environ, PYTHONIOENCODING="utf-8")
         self.root.after(0, self.say, f"== {path.name}")
         for v in views:
-            cmd = command(v, path)
-            self.root.after(0, self.say, f"-- {v[0]}")
+            cmd = command(v, path, match_min)
+            self.root.after(0, self.say, f"-- {v[0]}" + "".join(f" {x}" for x in cmd[3 + len(v[2]):]))
             try:
                 r = subprocess.run(cmd, cwd=REPO, env=env, capture_output=True, text=True, encoding="utf-8",
                                    errors="replace", creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

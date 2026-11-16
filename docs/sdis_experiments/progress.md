@@ -265,10 +265,10 @@ siblings under one parent.
   every container of the same shape (strict or loose) with a count; `[` and `]` walk to the parent and
   child; a click pins the highlight. A toggle hides wrappers that hold fewer than 2 texts.
 - `shape_map.py`: a wireframe map (text boxes as grey bars, never their text) and these inference rules:
-  - **record set:** a shape with 2+ instances that do not contain each other and each hold 2+ texts. The
-    members must be **alike** (fewest texts ≥ `LIKE` × most texts), and the set must not sit inside
-    another record set. `LIKE = 0.5` is **provisional, not measured**. It stops a generic layout wrapper
-    (a Bootstrap `row` of 3 texts beside one of 23) from swallowing the real records inside it.
+  - **record set** (changed 16 Nov, see "Record sets from boxes" below; the rule before that was: a
+    strict shape with 2+ disjoint instances of 2+ texts whose text counts are alike, `LIKE = 0.5`):
+    2+ containers of 2+ texts whose **boxes line up** and whose **contents match**, not inside another
+    record set. No type, id or class is read to find them.
   - **layout:** column, row, grid or scattered, with the gaps between neighbours and the size spread.
   - **parts and nested lists:** repeated shapes inside the members, counted per member. 1 per member is a
     part, k per member is a nested list, anything else "varies" (optional or a list). They are nested as
@@ -308,6 +308,34 @@ them.
 Each geometry signal fails where the other works. Neither beats shapes, so geometry is kept only as a
 possible check.
 
+**Record sets from boxes (16 Nov, after the card match).** The strict shape failed on the GSTR-1 page
+(capture 124102): the page title, 6 taxpayer fields and the 13 return tiles are all a classless `Group` in
+a classless `Group`, so they were one "record set" of 20, scattered, card match 43.9 %. The record set rule
+is now:
+- **Line up:** two boxes are in one column (same left edge and width, one below the other) or one row
+  (same top and height, side by side), within `TOL`. The size **along** the line is free, which is what
+  the same-size signal above lacked: ITR cards of 344 and 365 px stay together. A grid links both ways.
+- **Match inside:** a lined-up pair is linked only when `card_match.structural_score` ≥ `MATCH_MIN`. It is
+  the card match with every plain text read as one kind, so a date field and a name field are the same
+  structure. `MATCH_MIN = 50` is **provisional**: on the two pages measured, lined-up pairs score either
+  ≤ 41.6 or ≥ 60 (GSTR-1: 169 pairs, none between 42 and 80; ITR status: 681 pairs, none between 40 and 60).
+- **Sets** are the groups of linked boxes. Of a wrapper and the box in it, the outer one is kept. A set
+  wholly inside another set's members is a part. A set of cards that leaves a card out loses to the part
+  found in every card (the lift then walks back up).
+
+- **In the views window:** a "match inside %" box sends `--match-min` to both shape map views. The page
+  has a "Record sets from boxes" panel (pairs lined up, pairs matched, the highest score turned down) and
+  a "found by boxes: layout, weakest link %" line on each set.
+
+| Page | Before | Now |
+|---|---|---|
+| GSTR-1 (124102) | 20 mixed boxes, 43.9 % | 13 tiles, grid 4x4, 92.2 %; 8 taxpayer fields, grid 2x4 (2 strict shapes), 62.5 %; the 2 header strips (8.3 %) are no longer a set |
+| ITR status (125541) | 5 cards, 99.3 % | the same |
+| ITR status, 12 Oct (121513, 121834) | — | 5 and 4 cards, 99.3 % and 97.0 % |
+
+Not checked: the GST dashboard tiles and the bank cards in the table above (those captures are no longer on
+this PC). Their members differ more inside (4-8 and 8-10 texts), so they are the test for `MATCH_MIN`.
+
 **Tables (measured over the whole corpus on this PC: 22,473 reads, 42 page links).** 4,900+ tables
 appear on 9 links, all GST except one Google page.
 - No grid holes and no rows out of page order on any GST table.
@@ -341,7 +369,7 @@ clicks the values to capture.
 **Next.**
 - Run `--outline` and the shape map on pages not seen yet: list pages of short rows, Firefox captures, the
   bank page from a second client.
-- Measure `LIKE` from the gap in the members' text ratios.
+- Measure `MATCH_MIN` on more pages, first the GST dashboard tiles and the bank cards (contents differ).
 - Fix the three table gaps.
 - Draft the picker Part.
 
