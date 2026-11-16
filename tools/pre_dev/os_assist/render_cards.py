@@ -90,6 +90,7 @@ def main() -> int:
     from ui.os_assist.mecp_card import MecpCard
     from ui.os_assist.sca_card import ScaCard
     from ui.os_assist.sca_chip import ScaChip
+    from ui.os_assist.sck_card import SckCard
 
     def at(name):
         return os.path.join(args.out, name + ".png")
@@ -119,6 +120,10 @@ def main() -> int:
           at("sca-confirm"))
 
     _shot(ScaChip(CLIENT, "GST", **_kw()), at("chip"))
+
+    _shot(SckCard("render-sck", SERVICE, client_id=1, client_name=CLIENT, portal="GST", **_kw()), at("sck"))
+    _shot(SckCard("render-sck2", SERVICE, kind="new_client", identity="ABCDE1234F", portal="GST", **_kw()),
+          at("sck-new-client"))
     return 0
 
 

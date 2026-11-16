@@ -170,24 +170,53 @@ def _doc_rect(doc) -> Optional[Tuple[int, int, int, int]]:
     return None
 
 
+RECT_SLACK_PX = 16             # a maximised window's rect overhangs the screen by its frame (~8 px)
+
+
+def window_rect(hwnd: int) -> Optional[Tuple[int, int, int, int]]:
+    """GetWindowRect (physical px), or None when the window is unknown."""
+    if not (user32 and hwnd):
+        return None
+    r = wt.RECT()
+    if not _safe(lambda: user32.GetWindowRect(wt.HWND(int(hwnd)), ctypes.byref(r)), 0):
+        return None
+    return (r.left, r.top, r.right, r.bottom)
+
+
+def rect_inside(rect, outer, slack: int = RECT_SLACK_PX) -> bool:
+    """`rect` lies within `outer` (give or take `slack` px). Chrome's UIA bounds go stale after
+    a minimise / restore or a navigation (real case 2026-11-15: its toolbar still reported at
+    -32000 on a maximised window, and the OS cards docked off-screen), so a page rect is
+    trusted only when it sits inside the window it belongs to."""
+    if rect is None or outer is None:
+        return False
+    return (rect[0] >= outer[0] - slack and rect[1] >= outer[1] - slack
+            and rect[2] <= outer[2] + slack and rect[3] <= outer[3] + slack)
+
+
 def page_rect(hwnd: int) -> Optional[Tuple[int, int, int, int]]:
     """(left, top, right, bottom) of the first on-screen Document, for docking; None if none.
     The Document found last time is asked first (two property reads). The whole-tree search
     (100-200 ms on Chrome, and it keeps the browser busy) runs only when that one is gone,
-    off-screen (a tab switch) or has no size."""
+    off-screen (a tab switch), has no size or no longer sits inside the window (stale bounds)."""
     uia = worker.current_uia()
     key = int(hwnd or 0)
+    wr = window_rect(hwnd)
+
+    def _fits(rect) -> bool:
+        return rect is not None and (wr is None or rect_inside(rect, wr))
+
     cached = _DOC_CACHE.get(key)
     if cached is not None and cached[0] is uia:
         doc = cached[1]
         if not _safe(lambda: doc.CurrentIsOffscreen, True):
             rect = _doc_rect(doc)
-            if rect is not None:
+            if _fits(rect):
                 return rect
     _DOC_CACHE.pop(key, None)
     for doc in page_documents(hwnd):
         rect = _doc_rect(doc)
-        if rect is not None:
+        if _fits(rect):
             if len(_DOC_CACHE) >= 16:
                 _DOC_CACHE.clear()
             _DOC_CACHE[key] = (uia, doc)
@@ -229,11 +258,25 @@ def _selector_ids(selector: Optional[str]) -> List[str]:
     return out
 
 
+_PASSWORD_WORDS = ("password", "passwd")
+
+
+def looks_like_password(d: dict) -> bool:
+    """A box named or id'd as a password box. A portal may show its password box as plain text
+    (the eye icon, or Income Tax after a refused login: `loginPasswordField` stays but UIA no
+    longer marks it IsPassword), so the name is the fallback when no box is marked."""
+    text = f"{d['id']} {d['name']}".lower()
+    return any(w in text for w in _PASSWORD_WORDS)
+
+
 def find_fields(hwnd: int, username_selector: Optional[str] = None,
                 password_selector: Optional[str] = None) -> Tuple[Any, Any]:
     """(user_el, pass_el); either may be None. A `#id` selector wins (AutomationId; in a list the
-    first id with a visible box wins); any other selector shape is ignored. Otherwise: password = first visible password box; username = the
-    visible non-password box closest before it, or the first one when there is no password box."""
+    first id with a visible box wins; a password selector also matches a box shown as plain text);
+    any other selector shape is ignored. Otherwise: password = first visible password box, or,
+    when none is marked, the first visible box named/id'd as a password box (shown as plain
+    text); username = the visible non-password box closest before it, or the first one when there
+    is no password box. The password box is never taken as the username box."""
     uia = worker.current_uia()
     seen = []
     for doc in page_documents(hwnd):
@@ -242,19 +285,21 @@ def find_fields(hwnd: int, username_selector: Optional[str] = None,
             if visible(d):
                 seen.append((el, d))
 
-    def by_id(selector, want_password):
+    def by_id(selector, accept):
         for wanted in _selector_ids(selector):
             for i, (_el, d) in enumerate(seen):
-                if d["id"] == wanted and d["password"] == want_password:
+                if d["id"] == wanted and accept(i, d):
                     return i
         return None
 
-    pass_i = by_id(password_selector, True)
+    pass_i = by_id(password_selector, lambda i, d: True)
     if pass_i is None:
         pass_i = next((i for i, (_e, d) in enumerate(seen) if d["password"]), None)
-    user_i = by_id(username_selector, False)
+    if pass_i is None:
+        pass_i = next((i for i, (_e, d) in enumerate(seen) if looks_like_password(d)), None)
+    user_i = by_id(username_selector, lambda i, d: not d["password"] and i != pass_i)
     if user_i is None:
-        texts = [i for i, (_e, d) in enumerate(seen) if not d["password"]]
+        texts = [i for i, (_e, d) in enumerate(seen) if not d["password"] and i != pass_i]
         if pass_i is not None:
             before = [i for i in texts if i < pass_i]
             user_i = before[-1] if before else None

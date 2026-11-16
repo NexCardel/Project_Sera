@@ -145,11 +145,13 @@ function makeWorld(build, opts) {
   }
   const query = (cls) => state.shadowChildren.flatMap(c => find(c, cls));
 
-  function open(dashboardLink) {
+  function open(dashboardLink, extra) {
+    extra = extra || {};
     vm.runInContext(extractSckWidget(build), win);
-    win.sckWidget(SERVICE_ID, CLIENT_ID, CLIENT_NAME, PORTAL,
+    win.sckWidget(SERVICE_ID, extra.noClient ? null : CLIENT_ID, extra.noClient ? '' : CLIENT_NAME, PORTAL,
       'https://eportal.incometax.gov.in/iec/foservices/#/login',
-      dashboardLink || 'https://eportal.incometax.gov.in/iec/foservices/#/dashboard');
+      dashboardLink || 'https://eportal.incometax.gov.in/iec/foservices/#/dashboard',
+      extra.kind, extra.identity);
   }
 
   const deliver = (msg) => listeners.slice().forEach(f => f(msg));
@@ -190,6 +192,25 @@ function makeWorld(build, opts) {
       w.type(TEST_PWD);
       assert(!w.query('btn-fill')[0].disabled, label + 'Fill button enabled with input');
       assert(!w.query('btn-save')[0].disabled, label + 'Save button enabled with input');
+    }
+
+    // 2b. An ID Sera does not know (kind new_client): the card takes a password, with the
+    //     new-client wording and the ID as its title; without that kind a missing client still
+    //     disables it, as before
+    {
+      const w = makeWorld(build);
+      w.open(undefined, { noClient: true, kind: 'new_client', identity: 'ABCDE1234F' });
+      const text = JSON.stringify(w.state.shadowChildren, (k, v) => (k === 'parent' || k === 'listeners') ? undefined : v);
+      assert(text.includes('ABCDE1234F'), label + 'new-client title is the ID');
+      assert(text.includes('This login is not in Sera'), label + 'new-client wording');
+      assert(!w.query('pwd')[0].disabled, label + 'new-client password box is enabled');
+      w.type(TEST_PWD);
+      assert(!w.query('btn-fill')[0].disabled, label + 'new-client Fill & Test enabled');
+      assert(!w.query('btn-save')[0].disabled, label + 'new-client Save Directly enabled');
+
+      const w2 = makeWorld(build);
+      w2.open(undefined, { noClient: true });
+      assert(w2.query('pwd')[0].disabled, label + 'no client and not new_client stays disabled');
     }
 
     // 3. Fill & Test asks the background to fill the portal's password field

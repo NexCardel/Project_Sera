@@ -169,7 +169,7 @@ def test_copy_after_dismiss_does_nothing(app):
 def test_edit_button_opens_sck(app):
     card, r = make()
     card.edit_btn.click()
-    assert r.edits == [{"client_id": 42, "service_id": 3, "portal": "income tax"}]
+    assert r.edits == [{"client_id": 42, "service_id": 3, "portal": "income tax", "hwnd": 4660}]
     card.dismiss()
 
 

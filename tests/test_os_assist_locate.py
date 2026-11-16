@@ -102,6 +102,27 @@ def test_selector_list_uses_its_id_parts(page):
     assert ids(locate.find_fields(1, "#nope, input#a", "#nada, [id=pw]")) == ("a", "pw")
 
 
+def test_password_box_shown_as_text_found_by_name(page):
+    # Income Tax after a refused login: loginPasswordField stays but UIA no longer marks it IsPassword.
+    page(El("loginPasswordField", name="Password*"))
+    assert ids(locate.find_fields(1)) == (None, "loginPasswordField")
+
+
+def test_password_box_shown_as_text_never_the_username(page):
+    page(El("user"), El("pwd", name="Password"))
+    assert ids(locate.find_fields(1)) == ("user", "pwd")
+
+
+def test_password_selector_matches_a_box_shown_as_text(page):
+    page(El("u"), El("secret"))
+    assert ids(locate.find_fields(1, None, "#secret")) == ("u", "secret")
+
+
+def test_marked_password_box_beats_one_named_password(page):
+    page(El("u"), El("passwordHint"), El("pw", password=True))
+    assert ids(locate.find_fields(1))[1] == "pw"
+
+
 def test_uia_off_the_worker_thread_is_refused():
     worker.bind(None)
     with pytest.raises(RuntimeError):
@@ -315,3 +336,34 @@ def test_page_rect_cache_never_crosses_uia_objects():
         assert locate.page_rect(10) is None
     finally:
         worker.bind(None)
+
+
+# -- stale bounds: a Document rect outside its window is not trusted (Chrome after minimise) ----
+def test_page_rect_skips_a_document_outside_the_window(monkeypatch):
+    stale, good = El(w=200), El(w=400)
+    stale.CurrentBoundingRectangle = SimpleNamespace(left=-31991, top=-31891, right=-30070, bottom=-30979)
+    monkeypatch.setattr(locate, "window_rect", lambda h: (0, 0, 1000, 800))
+    worker.bind(CountingUia([stale, good]))
+    try:
+        assert locate.page_rect(11) == (10, 20, 410, 50)
+    finally:
+        worker.bind(None)
+
+
+def test_page_rect_drops_a_cached_document_that_left_the_window(monkeypatch):
+    doc = El()
+    uia = CountingUia([doc])
+    monkeypatch.setattr(locate, "window_rect", lambda h: (0, 0, 1000, 800))
+    worker.bind(uia)
+    try:
+        assert locate.page_rect(12) == (10, 20, 210, 50)
+        doc.CurrentBoundingRectangle = SimpleNamespace(left=0, top=65, right=189, bottom=2000)
+        assert locate.page_rect(12) is None             # searched again, nothing fits
+        assert uia.searches == 2
+    finally:
+        worker.bind(None)
+
+
+def test_rect_inside_allows_a_maximised_frame_overhang():
+    assert locate.rect_inside((0, 109, 1920, 1021), (-9, -9, 1929, 1029))
+    assert not locate.rect_inside((0, 109, 1920, 1021), None)

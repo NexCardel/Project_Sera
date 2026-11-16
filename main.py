@@ -232,10 +232,7 @@ class SeraApp:
         # that arrive before the handlers are connected are held (see WSBridge.mark_ready).
         from ui import ws_bridge as _ws_bridge_module
         self.bridge = WSBridge(self.app)
-        # SCK candidates the card filled, held in memory only: service_id -> {password, client_id,
-        # portal}. The desktop saves one when the watcher sees the login succeed, even if the page
-        # has navigated and the card is gone. Never written to a setting, log or audit line.
-        self._sck_candidates = {}
+        # SCK candidates live in core/rotation/attempts.py (memory only, expiring, per window).
         self.app.aboutToQuit.connect(self.bridge.stop)
         self.bridge.start(chrome_manifest_path=self._permanent_extension_dir / "manifest.json")
         _ws_bridge_module.set_active_bridge(self.bridge)
@@ -675,6 +672,7 @@ class SeraApp:
             QTimer.singleShot(8000, _os_dock_card.warm_up)
         self.bridge.sck_candidate_received.connect(self._handle_sck_candidate)
         self.bridge.sck_outcome_received.connect(self._handle_sck_outcome)
+        self._install_sck_engine()                              # OS-mode SCK card (idle in extension mode)
         self.bridge.extension_settings_updated_received.connect(self._handle_extension_settings_updated)
         self.bridge.settings_provider = self._get_extension_settings_payload
         self.bridge.sca_password_requested.connect(self._handle_sca_password_request)
@@ -1496,6 +1494,10 @@ class SeraApp:
         except Exception:
             return False
 
+    def _sck_attempts_registry(self):
+        from core.rotation import attempts
+        return attempts.default()
+
     def _ensure_sck(self):
         """Builds SCK's one watcher (core/rotation/watcher.py): any registered service, any client,
         including verified ones. Its host is SCC-U's, so the watcher works when SCC-U's own rules
@@ -1510,21 +1512,50 @@ class SeraApp:
             on_failure=self._sck_show,
             on_clear=self._sck_hide,
             on_outcome=self._sck_outcome,
+            on_unregistered=self._sck_show,
         )
         self._sck_watcher = watcher
         return watcher
 
+    def _install_sck_engine(self):
+        """Qt thread: the OS-mode SCK engine (core/os_assist/sck_engine.py). It only acts on calls
+        from automation.py and on its cards' signals, so it costs nothing in extension mode."""
+        from core.os_assist import sck_engine
+        if sck_engine.default() is None:
+            sck_engine.install(
+                self._sck_attempts_registry(),
+                commit=self._sck_commit_requested,
+                closed=self._sck_card_closed,
+                fill_started=self._sck_fill_started)
+
+    def _sck_fill_started(self, service_id):
+        watcher = getattr(self, "_sck_watcher", None)
+        if watcher is not None:
+            try:
+                watcher.reset_outcome_throttle(service_id)
+            except Exception:
+                pass
+
     def _sck_show(self, failure):
-        """SCC-U's thread: a login was refused. Ask every connected browser to show the
-        new-password card for this service. The card is the only SCK widget: it fills through the
-        extension, and the desktop holds the candidate until the outcome is known."""
+        """SCC-U's thread: a login was refused, or an ID Sera does not know was typed. Open an
+        attempt and ask for the new-password card: a docked desktop card in OS mode, the in-page
+        card in the browser otherwise. The desktop holds the candidate until the outcome is known."""
         import automation
         try:
-            automation.show_sck_widget(
-                dict(getattr(failure, "service", {}) or {}),
-                getattr(failure, "client_id", None),
-                getattr(failure, "client_name", "") or "",
-                getattr(failure, "portal", "") or "")
+            os_mode = automation.assist_engine() == "os"
+            kind = "new_client" if getattr(failure, "client_id", None) is None else "rotation"
+            identity = getattr(failure, "identity", "") or getattr(failure, "pan", "") or ""
+            attempt = self._sck_attempts_registry().open(
+                service_id=failure.service_id, hwnd=int(failure.hwnd or 0) if os_mode else 0,
+                client_id=failure.client_id, client_name=failure.client_name or "",
+                portal=failure.portal or "", identity=identity,
+                user_id=getattr(failure, "user_id", "") or "", kind=kind)
+            ok = automation.show_sck_widget(
+                dict(getattr(failure, "service", {}) or {}), failure.client_id,
+                failure.client_name or "", failure.portal or "", hwnd=int(failure.hwnd or 0),
+                attempt_id=attempt.attempt_id, kind=kind, user_id=attempt.user_id, identity=identity)
+            if not ok:
+                self._sck_attempts_registry().close(attempt)
         except Exception as exc:
             print(f"[main._sck_show error] {type(exc).__name__}")
 
@@ -1533,117 +1564,205 @@ class SeraApp:
         "worked" as an outcome; the card closes itself and the desktop saves the candidate."""
         return
 
-    def _sck_outcome(self, service_id, kind):
-        """SCC-U's thread: one page outcome (worked / wrong_password / locked) for this service.
-        Marshalled to the Qt thread by the bridge signal."""
+    def _sck_outcome(self, service_id, kind, hwnd=0, identity="", profile=None):
+        """SCC-U's thread: one page outcome (worked / wrong_password / locked) for this service,
+        seen in browser window `hwnd`. Marshalled to the Qt thread by the bridge signal."""
         try:
-            self.bridge.sck_outcome_received.emit(service_id, str(kind or ""))
+            self.bridge.sck_outcome_received.emit(service_id, str(kind or ""), int(hwnd or 0),
+                                                  str(identity or ""), dict(profile or {}))
         except Exception:
             pass
 
     # ── SCK card (Qt thread) ────────────────────────────────────────────────────
 
-    def _handle_sck_outcome(self, service_id, kind):
-        """Qt thread: show one page outcome on the card, and act on it. "worked" saves the
-        candidate the card filled; "locked" forgets it."""
+    def _handle_sck_outcome(self, service_id, kind, hwnd=0, identity="", profile=None):
+        """Qt thread: show one page outcome on the card, and act on it - for the attempt of the
+        window it was seen in only. "worked" saves that attempt's candidate; "wrong_password"
+        forgets it; "locked" forgets it and pauses SCA for the client."""
         kind = str(kind or "")
         if not kind:
             return
         import automation
+        att = self._sck_attempts_registry().find_for_outcome(service_id, hwnd, identity)
         try:
-            automation.sck_outcome(service_id, kind)
+            automation.sck_outcome(service_id, kind, att.attempt_id if att else "")
         except Exception:
             pass
+        if att is None:
+            return
         if kind == "worked":
-            self._save_sck_candidate(service_id)
+            self._sck_worked(att, dict(profile or {}))
+        elif kind == "wrong_password":
+            self._sck_attempts_registry().take_candidate(att)
         elif kind == "locked":
-            self._sck_clear_candidate(service_id)
+            self._sck_locked(att)
+
+    def _sck_worked(self, att, profile):
+        """Qt thread: the login worked. Save the candidate the card filled, if there is one."""
+        reg = self._sck_attempts_registry()
+        tested = att.tested
+        password = reg.take_candidate(att)
+        reg.unlock(att.client_id, att.service_id)
+        if not password:
+            return
+        self._sck_commit(att, password, tested, profile)
+
+    def _sck_locked(self, att):
+        """Qt thread: the portal says the account is locked. Forget the candidate, keep SCA off for
+        this client for the run, warn staff and write one audit line (no password)."""
+        reg = self._sck_attempts_registry()
+        reg.take_candidate(att)
+        reg.lock(att.client_id, att.service_id)
+        try:
+            if hasattr(self, "tray_icon") and self.tray_icon and self.tray_icon.isVisible():
+                self.tray_icon.showMessage(
+                    "Sera Credential Keeper",
+                    f"{att.portal or 'The portal'} reports the account locked"
+                    + (f" for {att.client_name}" if att.client_name else "") + ". Sera will not retry.",
+                    QSystemTrayIcon.Warning, 8000)
+            if att.client_id is not None:
+                self.db.log_action(actor=getattr(self, "actor", "Staff"), action="update",
+                                   client_id=att.client_id, service_id=att.service_id,
+                                   detail="SCK: portal reports the account locked")
+        except Exception as e:
+            print(f"[main._sck_locked error] {type(e).__name__}")
+
+    def _sck_commit_requested(self, att):
+        """Qt thread: Save Directly on an OS card - the candidate is untested."""
+        password = self._sck_attempts_registry().take_candidate(att)
+        if not password:
+            return
+        self._sck_commit(att, password, False, None)
+
+    def _sck_card_closed(self, att, reason):
+        """Qt thread: an OS card went away (x, browser closed, saved, locked). The next failure on
+        that window may fire; a dismissed new-client offer is not repeated for the run."""
+        watcher = getattr(self, "_sck_watcher", None)
+        if watcher is None:
+            return
+        try:
+            if att.kind == "new_client" and reason == "close":
+                watcher.decline_offer(att.service_id, att.identity)
+            watcher.mark_resolved(att.service_id, hwnd=att.hwnd)
+        except Exception:
+            pass
 
     def _handle_sck_candidate(self, msg: dict):
-        """Qt thread: the card filled a password. Keep it in memory only, so a success that
-        arrives after the page has navigated can still be saved."""
+        """Qt thread: the extension's card filled a password. Keep it in the attempt (memory only,
+        expires), so a success that arrives after the page has navigated can still be saved."""
         service_id = msg.get("service_id")
         password = msg.get("password") or ""
         if service_id is None or not password:
             return
-        self._sck_candidates[service_id] = {
-            "password": password,
-            "client_id": msg.get("client_id"),
-            "portal": str(msg.get("portal") or ""),
-        }
+        att = self._sck_ext_attempt(service_id, msg.get("client_id"), str(msg.get("portal") or ""))
+        self._sck_attempts_registry().set_candidate(att, password, tested=True)
+        self._sck_fill_started(service_id)
+
+    def _sck_ext_attempt(self, service_id, client_id=None, portal=""):
+        """The extension attempt (no window) of that service; opened when the card's ✎ made one."""
+        reg = self._sck_attempts_registry()
+        att = reg.get(service_id, 0)
+        if att is None:
+            att = reg.open(service_id=service_id, hwnd=0, client_id=client_id, portal=portal,
+                           kind="rotation" if client_id else "new_client")
+        elif client_id and att.client_id is None:
+            att.client_id = client_id
+        return att
+
+    def _sck_commit(self, att, password, tested, profile=None):
+        """Qt thread: write one SCK password. A known client -> the vault; an unknown ID -> a new
+        client or a tracker-dump row (core/rotation/new_client.py). The password is never logged,
+        printed or stored anywhere but the vault / that row."""
+        if att.kind == "new_client" and att.client_id is None:
+            self._sck_commit_new_client(att, password, tested, profile)
+        else:
+            self._save_sck_password(att, password, tested)
+
+    def _sck_finish(self, att, ok, message):
+        """Qt thread: tell the card, then take it down (after a moment in OS mode, so staff can
+        read "saved"), free the attempt and let the next failure fire."""
+        import automation
+        sid, aid = att.service_id, att.attempt_id
+        automation.sck_save_result(sid, ok, message, aid)
+        if not ok:
+            return
+        if automation.assist_engine() == "os":
+            QTimer.singleShot(1500, lambda: automation.hide_sck_widget(sid, aid))
+        else:
+            automation.hide_sck_widget(sid, aid)
+        self._sck_attempts_registry().close(att)
         watcher = getattr(self, "_sck_watcher", None)
         if watcher is not None:
-            try:
-                watcher.reset_outcome_throttle(service_id)
-            except Exception:
-                pass
+            watcher.mark_resolved(sid, att.client_id, hwnd=att.hwnd)
 
-    def _sck_clear_candidate(self, service_id):
-        """Qt thread: forget the in-memory candidate for this service."""
-        try:
-            self._sck_candidates.pop(service_id, None)
-        except Exception:
-            pass
-
-    def _save_sck_candidate(self, service_id):
-        """Qt thread: the login succeeded. Save the candidate the card filled, if there is one.
-        The password is never logged; the save itself records metadata only."""
-        held = self._sck_candidates.pop(service_id, None)
-        if not held:
-            return
-        self._save_sck_password(
-            service_id=service_id,
-            password=held.get("password") or "",
-            client_id=held.get("client_id"),
-            portal=str(held.get("portal") or ""))
-
-    def _save_sck_password(self, service_id, password, client_id, portal):
+    def _save_sck_password(self, att, password, tested):
         """Qt thread: write one SCK password to the vault, tell the card, and refresh the views.
-        The password is never logged, printed or stored anywhere but the vault."""
-        import automation
+        An untested one (Save Directly) is saved but not tagged verified."""
         from core.rotation import save_verified_for_rotation
 
         password = str(password or "")
-        portal = str(portal or "").strip()
         service = {}
         try:
-            service = self.db.get_service(service_id) or {}
+            service = self.db.get_service(att.service_id) or {}
         except Exception:
             service = {}
-        portal = portal or str(service.get("name") or "")
+        portal = att.portal or str(service.get("name") or "")
 
-        if not client_id:
-            automation.sck_save_result(service_id, False,
-                                       "Sera could not tell which client this login belongs to. "
-                                       "Copy the client's ID first, then try again.")
+        if not att.client_id:
+            self._sck_finish(att, False, "Sera could not tell which client this login belongs to. "
+                                         "Copy the client's ID first, then try again.")
             return
 
         try:
             result = save_verified_for_rotation(
-                db=self.db, password=password, pan="", client_id=int(client_id),
+                db=self.db, password=password, pan=att.identity, client_id=int(att.client_id),
                 portal=portal, actor=getattr(self, "actor", "Staff"),
-                service_id=service_id, method="SCK-Widget")
+                service_id=att.service_id, method="SCK-Widget", verified=bool(tested))
         except Exception as exc:
             print(f"[main._save_sck_password error] {type(exc).__name__}")
-            automation.sck_save_result(service_id, False, "The password could not be saved. Try again.")
+            self._sck_finish(att, False, "The password could not be saved. Try again.")
             return
         finally:
             password = ""       # noqa: F841 - drop our copy as soon as the write is done
 
         if result is None:
-            automation.sck_save_result(service_id, False,
-                                       "This service has no password column in the vault. "
-                                       "Set one in Services.")
+            self._sck_finish(att, False, "This service has no password column in the vault. "
+                                         "Set one in Services.")
             return
 
         what = {"saved": "New password saved", "replaced": "Saved password replaced",
                 "verified": "Password already saved"}.get(result.outcome, "Password saved")
-        automation.sck_save_result(service_id, True, what)
-        automation.hide_sck_widget(service_id)
-        watcher = getattr(self, "_sck_watcher", None)
-        if watcher is not None:
-            watcher.mark_resolved(service_id, result.client_id)
+        if not tested:
+            what += " (untested)"
+        self._sck_finish(att, True, what)
         self._after_sck_save(result)
+
+    def _sck_commit_new_client(self, att, password, tested, profile):
+        """Qt thread: an unknown ID logged in (or staff saved it directly)."""
+        from core.rotation import new_client
+        actor = getattr(self, "actor", "Staff")
+        try:
+            result = new_client.handle_login(
+                self.db, service_id=att.service_id, portal=att.portal, identity=att.identity,
+                user_id=att.user_id, password=password, tested=bool(tested), profile=profile,
+                actor=actor)
+        finally:
+            password = ""       # noqa: F841
+        if result.outcome == "failed":
+            self._sck_finish(att, False, result.message)
+            return
+        self._sck_finish(att, True, result.message)
+        try:
+            if hasattr(self, "tray_icon") and self.tray_icon and self.tray_icon.isVisible():
+                title = ("New client created" if result.outcome == "created"
+                         else "Tracker Dump" if result.outcome == "dumped" else "Sera Credential Keeper")
+                self.tray_icon.showMessage(title, result.message, QSystemTrayIcon.Information, 6000)
+        except Exception as e:
+            print(f"[main._sck_commit_new_client toast error] {type(e).__name__}")
+        if result.outcome == "existing" and result.save is not None:
+            self._after_sck_save(result.save)
+        elif result.outcome == "created" and result.client_id:
+            self._refresh_client_views(result.client_id)
 
     def _sck_resolve_client(self, service: dict, obs):
         """(client_id | None, display name) for a failed login: the PAN/GSTIN SGT read on the page,
@@ -1691,8 +1810,9 @@ class SeraApp:
         return cid, (names[0] if names else "")
 
     def _handle_sck_save_password(self, msg: dict):
-        """SCK: the new password staff typed into the card. Runs on the Qt thread and never writes
-        the message anywhere - no print, no audit detail, no log."""
+        """SCK (extension): the new password staff typed into the in-page card and saved directly.
+        Runs on the Qt thread and never writes the message anywhere - no print, no audit detail,
+        no log. Untested: it is saved but not marked verified."""
         service_id = msg.get("service_id")
         password = msg.get("password") or ""
         client_id = msg.get("client_id")
@@ -1704,8 +1824,9 @@ class SeraApp:
                     client_id = watcher.client_for_arm(arm_id)
                 except Exception:
                     client_id = None
-        self._sck_clear_candidate(service_id)
-        self._save_sck_password(service_id, password, client_id, msg.get("portal") or "")
+        att = self._sck_ext_attempt(service_id, client_id, str(msg.get("portal") or ""))
+        self._sck_attempts_registry().take_candidate(att)
+        self._sck_commit(att, password, False, None)
 
     def _after_sck_save(self, result):
         """Qt thread: toast + the same refresh SCC's save does. `result` is a RotationSave."""
@@ -1728,17 +1849,28 @@ class SeraApp:
         that service may fire."""
         import automation
         service_id = msg.get("service_id")
-        if str(msg.get("reason") or "") == "dashboard":
-            self._save_sck_candidate(service_id)
-        self._sck_clear_candidate(service_id)
-        automation.hide_sck_widget(service_id)
+        reg = self._sck_attempts_registry()
+        att = reg.get(service_id, 0)
+        reason = str(msg.get("reason") or "")
         watcher = getattr(self, "_sck_watcher", None)
+        if att is not None:
+            if reason == "dashboard":
+                tested = att.tested
+                password = reg.take_candidate(att)
+                if password:
+                    self._sck_commit(att, password, tested, None)
+            elif watcher is not None and att.kind == "new_client":
+                watcher.decline_offer(service_id, att.identity)
+            reg.close(att)
+        automation.hide_sck_widget(service_id)
         if watcher is not None:
             watcher.mark_resolved(service_id)
 
     def _handle_sck_edit_requested(self, msg: dict):
         """Staff pressed the ✎ edit button on SMTI / MECP / SCA widget: open the SCK card
-        for this service and client so staff can enter a new password without needing a failed login."""
+        for this service and client so staff can enter a new password without needing a failed login.
+        OS mode: the card docks on the browser window of the card that raised ✎ (msg["hwnd"]); the
+        extension's ✎ carries none, so the window showing the service's login page is looked up."""
         import automation
         from core.scc import db_client_names
 
@@ -1774,7 +1906,25 @@ class SeraApp:
                 except Exception:
                     client_name = ""
 
-        automation.show_sck_widget(service, client_id, client_name, portal)
+        hwnd = 0
+        if automation.assist_engine() == "os":
+            hwnd = int(msg.get("hwnd") or 0)
+            if not hwnd:
+                try:
+                    from core.os_assist import locate, worker
+                    hwnd = int(worker.submit(locate.window_for_host,
+                                             service.get("login_page_link") or "").result(timeout=1.5) or 0)
+                except Exception:
+                    hwnd = 0
+            if not hwnd:
+                return                          # no browser window to dock on
+        reg = self._sck_attempts_registry()
+        reg.unlock(client_id, service_id)       # pressing ✎ again clears a lock (staff know better)
+        attempt = reg.open(service_id=service_id, hwnd=hwnd, client_id=client_id,
+                           client_name=client_name, portal=portal, kind="rotation")
+        if not automation.show_sck_widget(service, client_id, client_name, portal, hwnd=hwnd,
+                                          attempt_id=attempt.attempt_id, kind="rotation", edit=True):
+            reg.close(attempt)
 
     def _run_pending_rejoin(self) -> None:
         """P2-8: finish or run a requested "Rejoin office", then offer the salvage import.

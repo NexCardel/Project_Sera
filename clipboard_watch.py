@@ -577,6 +577,13 @@ class ClipboardWatchService(QObject):
             return denied("that portal is not part of this arm")
         if not sca_protocol.host_matches(str(msg.get("page_host") or ""), svc["url"]):
             return denied("the page is not that portal's site")
+        try:
+            from core.rotation import attempts as _sck_attempts
+            sck_reason = _sck_attempts.suppression_reason(arm.client_id, svc_id)
+        except Exception:
+            sck_reason = ""
+        if sck_reason:
+            return denied(sck_reason)       # SCK: a new-password card is open, or the account is locked
         ctx = self._client_context(arm.client_id)
         if not ctx:
             return denied("the client no longer exists")

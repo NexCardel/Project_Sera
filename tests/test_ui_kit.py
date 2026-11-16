@@ -168,6 +168,25 @@ def test_segmented_is_one_focus_stop(app):
     assert s.height() == TOKENS["h_ctl"]
 
 
+def test_segmented_pills_fit_the_track_inside_a_dialog(app):
+    # The app sheet's "QDialog QPushButton { min-height: 30px }" used to stretch the pills
+    # past the track's bottom edge in dialogs (e.g. the inspector's Overview / Raw JSON).
+    from PySide6.QtWidgets import QDialog, QVBoxLayout
+    from ui.utils.theme import get_theme_stylesheet
+    dlg = QDialog()
+    dlg.setStyleSheet(get_theme_stylesheet("dark"))
+    s = kit.Segmented(["Overview", "Raw JSON"])
+    QVBoxLayout(dlg).addWidget(s)
+    dlg.show()
+    app.processEvents()
+    try:
+        for b in s.buttons:
+            assert b.height() == kit._SEG_PILL_H, b.geometry()
+            assert b.geometry().bottom() < s.height() - 1, b.geometry()
+    finally:
+        dlg.close()
+
+
 # ---------------------------------------------------------------- Key, StatusDot
 
 def test_key_dark_and_light(app):

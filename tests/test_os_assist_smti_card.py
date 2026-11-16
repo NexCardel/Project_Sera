@@ -226,7 +226,7 @@ def test_worker_thread_result_reaches_the_qt_thread(app):
 def test_edit_button_opens_sck_for_this_client_and_service(app):
     card, _f, _c, edits, _clock = make()
     card.edit_btn.click()
-    assert edits == [{"client_id": 42, "service_id": 7, "portal": "gst"}]
+    assert edits == [{"client_id": 42, "service_id": 7, "portal": "gst", "hwnd": 4660}]
     card.dismiss()
 
 
@@ -239,7 +239,7 @@ def test_shared_sck_helper_uses_the_registered_app_handler(app):
         card.edit_btn.click()
     finally:
         dc.set_sck_edit_handler(None)
-    assert got == [{"client_id": 5, "service_id": 11, "portal": "mca"}]
+    assert got == [{"client_id": 5, "service_id": 11, "portal": "mca", "hwnd": 0}]
 
 
 # -- Flutter steps --------------------------------------------------------------------------------
@@ -317,9 +317,33 @@ def test_one_focus_job_at_a_time_and_none_while_hidden(app):
 
 def test_page_without_boxes_switches_to_flutter(app):
     card, filler, *_ = make()
-    filler.count_answers.append(0)
-    card._probe_flutter()
+    filler.count_answers.extend([0] * sc.FLUTTER_PROBE_TRIES)
+    for _ in range(sc.FLUTTER_PROBE_TRIES):
+        card._probe_flutter()
     assert card.flutter and card.actions.isHidden() and card._focus_poll.isActive()
+    card.dismiss()
+
+
+def test_one_empty_probe_does_not_switch_to_flutter(app):
+    # First use: the browser's accessibility tree is still being built, so the first probe sees
+    # no boxes; by the next probe they are there. The card keeps its buttons.
+    card, filler, *_ = make()
+    filler.count_answers.extend([0, 2])
+    card._probe_flutter()
+    assert not card.flutter and not card.actions.isHidden()
+    card._probe_flutter()
+    assert not card.flutter and not card.actions.isHidden() and card.guide.isHidden()
+    card.dismiss()
+
+
+def test_boxes_found_by_warm_never_switch_to_flutter(app):
+    card, filler, *_ = make(present=False)
+    filler.warm = lambda hwnd, user_sel, pass_sel: True
+    card.present()
+    filler.count_answers.extend([0] * sc.FLUTTER_PROBE_TRIES)
+    for _ in range(sc.FLUTTER_PROBE_TRIES):
+        card._probe_flutter()
+    assert filler.counts == [] and not card.flutter and not card.actions.isHidden()
     card.dismiss()
 
 

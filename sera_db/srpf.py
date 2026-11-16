@@ -249,7 +249,8 @@ class SrpfMixin:
                 return
             if isinstance(item, dict):
                 # SGT-I's advisory notes are never identity evidence (blueprint 14.2 rule 4)
-                item = {k: v for k, v in item.items() if k != "sgt_i"}
+                # ... nor is SGT's evidence block: it describes the capture, it must never steer it
+                item = {k: v for k, v in item.items() if k not in ("sgt_i", "sgt_ev")}
                 # Priority target keys first
                 for k, v in item.items():
                     k_lower = str(k).lower()

@@ -240,7 +240,6 @@ class UnifiedSettingsDialog(QDialog):
         outer.setContentsMargins(0, 0, 0, 0)
 
         self._frame = DialogFrame("Settings", "Project Sera \u00b7 this PC", self, icon="mdi.cog", full=True)
-        self._frame.add_close_button()
         self._frame.closeRequested.connect(self.reject)
         outer.addWidget(self._frame)
 

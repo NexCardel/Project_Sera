@@ -159,7 +159,6 @@ class SeraSyncDialog(QDialog):
             self, icon="mdi.sync", full=True)
         outer.addWidget(self.frame)
         self.frame.closeRequested.connect(self.reject)
-        self.frame.add_close_button()
 
         # Public-network warning (P0-9b). Hidden unless the active network is Public.
         self.network_warning_banner = Banner(

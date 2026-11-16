@@ -104,6 +104,16 @@ def test_setvalue_ok(env):
     assert kb.typed == 0
 
 
+def test_password_box_shown_as_text_is_checked_by_length(env):
+    # Income Tax after a refused login: the password box reads back plain text, not bullets.
+    box = Box("ok", password=False)
+    kb = keys_for(box)
+    res = fill.fill(HWND, box, "s3cret-fake", True, SERVICE, keyboard=kb)
+    assert (res.outcome, res.method) == ("filled", "setvalue")
+    assert kb.typed == 0
+    assert fill._check(box, 3, None, True) == "length 11 vs 3"
+
+
 def test_setvalue_ignored_falls_back_to_keys(env):
     box = Box("ignored")
     env.uia.focus = box

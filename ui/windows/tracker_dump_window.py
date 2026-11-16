@@ -571,6 +571,7 @@ class AddClientFromCaptureDialog(QDialog):
         extracted_info = self._extract_info_from_payload()
         mcl_cols = self.db.get_mcl_columns()
         mapped_values = map_profile_to_mcl_columns(extracted_info, mcl_cols)
+        sck_prefill = self._sck_login_prefill()
 
         fields = Card("Client fields")
         self.field_inputs = {}
@@ -587,6 +588,8 @@ class AddClientFromCaptureDialog(QDialog):
                 prefill_val = str(self._get_next_serial_no())
             else:
                 prefill_val = mapped_values.get(col_id, "")
+            if sck_prefill.get(col_id):
+                prefill_val = sck_prefill[col_id]
 
             inp = Input()
             inp.setText(prefill_val)
@@ -616,6 +619,28 @@ class AddClientFromCaptureDialog(QDialog):
         btn_cancel.clicked.connect(self.reject)
         btn_save = frame.add_action("Save & Link Captures", variant="primary", icon="mdi.check-circle")
         btn_save.clicked.connect(self._on_save)
+
+    def _sck_login_prefill(self) -> dict:
+        """A login SCK kept (capture_method SCK_Login): {column id: value} for the service's user-ID
+        and password columns, so the client is created with them. Empty for any other capture."""
+        self._sck_dump_id = None
+        if self.item_data.get("capture_method") != "SCK_Login" or not self.item_data.get("id"):
+            return {}
+        try:
+            login = self.db.get_sck_login(self.item_data["id"]) or {}
+            svc = self.db.get_service(self.item_data.get("service_id")) if self.item_data.get("service_id") else {}
+        except Exception:
+            return {}
+        if not login:
+            return {}
+        self._sck_dump_id = self.item_data["id"]
+        out = {}
+        svc = svc or {}
+        if svc.get("userid_column_id"):
+            out[int(svc["userid_column_id"])] = str(login.get("user_id") or login.get("identity") or "")
+        if svc.get("password_column_id") and login.get("password"):
+            out[int(svc["password_column_id"])] = str(login["password"])
+        return out
 
     def _extract_info_from_payload(self) -> dict:
         from ui.utils.profile_parser import extract_profile_from_payload
@@ -662,6 +687,11 @@ class AddClientFromCaptureDialog(QDialog):
         try:
             new_cid = self.db.add_client(values=values, notes=f"Auto-created from Tracker Dump capture (ARN: {self.item_data.get('arn_number', 'N/A')})", service_ids=service_ids, actor="Staff")
             self.created_client_id = new_cid
+            if getattr(self, "_sck_dump_id", None):
+                try:
+                    self.db.strip_sck_password(self._sck_dump_id)      # the client holds it now (D2)
+                except Exception:
+                    pass
 
             # Retroactively link all unassigned tracker dumps matching this identity
             linked_count = self.db.link_unassigned_tracker_dumps(new_cid, pan_val or self.item_data.get("unassigned_identity") or "")
@@ -1838,7 +1868,6 @@ class McLMappingDialog(QDialog):
                             icon="mdi.table-arrow-right", full=True)
         outer.addWidget(frame)
         frame.closeRequested.connect(self.reject)
-        frame.add_close_button()
 
         hint = QLabel("Pick the MCL column a datapoint belongs to where auto-mapping misses it. "
                       "When a capture arrives for a registered client, mapped values fill that client's "
@@ -2511,10 +2540,59 @@ class TrackerDumpWindow(QWidget):
             if item.get('is_unassigned') or not item.get('client_id'):
                 act_create = menu.addAction(_safe_qta_icon("mdi.account-plus", T["em2"]), "+ Create Client")
                 act_create.triggered.connect(lambda: self._create_client_from_capture(item))
+            self._add_wrong_client_action(menu, item)
             act_del = menu.addAction(_safe_qta_icon("mdi.trash-can-outline", T["dangertx"]), "Delete Record")
             act_del.triggered.connect(lambda: self._delete_dump(item.get("id")))
 
         menu.exec_(self.table.viewport().mapToGlobal(pos))
+
+    def _add_wrong_client_action(self, menu, item: dict):
+        """"Mark Wrong Client" on a capture row: the mark is stored on the row (so it syncs) and puts
+        the row in the SGT evidence export (core/sgt/sgt_evidence.py)."""
+        dump_id = item.get("id")
+        if not dump_id:
+            return
+        try:
+            marked = self.db.is_tracker_dump_marked_wrong(dump_id)
+        except Exception:
+            marked = False
+        act = menu.addAction(_safe_qta_icon("mdi.account-alert-outline", T["dangertx"]),
+                             "Unmark Wrong Client" if marked else "Mark Wrong Client")
+        act.triggered.connect(lambda: self._mark_wrong_client(dump_id, not marked))
+
+    def _mark_wrong_client(self, dump_id: int, wrong: bool):
+        try:
+            ok = self.db.mark_tracker_dump_wrong_client(dump_id, wrong)
+        except Exception:
+            ok = False
+        if not ok:
+            MessageBox.critical(self, "Wrong Client", "The mark could not be saved on this record.")
+
+    def _export_sgt_evidence(self):
+        """Writes every marked, flagged or audited SGT row with its evidence block to one JSON file."""
+        import datetime as _dt
+        from core.sgt import sgt_evidence
+        from core.vsdc.vsdc_alerts import device_name
+        from version import APP_VERSION
+        try:
+            entries = self.db.sgt_evidence_entries()
+        except Exception as e:
+            MessageBox.critical(self, "Export SGT Evidence", f"Could not read the records: {e}")
+            return
+        if not entries:
+            MessageBox.information(self, "Export SGT Evidence", "No marked or flagged SGT records.")
+            return
+        now = _dt.datetime.now()
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Export SGT Evidence", f"sgt_evidence_{now:%Y-%m-%d}.json", "JSON Files (*.json)")
+        if not file_path:
+            return
+        try:
+            n = sgt_evidence.write_export(entries, file_path, device_name(), APP_VERSION,
+                                          now.isoformat(timespec="seconds"))
+            MessageBox.information(self, "Export Complete", f"Exported {n} records to:\n{file_path}")
+        except Exception as e:
+            MessageBox.critical(self, "Export Failed", f"Could not write the file: {e}")
 
     def _reset_filters(self):
         """Resets all search and filter dropdowns to their default state."""
@@ -2963,6 +3041,7 @@ class TrackerDumpWindow(QWidget):
             act_del = menu.addAction(_safe_qta_icon("mdi.trash-can-outline", T["dangertx"]), "Delete Container")
             act_del.triggered.connect(lambda: self._delete_srpf_container(item.get("identity_key")))
         else:
+            self._add_wrong_client_action(menu, item)
             act_del = menu.addAction(_safe_qta_icon("mdi.trash-can-outline", T["dangertx"]), "Delete Record")
             act_del.triggered.connect(lambda: self._delete_dump(item.get("id")))
 
@@ -3425,6 +3504,9 @@ class TrackerDumpWindow(QWidget):
 
         act_export_csv = menu.addAction(_safe_qta_icon("mdi.file-export", T["mint"]), "Export Captures (CSV)")
         act_export_csv.triggered.connect(self._export_csv)
+
+        act_export_ev = menu.addAction(_safe_qta_icon("mdi.file-search-outline", T["mint"]), "Export SGT Evidence (JSON)")
+        act_export_ev.triggered.connect(self._export_sgt_evidence)
 
         act_distill = menu.addAction(_safe_qta_icon("mdi.flask-outline", T["mint"]), "Distill…")
         act_distill.triggered.connect(self._open_distill)

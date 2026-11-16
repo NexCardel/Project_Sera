@@ -1901,7 +1901,9 @@ function injectSck(tabId, payload) {
     payload.client_name || "",
     payload.portal || "",
     payload.login_page_link || "",
-    payload.dashboard_page_link || ""
+    payload.dashboard_page_link || "",
+    payload.kind || "rotation",
+    payload.identity || ""
   ]).catch(err => { if (SERA_DEBUG) console.warn("Sera: SCK injection failed", err); });
 }
 
@@ -1940,7 +1942,9 @@ function handleSckFailure(message) {
       client_id: message.client_id == null ? null : message.client_id,
       client_name: String(message.client_name || ""),
       login_page_link: String(message.login_page_link || ""),
-      dashboard_page_link: String(message.dashboard_page_link || "")
+      dashboard_page_link: String(message.dashboard_page_link || ""),
+      kind: String(message.kind || "rotation"),
+      identity: String(message.identity || "")
     };
     _passwordStore.set({ sckPayloads: all });
     injectSckEverywhere(all[sid]);
@@ -2122,7 +2126,7 @@ function maybeReinjectSck(tabId, url) {
   });
 }
 
-function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboardLink) {
+function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboardLink, kind, identity) {
   // Runs in the portal page. No password is received here; only the service and the client.
   try { if (window.self !== window.top) return; } catch (_) { return; }
 
@@ -2159,6 +2163,10 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
   }
 
   const hasClient = clientId !== null && clientId !== undefined && clientId !== "";
+  // An ID Sera does not know: the card still takes a password (the desktop creates the client, or
+  // keeps the details in the Tracker Dump, once the login worked).
+  const isNew = kind === "new_client";
+  const canType = hasClient || isNew;
   const host = document.createElement("div");
   host.id = hostId;
   host.setAttribute("data-service-id", String(serviceId));
@@ -2393,16 +2401,19 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
 
   const title = document.createElement("div");
   title.className = "title";
-  title.textContent = clientName ? `${clientName} • ${portal}` : String(portal || "Portal");
+  title.textContent = isNew ? String(identity || portal || "Portal")
+    : (clientName ? `${clientName} • ${portal}` : String(portal || "Portal"));
 
   const subtitle = document.createElement("div");
   subtitle.className = "subtitle";
-  subtitle.textContent = hasClient
-    ? "The portal refused the saved password. Enter the new password."
-    : "Sera could not match this login to a client.";
+  subtitle.textContent = isNew
+    ? "This login is not in Sera. Enter its password and Sera will fill it and remember it."
+    : (hasClient
+      ? "The portal refused the saved password. Enter the new password."
+      : "Sera could not match this login to a client.");
 
   const parts = [header, title, subtitle];
-  if (!hasClient) {
+  if (!hasClient && !isNew) {
     const note = document.createElement("div");
     note.className = "note";
     note.textContent = "Copy the client's ID first, then try again.";
@@ -2421,7 +2432,7 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
   pwd.className = "pwd";
   pwd.autocomplete = "new-password";
   pwd.placeholder = "Type the new password";
-  pwd.disabled = !hasClient;
+  pwd.disabled = !canType;
 
   const eyeBtn = document.createElement("button");
   eyeBtn.type = "button";
@@ -2552,7 +2563,7 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
   }
 
   function doFillAndTest() {
-    if (done || !hasClient || !pwd.value) return;
+    if (done || !canType || !pwd.value) return;
     const val = pwd.value;
     candidatePassword = val;
     candidateFilled = false;
@@ -2603,7 +2614,7 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
   }
 
   function doSaveDirectly() {
-    if (done || !hasClient || !pwd.value) return;
+    if (done || !canType || !pwd.value) return;
     candidatePassword = pwd.value;
     saveBtn.disabled = true;
     fillBtn.disabled = true;
@@ -2690,12 +2701,12 @@ function sckWidget(serviceId, clientId, clientName, portal, loginLink, dashboard
   try { chrome.runtime.onMessage.addListener(onMsg); } catch (_) {}
 
   pwd.addEventListener("input", () => {
-    const hasVal = !done && hasClient && !!pwd.value;
+    const hasVal = !done && canType && !!pwd.value;
     fillBtn.disabled = !hasVal;
     saveBtn.disabled = !hasVal;
   });
   pwd.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !done && hasClient && pwd.value) {
+    if (e.key === "Enter" && !done && canType && pwd.value) {
       e.preventDefault();
       doFillAndTest();
     }

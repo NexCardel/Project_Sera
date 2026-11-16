@@ -516,25 +516,30 @@ class IconButton(_ReasonMixin, QToolButton):
 
 # ---------------------------------------------------------------- Segmented
 
+_SEG_PAD = 2  # track padding around the pills
+_SEG_PILL_H = T["h_ctl"] - 2 * _SEG_PAD
+
+
 @lru_cache(maxsize=None)
 def _segmented_qss():
-    r = T["r_m"] - 1
+    # A recessed track with no outline and the options as inset pills: no hard dividers,
+    # and the active pill sits inside the track's padding.
     return (
-        f"QFrame#KitSegmented {{ background: transparent; border: 1px solid {T['line2']};"
+        f"QFrame#KitSegmented {{ background: {T['panel']}; border: none;"
         f" border-radius: {T['r_m']}px; }}"
-        f"QFrame#KitSegmented:focus {{ border-color: {T['mint']}; }}"
-        f"QFrame#KitSegmented:disabled {{ border-color: {_rgba(T['line2'], _DISABLED_ALPHA)}; }}"
-        f"QPushButton {{ background: transparent; border: none; border-right: 1px solid {T['line2']};"
-        f" border-radius: 0; color: {T['text2']}; font-size: {K['f_btn']}px; font-weight: 600;"
-        f" padding: 0 14px; }}"
-        f"QPushButton[pos=\"first\"] {{ border-top-left-radius: {r}px; border-bottom-left-radius: {r}px; }}"
-        f"QPushButton[pos=\"last\"] {{ border-right: none; border-top-right-radius: {r}px;"
-        f" border-bottom-right-radius: {r}px; }}"
-        f"QPushButton[pos=\"only\"] {{ border-right: none; border-radius: {r}px; }}"
-        f"QPushButton:hover:!checked, QPushButton:pressed:!checked {{ background: {T['hover']}; }}"
-        f"QPushButton:checked {{ background: {T['em']}; color: {K['white']}; }}"
+        # Pin the pill height here too: a QSS min-height beats setFixedHeight, so without it the
+        # app sheet's "QDialog QPushButton { min-height: 30px }" stretches the pills past the
+        # track's bottom edge inside dialogs.
+        f"QPushButton {{ background: transparent; border: none; border-radius: {T['r_s'] - 1}px;"
+        f" color: {T['muted']}; font-size: {K['f_btn']}px; font-weight: 600; padding: 0 14px;"
+        f" min-height: {_SEG_PILL_H}px; max-height: {_SEG_PILL_H}px; }}"
+        f"QPushButton:hover:!checked, QPushButton:pressed:!checked {{ background: {T['hover']};"
+        f" color: {T['text']}; }}"
+        f"QPushButton:checked {{ background: {T['emdim']}; color: {T['mint']};"
+        f" border: 1px solid {T['emline']}; }}"
         f"QPushButton:disabled {{ color: {_rgba(T['text2'], _DISABLED_ALPHA)}; }}"
-        f"QPushButton:checked:disabled {{ background: {_rgba(T['em'], _DISABLED_ALPHA)}; }}"
+        f"QPushButton:checked:disabled {{ background: {_rgba(T['emdim'], _DISABLED_ALPHA)};"
+        f" color: {_rgba(T['mint'], _DISABLED_ALPHA)}; }}"
     )
 
 
@@ -549,8 +554,9 @@ class Segmented(QFrame):
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.setStyleSheet(_segmented_qss())
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(1, 1, 1, 1)
-        lay.setSpacing(0)
+        pad = _SEG_PAD
+        lay.setContentsMargins(pad, pad, pad, pad)
+        lay.setSpacing(2)
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
         self.buttons = []
@@ -560,7 +566,7 @@ class Segmented(QFrame):
             b.setCheckable(True)
             b.setFocusPolicy(Qt.NoFocus)
             b.setCursor(Qt.PointingHandCursor)
-            b.setFixedHeight(T["h_ctl"] - 2)
+            b.setFixedHeight(_SEG_PILL_H)
             b.setProperty("pos", "only" if n == 1 else "first" if i == 0 else "last" if i == n - 1 else "mid")
             self._group.addButton(b, i)
             lay.addWidget(b)

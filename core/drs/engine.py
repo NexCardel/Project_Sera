@@ -68,6 +68,8 @@ def _tracker_history_entries(db) -> list[tuple[Any, str, dict]]:
 
     out: list[tuple[Any, str, dict]] = []
     for row in rows or []:
+        if row.get("capture_method") == "SCK_Login":       # a kept login is not a filing (D3)
+            continue
         ident = str(row.get("unassigned_identity") or "").strip().upper()
         raw_json_str = row.get("raw_payload_json") or ""
         orig_author = str(row.get("original_author") or row.get("payload_original_author") or "").strip()

@@ -69,7 +69,7 @@ class _Harness:
             resolve_client=lambda svc, obs: (42, "Acme Ltd"),
             on_failure=self.failures.append,
             on_clear=self.cleared.append,
-            on_outcome=lambda sid, kind: self.outcomes.append((sid, kind)),
+            on_outcome=lambda sid, kind, *a: self.outcomes.append((sid, kind)),
             rules=lambda: self.rules,
             monotonic=self.clock,
         )
@@ -225,3 +225,90 @@ def test_outcome_errors_never_break_detection():
     h.clock.now += 10.0
 
     assert h.watcher.observe(_obs(LOGIN), hwnd=1) == "pending"
+
+
+# ── S2: window-bound outcomes and the new-client offer ───────────────────────────────────────
+class _Offers:
+    """A harness whose resolve_client knows only PAN KNOWN0001K."""
+
+    def __init__(self) -> None:
+        self.rules = _Rules()
+        self.clock = _Clock()
+        self.unregistered = []
+        self.full_outcomes = []
+        self.watcher = SckWatcher(
+            services=lambda: [_service()],
+            resolve_client=lambda svc, obs: ((42, "Acme Ltd") if obs.profile.get("pan") == "KNOWN0001K"
+                                             else (None, "")),
+            on_failure=lambda f: None,
+            on_outcome=lambda *a: self.full_outcomes.append(a),
+            on_unregistered=self.unregistered.append,
+            rules=lambda: self.rules,
+            monotonic=self.clock,
+        )
+
+
+def test_an_unknown_pk_shaped_id_is_offered_once_per_id():
+    h = _Offers()
+    obs = _obs(LOGIN, {"pan": "ABCDE1234F"})
+    assert h.watcher.observe(obs, hwnd=5) == "unregistered"
+    assert h.watcher.observe(obs, hwnd=5) == "pending"        # the offer is outstanding
+    assert len(h.unregistered) == 1
+    assert h.unregistered[0].unregistered and h.unregistered[0].identity == "ABCDE1234F"
+    assert h.unregistered[0].client_id is None and h.unregistered[0].hwnd == 5
+
+
+def test_a_known_client_is_not_offered():
+    h = _Offers()
+    assert h.watcher.observe(_obs(LOGIN, {"pan": "KNOWN0001K"}), hwnd=5) is None
+    assert h.unregistered == []
+
+
+def test_a_value_that_is_not_pk_shaped_is_not_offered():
+    h = _Offers()
+    assert h.watcher.observe(_obs(LOGIN, {"username": "jsmith"}), hwnd=5) is None
+    assert h.watcher.observe(_obs(LOGIN, {"pan": "12345"}), hwnd=5) is None
+    assert h.unregistered == []
+
+
+def test_a_gstin_offers_the_pan_inside_it():
+    h = _Offers()
+    h.watcher.observe(_obs(LOGIN, {"gstin": "07ABCDE1234F1Z5"}), hwnd=5)
+    assert h.unregistered[0].identity == "ABCDE1234F"
+
+
+def test_a_dismissed_offer_does_not_come_back():
+    h = _Offers()
+    obs = _obs(LOGIN, {"pan": "ABCDE1234F"})
+    h.watcher.observe(obs, hwnd=5)
+    h.watcher.decline_offer(7, "ABCDE1234F")
+    h.watcher.mark_resolved(7, hwnd=5)
+    assert h.watcher.observe(obs, hwnd=5) is None
+    assert h.watcher.observe(obs, hwnd=6) is None             # another window: still declined
+    assert len(h.unregistered) == 1
+
+
+def test_the_offer_is_per_window():
+    h = _Offers()
+    obs = _obs(LOGIN, {"pan": "ABCDE1234F"})
+    h.watcher.observe(obs, hwnd=5)
+    h.watcher.observe(obs, hwnd=6)
+    assert [f.hwnd for f in h.unregistered] == [5, 6]
+
+
+def test_outcomes_carry_the_window_identity_and_profile():
+    h = _Offers()
+    h.watcher.observe(_obs(DASHBOARD, {"pan": "abcde1234f", "name": "Fict Traders"}), hwnd=9)
+    sid, kind, hwnd, identity, profile = h.full_outcomes[0]
+    assert (sid, kind, hwnd, identity) == (7, "worked", 9, "ABCDE1234F")
+    assert profile["name"] == "Fict Traders"
+
+
+def test_pending_is_per_window_so_two_windows_each_get_a_card():
+    h = _Harness()
+    h.rules.next = _Outcome("wrong_password")
+    h.watcher.observe(_obs(LOGIN), hwnd=1)
+    h.watcher.observe(_obs(LOGIN), hwnd=2)
+    assert len(h.failures) == 2
+    h.watcher.mark_resolved(7, hwnd=1)
+    assert [f.hwnd for f in h.watcher.pending()] == [2]

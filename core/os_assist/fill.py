@@ -174,7 +174,8 @@ def _check(el, length: int, text: Optional[str], is_password: bool) -> str:
     """'ok', 'ok-unreadable' (password box exposing no value, D2) or a short failure reason.
     A user box is compared with `text`; a password box only by its bullet count. A box UIA marks
     as a password box is judged as one whatever the caller said (rule 4)."""
-    if _safe(lambda: el.CurrentIsPassword, False):
+    marked = bool(_safe(lambda: el.CurrentIsPassword, False))
+    if marked:
         is_password, text = True, None
     vp = _safe(lambda: _value_pattern(el), None)
     if vp is None:
@@ -184,6 +185,10 @@ def _check(el, length: int, text: Optional[str], is_password: bool) -> str:
         return "ok-unreadable" if is_password else "value unreadable"
     if not is_password:
         return "ok" if got == text else f"mismatch ({len(got)} chars)"
+    if not marked:                                  # a password box shown as plain text: length only
+        if got == "":
+            return "empty"
+        return "ok" if len(got) == length else f"length {len(got)} vs {length}"
     if got == "":
         return "empty"
     if len(got) == length and len(set(got)) == 1:

@@ -14,7 +14,8 @@ SMTI Manual Assist as a docked desktop card (blueprint §4.4), the same look as 
   0.05 s), not after the full 1 s:
   the 1.0 s re-check runs on the worker afterwards (fill late_check="background"). If the page
   drops the value by then, the card falls back to the copy, as if the fill had failed.
-- Flutter mode (TRACES host, or a page with no visible Edit until one is focused): the buttons are
+- Flutter mode (TRACES host, or a page that still shows no visible Edit on every one of the
+  FLUTTER_PROBE_TRIES probes and whose boxes warm_fields did not find): the buttons are
   hidden and two step cards shown; fill.FocusWatcher is asked on the worker whenever the browser
   reports a focus move (WinEvent, at once) and polled as a safety net (400 ms with events, 200 ms
   without), and the user ID, then the password, is typed into each new box staff click (§4.3).
@@ -209,6 +210,7 @@ class SmtiCard(DockCard):
         self._focus_job = None
         self._jobs: set = set()                  # worker jobs not done yet; the queued ones die with the card
         self._probe_tries = 0
+        self._boxes_found = False                # warm found a box: never switch to Flutter steps
         self.flutter = False
 
         wire_sck_edit(self, client_id, get("id"), str(get("name", "portal") or "portal").lower(),
@@ -442,14 +444,18 @@ class SmtiCard(DockCard):
             warm = getattr(self._filler, "warm", None)
             if warm is not None:
                 try:
-                    self._when_done(warm(self.browser_hwnd, self._user_sel, self._pass_sel), lambda _r: None)
+                    self._when_done(warm(self.browser_hwnd, self._user_sel, self._pass_sel), self._warmed)
                 except Exception:
                     pass
         if self._flutter_auto and not self.is_dismissed:
             QTimer.singleShot(FLUTTER_PROBE_MS, self._probe_flutter)
 
+    def _warmed(self, found) -> None:
+        if found is True:
+            self._boxes_found = True
+
     def _probe_flutter(self) -> None:
-        if self.is_dismissed or self.flutter or self._used:
+        if self.is_dismissed or self.flutter or self._used or self._boxes_found:
             return
         self._probe_tries += 1
         try:
@@ -459,12 +465,15 @@ class SmtiCard(DockCard):
         self._when_done(job, self._probed)
 
     def _probed(self, count) -> None:
-        if self.is_dismissed or self.flutter or self._used or not isinstance(count, int):
+        if (self.is_dismissed or self.flutter or self._used or self._boxes_found
+                or not isinstance(count, int) or count > 0):
             return
-        if count == 0:
-            self._enter_flutter()
-        elif count < 0 and self._probe_tries < FLUTTER_PROBE_TRIES:
+        # On the first card for a page the browser may still be building its accessibility tree,
+        # so 0 boxes is not trusted at once: ask again, and switch only if every try still sees 0.
+        if self._probe_tries < FLUTTER_PROBE_TRIES:
             QTimer.singleShot(FLUTTER_PROBE_MS, self._probe_flutter)
+        elif count == 0:
+            self._enter_flutter()
 
     def _enter_flutter(self) -> None:
         self.flutter = True
