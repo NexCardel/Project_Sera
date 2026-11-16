@@ -39,6 +39,7 @@ except Exception:
 # Only the Material Design icon font is used; loading qtawesome's other 11 costs ~15 MB.
 from ui.utils.icon_fonts import restrict_icon_fonts
 from ui.utils.ui_scale import choose_startup_scale, next_manual_value, read_settings, write_settings, MODE_MANUAL
+from ui.utils.ui_scale import make_app_font, platform_args, read_sharp_text
 restrict_icon_fonts()
 from core.memlog import mark as memory_mark
 from core import startup_boost
@@ -219,11 +220,16 @@ class SeraApp:
                 Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
             )
 
+        # Sharp text (per PC, default on): Qt's GDI font engine and a fully hinted, whole-pixel app font.
+        # Qt 6.8+ defaults to DirectWrite with light hinting, which looks soft on low-res screens.
+        _sharp_text = read_sharp_text()
+        memory_mark(f"[UI] sharp_text={_sharp_text}")
+
         memory_mark("start-up: code loaded")
-        self.app = QApplication(sys.argv)
+        self.app = QApplication(platform_args(sys.argv, _sharp_text))
         # Avoid Windows legacy bitmap-font fallback warnings (8514oem/Fixedsys)
         # and keep all dialogs consistent with the app stylesheet.
-        self.app.setFont(QFont("Segoe UI", 10))
+        self.app.setFont(make_app_font(_sharp_text))
         self.app.setQuitOnLastWindowClosed(False)
         APP_DIR.mkdir(parents=True, exist_ok=True)
 

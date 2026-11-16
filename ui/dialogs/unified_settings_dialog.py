@@ -435,8 +435,9 @@ class UnifiedSettingsDialog(QDialog):
         display.add_row(SettingRow("Window display mode",
                                    "Controls how the app window opens on launch.", self.window_mode_combo))
         # Per PC, not saved with the other settings (app_settings syncs to every PC); saves on its own buttons.
-        from ui.dialogs.display_scale_dialog import DisplayScaleControl
+        from ui.dialogs.display_scale_dialog import DisplayScaleControl, SharpTextControl
         display.add_row(DisplayScaleControl())
+        display.add_row(SharpTextControl())
 
         secure = Card("Passwords and clipboard")
         self.mask_mode_combo = Select()
