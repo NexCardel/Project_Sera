@@ -1,0 +1,192 @@
+"""
+SDIS pre-dev: card match inside a record set (tools/pre_dev/class_diff/card_match.py, via shape_map.py).
+
+Fictional fixtures only: the node lists are built in this file.
+"""
+
+import json
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "tools" / "pre_dev" / "class_diff"))
+
+import card_match  # noqa: E402
+import shape_map  # noqa: E402
+
+
+def _page(extra_button=None, drop_date=None, n_cards=4):
+    """A column of cards. Each card: a head block (period value), a field block (label 'Status:' + a status
+    word, label 'Filed on:' + a date) and a button. extra_button: card index that gets one more button.
+    drop_date: card index whose date is missing."""
+    doc = []
+
+    def add(parent, typ, rect, cls="", name=""):
+        doc.append({"parent": parent, "type_name": typ, "rect": rect, "cls": cls, "name": name})
+        return len(doc) - 1
+
+    root = add(-1, "Group", [0, 0, 800, 300 * n_cards + 20], "page")
+    for c in range(n_cards):
+        y = 10 + 300 * c
+        card = add(root, "Group", [10, y, 700, 280], "card")
+        head = add(card, "Group", [20, y + 10, 300, 40], "head")
+        add(head, "Text", [30, y + 15, 120, 20], name=f"A.Y. 20{20 + c}-{21 + c}")
+        fields = add(card, "Group", [20, y + 60, 300, 120], "fields")
+        add(fields, "Text", [30, y + 65, 100, 20], name="Status:")
+        add(fields, "Text", [140, y + 65, 100, 20], name=("Processed", "Filed", "Verified", "Pending")[c % 4])
+        add(fields, "Text", [30, y + 95, 100, 20], name="Filed on:")
+        if c != drop_date:
+            add(fields, "Text", [140, y + 95, 100, 20], name=f"0{c + 1}/07/2026")
+        acts = add(card, "Group", [20, y + 200, 300, 40], "acts")
+        add(acts, "Button", [30, y + 205, 80, 30], name="Download")
+        if c == extra_button:
+            add(acts, "Button", [120, y + 205, 80, 30], name="View more")
+    return doc
+
+
+def _match(doc):
+    inf = shape_map.infer(shape_map.page_containers(doc))
+    sets = [s for s in inf["sets"] if s["tail"].endswith("card")]
+    assert len(sets) == 1
+    return sets[0]["match"]
+
+
+def test_identical_cards_match_fully_in_every_layer():
+    m = _match(_page())
+    assert m["layer_names"] == ["composition", "adjacency"]
+    assert m["overall"] == 100.0 and set(m["layers"].values()) == {100.0}
+    assert all(c["nodes"] == 6 and c["overall"] == 100.0 for c in m["cards"])
+    assert m["cards"][0]["kinds"] == {"button": 1, "date": 1, "label": 2, "period": 1, "text": 1}
+
+
+def test_an_extra_button_lowers_only_that_cards_pairs():
+    m = _match(_page(extra_button=3))
+    p = m["pairs"]
+    assert p["0-1"]["overall"] == 100.0
+    # 7 vs 6 nodes, same kinds otherwise: composition 6/7
+    assert p["0-3"]["layers"]["composition"] == round(100 * 6 / 7, 1)
+    # 6 aligned pairs; the shared button is last in card 0 but has the extra button after it in card 3,
+    # so it loses its right neighbour (2/3); the extra one is unmatched: (5 + 2/3) / 7
+    assert p["0-3"]["layers"]["adjacency"] == round(100 * (5 + 2 / 3) / 7, 1)
+    assert m["cards"][3]["overall"] < m["cards"][0]["overall"]
+    st = m["structure"]
+    assert st["ref"] == 0, "the medoid: first of the best-matching cards"
+    assert st["extras"] == [{"kind": "button", "path": "Group.acts / Button", "cards": [3], "count": 1}]
+
+
+def test_a_missing_node_breaks_its_neighbours_adjacency():
+    m = _match(_page(drop_date=1))
+    p = m["pairs"]["0-1"]
+    assert p["layers"]["composition"] == round(100 * 5 / 6, 1)
+    # 5 aligned pairs; the label before the missing date and the button after it lose one neighbour each
+    assert p["layers"]["adjacency"] == round(100 * (3 + 2 * (2 / 3)) / 6, 1)
+
+
+def test_structure_finds_labels_values_and_blocks():
+    st = _match(_page(drop_date=2))["structure"]
+    kinds = [(s["kind"], s["role"], s["found"]) for s in st["slots"]]
+    assert kinds == [("period", "value", 4), ("label", "label", 4), ("text", "value", 4),
+                     ("label", "label", 4), ("date", "value", 3), ("button", "label", 4)]
+    assert [s["label"] for s in st["slots"]] == [None, None, 1, None, 3, None], "a value's label: nearest label before it, same block"
+    assert st["blocks"] == [[0], [1, 2, 3, 4], [5]]
+    assert st["always"] == 5 and st["labels"] == 3 and st["values"] == 3
+
+
+def test_kind_of_text_inside_link_and_button():
+    doc = [{"parent": -1, "type_name": "Group", "rect": [0, 0, 400, 400]}]
+
+    def add(parent, typ, name=""):
+        doc.append({"parent": parent, "type_name": typ, "rect": [10, 10 + 20 * len(doc), 100, 18], "name": name})
+        return len(doc) - 1
+    link = add(0, "Hyperlink", "Open")
+    add(link, "Text", "Open")
+    btn = add(0, "Button", "Go")
+    add(btn, "Text", "Go")
+    add(0, "Text", "42")
+    pc = shape_map.page_containers(doc)
+    kids = {}
+    for n in pc["nodes"]:
+        if n["p"] >= 0:
+            kids.setdefault(n["p"], []).append(n["i"])
+    leaves = card_match.card_leaves(0, pc["nodes"], pc["flat"], kids)
+    assert [x["kind"] for x in leaves] == ["link", "button", "number"]
+
+
+def test_html_carries_the_match_but_no_text_and_same_bytes():
+    pc = shape_map.page_containers(_page(extra_button=1))
+    html = shape_map.build_html(pc, shape_map.infer(pc), {"page": "fictional.example/p", "source": "fixture"})
+    pc2 = shape_map.page_containers(_page(extra_button=1))
+    assert html == shape_map.build_html(pc2, shape_map.infer(pc2), {"page": "fictional.example/p", "source": "fixture"})
+    data = json.loads(re.search(r"^const D = (.*);$", html, re.M).group(1))
+    assert data["sets"][0]["match"]["structure"]["slots"]
+    blob = json.dumps(data)
+    for word in ("Status:", "Processed", "Verified", "07/2026", "Download", "View more", "A.Y."):
+        assert word not in blob, "kinds, paths and percentages only, never a text"
+    assert "Card match" in html and "matchPanel" in html
+
+
+def test_no_match_leaves_the_shape_map_as_before():
+    pc = shape_map.page_containers(_page())
+    assert all(s["match"] is None for s in shape_map.infer(pc, match=False)["sets"])
+    assert not any("card match" in line for line in shape_map.report(shape_map.infer(pc, match=False)))
+
+
+def test_views_window_card_match_view():
+    import views_ui
+    by = {v[0]: v for v in views_ui.VIEWS}
+    assert by[views_ui.SHAPE_MAP][1:3] == ("shape_map.py", ["--no-match"])
+    assert by[views_ui.CARD_MATCH][1:3] == ("shape_map.py", [])
+    both = [by[views_ui.SHAPE_MAP], by[views_ui.CARD_MATCH]]
+    assert [v[0] for v in views_ui.picked(both)] == [views_ui.CARD_MATCH], "same page: run it once"
+    assert [v[0] for v in views_ui.picked(both[:1])] == [views_ui.SHAPE_MAP]
+    assert views_ui.CARD_MATCH in views_ui.DEFAULT_TICKS
+
+
+def test_clear_all_captures_takes_captures_and_views_only(tmp_path, monkeypatch):
+    import views_ui
+    for name in ("capture_1.json", "comp_1.json", "comp_1.csv", "key_probe_2.txt", "render_comp_1.html",
+                 "shape_map_comp_1.html", "tables_capture_1.html", "notes.md"):
+        (tmp_path / name).write_text("x")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "capture_9.json").write_text("x")
+    names = [p.name for p in views_ui.clearable(tmp_path)]
+    assert "notes.md" not in names and "capture_9.json" not in names, "other names and sub-folders stay"
+    assert len(names) == 7
+    assert views_ui.clearable(tmp_path / "missing") == []
+
+
+def test_clear_all_asks_first_and_refreshes(tmp_path, monkeypatch):
+    import tkinter as tk
+    from tkinter import messagebox
+    import views_ui
+    (tmp_path / "capture_1.json").write_text("{}")
+    (tmp_path / "shape_map_capture_1.html").write_text("x")
+    monkeypatch.setattr(views_ui, "OUT", tmp_path)
+    moved = []
+
+    def fake_bin(paths):
+        moved.extend(p.name for p in paths)
+        for p in paths:
+            p.unlink()
+        return True
+    monkeypatch.setattr(views_ui, "to_recycle_bin", fake_bin)
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        import pytest
+        pytest.skip("no display")
+    root.withdraw()
+    try:
+        app = views_ui.App(root)
+        assert app.files == [tmp_path / "capture_1.json"]
+        monkeypatch.setattr(messagebox, "askyesno", lambda *a, **k: False)
+        app.clear_all()
+        assert moved == [] and (tmp_path / "capture_1.json").exists(), "No = nothing moved"
+        monkeypatch.setattr(messagebox, "askyesno", lambda *a, **k: True)
+        app.clear_all()
+        assert sorted(moved) == ["capture_1.json", "shape_map_capture_1.html"]
+        assert app.files == [] and app.list.size() == 0
+    finally:
+        root.destroy()

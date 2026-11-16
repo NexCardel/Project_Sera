@@ -15,13 +15,16 @@ groups the containers of one page by shape and reads the groups the way a person
                stepper), k per member = a nested list (3 steps per card), varying = optional or a list.
   loose merge  instances of 2+ strict shapes that share one loose shape, lie disjoint and line up: the
                same record with a class that differs (an active tile, a highlighted row).
+  card match   card_match.py compares the members of each record set node by node, in layers (node kinds,
+               then nodes against their neighbours), gives each pair and each card a match percentage,
+               and reads the structure the cards share (slots, labels, values, extras).
 
 Nothing here knows a portal, a class name or a wording. Deterministic: the same input gives the same
 bytes. The console gets counts, sizes and the last two steps of each shape (template class names) - no
 page text. The HTML map draws text boxes as grey bars, never their text.
 
 Usage:
-    python tools/pre_dev/class_diff/shape_map.py FILE [--snapshot N] [--doc N] [--open]
+    python tools/pre_dev/class_diff/shape_map.py FILE [--snapshot N] [--doc N] [--no-match] [--open]
 FILE: a comp page, a key_probe capture or read (.json), or a record file (.jsonl, with --record N).
 Writes output/shape_map_<file>.html.
 """
@@ -36,6 +39,7 @@ from typing import Any, Dict, List, Optional
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+import card_match  # noqa: E402
 import render  # noqa: E402
 
 TOL = 4                 # pixels: two edges this close are the same line (render boxes are whole pixels)
@@ -70,7 +74,10 @@ def page_containers(raw: List[Dict[str, Any]], comp_view: str = "present") -> Di
             while p >= 0 and p not in by_k:
                 p = nodes[p]["p"]
             texts.append({"k": n["i"], "x": x - ox, "y": y - oy, "w": w, "h": h, "up": p})
-    return {"W": W, "H": H, "ols": ols, "by_k": by_k, "shapes": shapes, "loose": loose, "texts": texts}
+    import cards
+    flat, _ = cards.load_flat({"docs": [raw]})
+    return {"W": W, "H": H, "ols": ols, "by_k": by_k, "shapes": shapes, "loose": loose, "texts": texts,
+            "nodes": nodes, "flat": flat}
 
 
 def _ancestors(by_k: Dict[int, Dict[str, Any]], k: int) -> List[int]:
@@ -117,7 +124,7 @@ def layout(insts: List[Dict[str, Any]]) -> Dict[str, Any]:
             "w_spread": _spread([e["w"] for e in insts]), "h_spread": _spread([e["h"] for e in insts])}
 
 
-def infer(pc: Dict[str, Any]) -> Dict[str, Any]:
+def infer(pc: Dict[str, Any], match: bool = True) -> Dict[str, Any]:
     """Record sets, their parts and nested lists, lifts and loose merges (module doc)."""
     ols, by_k = pc["ols"], pc["by_k"]
     anc = {e["k"]: set(_ancestors(by_k, e["k"])) for e in ols}
@@ -174,7 +181,9 @@ def infer(pc: Dict[str, Any]) -> Dict[str, Any]:
         lift = _lift(pc, insts, anc)
         sets.append({"shape": sh, "tail": _tail(pc["shapes"][sh]), "type": insts[0]["t"], "count": len(insts),
                      "texts": [e["nt"] for e in insts], "members": [e["k"] for e in insts],
-                     "layout": layout(insts), "lift": lift, "inner": inner})
+                     "layout": layout(insts), "lift": lift, "inner": inner,
+                     "match": card_match.match_set([e["k"] for e in insts], pc["nodes"], pc["flat"])
+                     if match and "nodes" in pc else None})
     return {"sets": sets, "merges": _loose_merges(pc, groups, anc), "repeated": len(repeated)}
 
 
@@ -261,9 +270,35 @@ def report(inf: Dict[str, Any]) -> List[str]:
         for p in s["inner"]:
             pad = "  " * p["level"]
             lines.append(f"    {pad}{p['role']:12s} {p['texts']:3d} texts  per member {p['per_member']}  ...{p['tail'][-60:]}")
+        lines.extend(match_report(s.get("match")))
     for m in inf["merges"]:
         lines.append(f"loose merge: {m['count']} containers of {m['strict_shapes']} strict shapes, {m['layout']['kind']}  ...{m['tail'][-60:]}")
     return lines
+
+
+def match_report(m: Optional[Dict[str, Any]]) -> List[str]:
+    """The card match of one set: percentages, per card, and the shared structure (kinds and counts only)."""
+    if not m:
+        return []
+    lay = "  ".join(f"{k} {v}%" for k, v in m["layers"].items())
+    out = [f"    card match: overall {m['overall']}%  ({lay})"]
+    for i, c in enumerate(m["cards"]):
+        cl = "  ".join(f"{k} {v}%" for k, v in c["layers"].items())
+        out.append(f"      card {i}: {c['nodes']:3d} nodes  overall {c['overall']:5.1f}%  ({cl})")
+    st = m["structure"]
+    if st:
+        out.append(f"    structure (reference card {st['ref']}): {len(st['slots'])} slots, in every card {st['always']}, "
+                   f"labels {st['labels']}, values {st['values']}, blocks {len(st['blocks'])}, extra kinds {len(st['extras'])}")
+        for b, ss in enumerate(st["blocks"]):
+            parts = []
+            for s in ss:
+                sl = st["slots"][s]
+                lab = f"<-{sl['label']}" if sl["label"] is not None else ""
+                parts.append(f"{s}:{sl['kind']}/{sl['role']}{lab}({sl['found']}/{sl['of']})")
+            out.append(f"      block {b}: " + " ".join(parts))
+        for e in st["extras"]:
+            out.append(f"      extra: {e['kind']} x{e['count']} in cards {e['cards']}  ...{e['path'][-50:]}")
+    return out
 
 
 def build_html(pc: Dict[str, Any], inf: Dict[str, Any], meta: Dict[str, Any]) -> str:
@@ -283,12 +318,13 @@ def main(argv=None) -> int:
     ap.add_argument("--doc", default="auto")
     ap.add_argument("--comp-view", default="present", choices=["present", "all"])
     ap.add_argument("--open", action="store_true")
+    ap.add_argument("--no-match", action="store_true", help="leave out the card match (card_match.py)")
     a = ap.parse_args(argv)
     src = Path(a.src)
     docs, meta = render.load(src, snapshot=a.snapshot, record=a.record)
     k = render._pick_docs(docs, a.doc if a.doc in ("auto", "all") else int(a.doc))[0]
     pc = page_containers(docs[k], a.comp_view)
-    inf = infer(pc)
+    inf = infer(pc, match=not a.no_match)
     for line in report(inf):
         print(line)
     out = render.PRE_DEV_OUT / f"shape_map_{src.stem}.html"
@@ -324,12 +360,26 @@ TEMPLATE = r"""<!doctype html>
   .part { margin:4px 0 0 10px; font:12px/1.4 ui-monospace, Consolas, monospace; }
   pre { background:var(--card); border:1px solid var(--line); padding:8px; overflow:auto; font-size:12px; }
   label { display:inline-flex; gap:6px; align-items:center; margin-right:12px; cursor:pointer; }
+  .cm { margin-top:8px; border-top:1px dashed var(--line); padding-top:6px; cursor:default; }
+  .cm .big { font-weight:600; margin-top:4px; }
+  .cm table { border-collapse:collapse; margin:6px 0; font:11px/1.3 ui-monospace, Consolas, monospace; }
+  .cm td, .cm th { border:1px solid var(--line); padding:2px 5px; text-align:right; }
+  .cm th { color:var(--muted); font-weight:500; }
+  .cm td.self { color:var(--muted); text-align:center; }
+  .cm .slots { font:11px/1.5 ui-monospace, Consolas, monospace; }
+  .cm .blk { margin:3px 0; }
+  .chip { display:inline-block; border:1px solid var(--line); border-radius:4px; padding:0 4px; margin:1px 2px 1px 0; }
+  .chip.label { color:var(--muted); }
+  .chip.value { border-color:#2f9e44; color:#2f9e44; font-weight:600; }
+  .chip.part { border-style:dashed; }
+  .bar { display:inline-block; height:8px; background:#2f9e44; vertical-align:middle; border-radius:2px; margin-left:4px; }
 </style>
 </head>
 <body>
 <header><b>Shape map</b> <span class="meta" id="meta"></span><br>
   <label><input type="checkbox" id="showparts" checked> parts and nested lists</label>
   <label><input type="checkbox" id="showlift" checked> lifted records</label>
+  <label><input type="checkbox" id="showpct" checked> card match %</label>
   <span class="meta">click a set to show only it · click again to show all</span>
 </header>
 <div class="wrap">
@@ -359,17 +409,109 @@ D.sets.forEach((s, i) => {
   if (s.lift) for (const k of s.lift.members) g.push({r: rect(D.boxes[k], {fill:'none', stroke:col, 'stroke-width':2 / scale, 'stroke-dasharray':(10 / scale) + ' ' + (6 / scale)}), kind:'lift'});
   for (const q of s.inner) for (const k of q.members)
     g.push({r: rect(D.boxes[k], {fill:'none', stroke:col, 'stroke-opacity':.7, 'stroke-width':1 / scale}), kind:'part'});
+  if (s.match) s.members.forEach((k, ci) => {
+    const b = D.boxes[k], c = s.match.cards[ci];
+    const t = document.createElementNS(NS, 'text');
+    t.setAttribute('x', b[0] + 8 / scale); t.setAttribute('y', b[1] + 22 / scale);
+    t.setAttribute('font-size', 18 / scale); t.setAttribute('font-weight', 700); t.setAttribute('fill', col);
+    t.textContent = 'card ' + ci + ' · ' + c.overall + '%';
+    svg.appendChild(t); g.push({r: t, kind: 'pct'});
+  });
   layers.push({i, g, col});
 });
+const hi = [];
+function highlight(ks, col) {
+  for (const r of hi) r.remove();
+  hi.length = 0;
+  for (const k of ks) hi.push(rect(D.boxes[k], {fill:col, 'fill-opacity':.25, stroke:col, 'stroke-width':6 / scale}));
+}
 function apply() {
   const showLift = document.getElementById('showlift').checked;
   const showParts = document.getElementById('showparts').checked;
   for (const L of layers) for (const x of L.g) {
-    const vis = (sel === null || sel === L.i) && (x.kind !== 'lift' || showLift) && (x.kind !== 'part' || showParts);
+    const showPct = document.getElementById('showpct').checked;
+    const vis = (sel === null || sel === L.i) && (x.kind !== 'lift' || showLift) && (x.kind !== 'part' || showParts)
+      && (x.kind !== 'pct' || showPct);
     x.r.style.display = vis ? '' : 'none';
   }
   document.querySelectorAll('.set').forEach((el, i) => el.classList.toggle('on', sel === i));
   document.querySelectorAll('.part').forEach(el => el.style.display = document.getElementById('showparts').checked ? '' : 'none');
+}
+function el_(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+function pctCell(td, v) {
+  td.textContent = v.toFixed(1) + '%';
+  td.style.background = 'rgba(47,158,68,' + (Math.max(0, v - 50) / 50 * .45).toFixed(2) + ')';
+}
+function matchPanel(s, col) {
+  // the card match of one set: layers, a card x card matrix (hover = highlight on the map), the structure
+  const m = s.match, n = m.cards.length;
+  const el = el_('div', 'cm');
+  el.appendChild(el_('div', 'big', 'Card match · overall ' + m.overall + '%'));
+  m.layer_names.forEach((nm, li) => {
+    const d = el_('div', 's', 'layer ' + (li + 1) + ' · ' + nm + ': ' + m.layers[nm] + '%');
+    const b = el_('span', 'bar'); b.style.width = Math.round(m.layers[nm]) + 'px';
+    d.appendChild(b); el.appendChild(d);
+  });
+  const tb = el_('table');
+  let tr = el_('tr'); tr.appendChild(el_('th'));
+  for (let j = 0; j < n; j++) tr.appendChild(el_('th', '', 'c' + j));
+  tr.appendChild(el_('th', '', 'mean')); tr.appendChild(el_('th', '', 'nodes'));
+  tb.appendChild(tr);
+  for (let i = 0; i < n; i++) {
+    tr = el_('tr');
+    const h = el_('th', '', 'c' + i);
+    h.addEventListener('mouseenter', () => highlight([s.members[i]], col));
+    tr.appendChild(h);
+    for (let j = 0; j < n; j++) {
+      const td = el_('td');
+      if (i === j) { td.className = 'self'; td.textContent = '·'; }
+      else {
+        const p = m.pairs[Math.min(i, j) + '-' + Math.max(i, j)];
+        pctCell(td, p.overall);
+        td.title = 'card ' + i + ' vs card ' + j + '\n' + m.layer_names.map(nm => nm + ' ' + p.layers[nm] + '%').join('\n');
+        td.addEventListener('mouseenter', () => highlight([s.members[i], s.members[j]], col));
+      }
+      tr.appendChild(td);
+    }
+    const c = m.cards[i];
+    const mt = el_('td'); pctCell(mt, c.overall);
+    mt.title = m.layer_names.map(nm => nm + ' ' + c.layers[nm] + '%').join('\n');
+    tr.appendChild(mt);
+    const nt = el_('td', '', String(c.nodes));
+    nt.title = Object.entries(c.kinds).map(([k, v]) => k + ' ' + v).join('\n');
+    tr.appendChild(nt);
+    tb.appendChild(tr);
+  }
+  tb.addEventListener('mouseleave', () => highlight([], col));
+  el.appendChild(tb);
+  const st = m.structure;
+  if (st) {
+    el.appendChild(el_('div', 'big', 'Structure (reference card ' + st.ref + '): ' + st.slots.length + ' slots · in every card '
+      + st.always + ' · labels ' + st.labels + ' · values ' + st.values));
+    const sl = el_('div', 'slots');
+    st.blocks.forEach((ss, b) => {
+      const d = el_('div', 'blk', 'block ' + b + ' ');
+      for (const k of ss) {
+        const x = st.slots[k];
+        const c = el_('span', 'chip ' + x.role + (x.found < x.of ? ' part' : ''),
+          k + ' ' + x.kind + (x.label !== null ? ' ←' + x.label : '') + (x.found < x.of ? ' ' + x.found + '/' + x.of : ''));
+        c.title = 'slot ' + k + ': ' + x.kind + ', ' + x.role + ' (text ' + x.text + '), in ' + x.found + ' of ' + x.of
+          + ' cards' + (x.label !== null ? ', label = slot ' + x.label : '') + '\n…' + x.path;
+        d.appendChild(c);
+      }
+      sl.appendChild(d);
+    });
+    for (const e of st.extras)
+      sl.appendChild(el_('div', 'blk', 'extra: ' + e.kind + ' ×' + e.count + ' in cards ' + e.cards.join(', ') + ' · …' + e.path.slice(-60)));
+    el.appendChild(sl);
+    el.appendChild(el_('div', 's', 'label = same text in every card it is in · value = text differs · ←n = its label slot · dashed = not in every card'));
+  }
+  return el;
 }
 const box = document.getElementById('sets');
 D.sets.forEach((s, i) => {
@@ -391,11 +533,13 @@ D.sets.forEach((s, i) => {
     p.textContent = q.role + ' · ' + q.texts + ' texts · per member [' + q.per_member.join(', ') + '] · …' + q.tail;
     el.appendChild(p);
   }
-  el.addEventListener('click', () => { sel = sel === i ? null : i; apply(); });
+  if (s.match) el.appendChild(matchPanel(s, PAL[i % PAL.length]));
+  el.addEventListener('click', ev => { if (ev.target.closest('.cm')) return; sel = sel === i ? null : i; apply(); });
   box.appendChild(el);
 });
 document.getElementById('showparts').addEventListener('change', apply);
 document.getElementById('showlift').addEventListener('change', apply);
+document.getElementById('showpct').addEventListener('change', apply);
 document.getElementById('rep').textContent = D.report.join('\n');
 document.getElementById('meta').textContent = [D.page, D.source].filter(Boolean).join(' · ');
 apply();

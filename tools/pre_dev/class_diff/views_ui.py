@@ -1,6 +1,6 @@
 """
-tools/pre_dev/class_diff/views_ui.py - PRE-DEV: one small window for the six HTML views
-======================================================================================
+tools/pre_dev/class_diff/views_ui.py - PRE-DEV: one small window for the seven HTML views
+========================================================================================
 Pick a capture or comp page from output/ (newest first), tick the views, press Make views. Each
 view runs its own tool (render.py, shape_map.py, tables.py) as a child process, exactly the command
 you would type, and the pages it writes open in the default browser. The log shows the tools' console
@@ -10,11 +10,14 @@ lines, which hold counts only.
   groups (cards)        render.py FILE --groups
   arrangement           render.py FILE --arrange
   outline               render.py FILE --outline
-  shape map             shape_map.py FILE
+  shape map             shape_map.py FILE --no-match
+  card match            shape_map.py FILE   (the shape map plus card_match.py's percentages and structure;
+                                             with both ticked only this one runs: same page)
   tables                tables.py CAPTURE --html   (a comp page is mapped to its capture_ file: same stamp)
 
 New capture runs key_probe.py in its own console window (switch to the browser within 8 s); the list
-refreshes when it ends. Launch with views.bat (tools/pre_dev/class_diff/views.bat).
+refreshes when it ends. Clear all captures sends every capture, comp page and view page in output/ to the
+Recycle Bin after a yes (CLEAR_PREFIXES; other files and sub-folders stay). Launch with views.bat (tools/pre_dev/class_diff/views.bat).
 """
 
 import os
@@ -37,9 +40,54 @@ VIEWS = [
     ("groups (cards.py)", "render.py", ["--groups"], False),
     ("arrangement (arrange.py)", "render.py", ["--arrange"], False),
     ("outline (container shapes)", "render.py", ["--outline"], False),
-    ("shape map (record sets)", "shape_map.py", [], False),
+    ("shape map (record sets)", "shape_map.py", ["--no-match"], False),
+    ("card match (shape map + %)", "shape_map.py", [], False),
     ("tables (tables.py)", "tables.py", ["--html"], True),
 ]
+SHAPE_MAP, CARD_MATCH = "shape map (record sets)", "card match (shape map + %)"
+DEFAULT_TICKS = ("outline (container shapes)", CARD_MATCH)
+
+
+def picked(views):
+    """Card match writes the same shape_map_<file>.html page with the match added: when both are ticked,
+    run only card match (one page, one run)."""
+    names = {v[0] for v in views}
+    return [v for v in views if not (v[0] == SHAPE_MAP and CARD_MATCH in names)]
+
+
+# Clear all captures: the captures and comp pages, and every page or table the tools made from them.
+# Files with other names in output/ and any sub-folder stay.
+CLEAR_PREFIXES = ("capture_", "comp_", "key_probe_", "record_", "render_", "shape_map_", "tables_", "groups_",
+                  "arrange_", "compare_", "cards_")
+
+
+def clearable(folder: Path = None):
+    """The files Clear all captures takes: top-level files of output/ with a capture or view prefix."""
+    folder = folder or OUT
+    if not folder.is_dir():
+        return []
+    return sorted(p for p in folder.iterdir() if p.is_file() and p.name.startswith(CLEAR_PREFIXES))
+
+
+def to_recycle_bin(paths) -> bool:
+    """Send files to the Windows Recycle Bin in one shell call (undoable). True when the shell reports success."""
+    import ctypes
+    from ctypes import wintypes
+
+    class SHFILEOPSTRUCTW(ctypes.Structure):
+        _fields_ = [("hwnd", wintypes.HWND), ("wFunc", wintypes.UINT), ("pFrom", wintypes.LPCWSTR),
+                    ("pTo", wintypes.LPCWSTR), ("fFlags", ctypes.c_uint16), ("fAnyOperationsAborted", wintypes.BOOL),
+                    ("hNameMappings", ctypes.c_void_p), ("lpszProgressTitle", wintypes.LPCWSTR)]
+    FO_DELETE, FOF_SILENT, FOF_NOCONFIRMATION, FOF_ALLOWUNDO, FOF_NOERRORUI = 3, 0x4, 0x10, 0x40, 0x400
+    paths = [str(Path(p).resolve()) for p in paths]
+    if not paths:
+        return True
+    op = SHFILEOPSTRUCTW(None, FO_DELETE, "\0".join(paths) + "\0\0", None,
+                         FOF_SILENT | FOF_NOCONFIRMATION | FOF_ALLOWUNDO | FOF_NOERRORUI, False, None, None)
+    rc = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
+    return rc == 0 and not op.fAnyOperationsAborted
+
+
 WROTE = re.compile(r"^(?:->|HTML:)\s*(.+\.html)\s*$")
 
 
@@ -91,6 +139,7 @@ class App:
         bar.grid(row=0, column=0, sticky="ew")
         ttk.Label(bar, text="Captures and comp pages in output/ (newest first)").pack(side="left")
         ttk.Button(bar, text="Open output folder", command=lambda: os.startfile(OUT)).pack(side="right")
+        ttk.Button(bar, text="Clear all captures", command=self.clear_all).pack(side="right", padx=(0, 4))
         ttk.Button(bar, text="Browse...", command=self.browse).pack(side="right", padx=4)
         ttk.Button(bar, text="Refresh", command=self.refresh).pack(side="right")
         ttk.Button(bar, text="New capture", command=self.capture).pack(side="right", padx=4)
@@ -110,13 +159,13 @@ class App:
         vf.grid(row=2, column=0, sticky="ew")
         self.ticks = []
         for i, v in enumerate(VIEWS):
-            var = tk.BooleanVar(value=v[0] in ("outline (container shapes)", "shape map (record sets)"))
+            var = tk.BooleanVar(value=v[0] in DEFAULT_TICKS)
             ttk.Checkbutton(vf, text=v[0], variable=var).grid(row=i // 3, column=i % 3, sticky="w", padx=(0, 18))
             self.ticks.append(var)
         self.open_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(vf, text="open pages when done", variable=self.open_var).grid(row=2, column=0, sticky="w", pady=(6, 0))
+        ttk.Checkbutton(vf, text="open pages when done", variable=self.open_var).grid(row=(len(VIEWS) + 2) // 3, column=0, sticky="w", pady=(6, 0))
         btns = ttk.Frame(vf)
-        btns.grid(row=2, column=1, columnspan=2, sticky="e", pady=(6, 0))
+        btns.grid(row=(len(VIEWS) + 2) // 3, column=1, columnspan=2, sticky="e", pady=(6, 0))
         ttk.Button(btns, text="All", command=lambda: [t.set(True) for t in self.ticks]).pack(side="left")
         ttk.Button(btns, text="None", command=lambda: [t.set(False) for t in self.ticks]).pack(side="left", padx=4)
         self.go = ttk.Button(btns, text="Make views", command=self.run)
@@ -159,7 +208,7 @@ class App:
 
     def run(self):
         path = self.selected()
-        views = [v for v, t in zip(VIEWS, self.ticks) if t.get()]
+        views = picked([v for v, t in zip(VIEWS, self.ticks) if t.get()])
         if self.busy or not path or not views:
             if not path:
                 self.say("pick a file first")
@@ -197,6 +246,31 @@ class App:
         self.busy = False
         self.go.configure(state="normal")
         self.say("done")
+
+    def clear_all(self):
+        """Every capture and comp page in output/ and the views made from them, to the Recycle Bin, after a yes."""
+        from tkinter import messagebox
+        if self.busy:
+            self.say("wait until the views are made")
+            return
+        files = clearable()
+        if not files:
+            self.say("nothing to clear: output/ holds no captures or views")
+            return
+        mb = sum(p.stat().st_size for p in files) / 1e6
+        caps = sum(p.name.startswith(("capture_", "comp_", "key_probe_", "record_")) for p in files)
+        if not messagebox.askyesno(
+                "Clear all captures",
+                f"Send {len(files)} files ({mb:.1f} MB) in output/ to the Recycle Bin?\n\n"
+                f"{caps} capture / comp files and {len(files) - caps} pages made from them.\n"
+                "They can be restored from the Recycle Bin.", icon="warning", default="no", parent=self.root):
+            self.say("clear cancelled")
+            return
+        ok = to_recycle_bin(files)
+        left = [p for p in files if p.exists()]
+        self.say(f"cleared {len(files) - len(left)} of {len(files)} files to the Recycle Bin"
+                 + ("" if ok and not left else f" ({len(left)} could not be moved: open in another program?)"))
+        self.refresh()
 
     def capture(self):
         """key_probe.py in its own console: the user switches to the browser while it counts down."""
