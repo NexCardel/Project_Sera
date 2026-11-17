@@ -8,31 +8,28 @@ Amas_Sera.exe is not running. This module lets the app take part:
 - is_available(): installed build with the agent present. Then the old in-app updater (which
   needs a UAC prompt) stays off.
 - pending_version(): the staged version, if newer than this build.
-- should_close_now(): the app closes itself for the update when nobody is using the PC (no input
-  for 3 minutes), or after the update has waited 8 hours, as soon as input pauses for 30 s. A
-  mandatory update (version.json "mandatory": true) takes the 30 s path at once, except while
-  SGT has a session with content open (then the usual rules). At most twice a day per version, so a failing install cannot keep closing the app.
+- should_close_now(): the app closes itself for the update once no capture has come in for 30 s
+  and none is still being written, whether or not the PC is in use. At most twice a day per
+  version, so a failing install cannot keep closing the app.
 - start_relauncher(): hidden helper in the user's session that starts the agent task, waits for
   the install, then reopens the app (the old version too, if the install failed).
 - install_in_progress(): checked first thing at start-up. The app must not hold its own files
   open while the installer replaces them, so it exits and leaves a helper to reopen it.
 """
 
-import ctypes
 import json
 import os
 import subprocess
 import sys
 import time
-from datetime import date, datetime, timezone
+from datetime import date
 from pathlib import Path
 from typing import Optional
 
 STATE_DIR = Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "AmasSera" / "updater"
 TASK_NAME = r"\Amas Sera\Updater"
-IDLE_SECONDS = 180
-LONG_WAIT_IDLE_SECONDS = 30
-LONG_WAIT_HOURS = 8
+CAPTURE_QUIET_SECONDS = 30
+CHECK_INTERVAL_MS = 5_000
 MAX_CLOSES_PER_DAY = 2
 INSTALL_FLAG_MAX_AGE = 20 * 60
 
@@ -64,31 +61,6 @@ def pending_version() -> Optional[str]:
     return str(data["version"]) if data else None
 
 
-def _staged_hours(data: dict) -> float:
-    try:
-        staged = datetime.fromisoformat(str(data.get("staged_at", "")))
-    except ValueError:
-        return 0.0
-    if staged.tzinfo is None:
-        staged = staged.replace(tzinfo=datetime.now().astimezone().tzinfo)
-    return max(0.0, (datetime.now(timezone.utc) - staged).total_seconds() / 3600)
-
-
-def seconds_since_input() -> float:
-    """Seconds since the last keyboard/mouse input in this session (Windows only)."""
-    if sys.platform != "win32":
-        return 0.0
-
-    class LASTINPUTINFO(ctypes.Structure):
-        _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
-
-    info = LASTINPUTINFO(ctypes.sizeof(LASTINPUTINFO), 0)
-    if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):
-        return 0.0
-    ticks = ctypes.windll.kernel32.GetTickCount() & 0xFFFFFFFF
-    return ((ticks - info.dwTime) & 0xFFFFFFFF) / 1000.0
-
-
 def _closes_path(app_dir: Path) -> Path:
     return app_dir / "update_closes.json"
 
@@ -118,25 +90,17 @@ def should_announce(announced: set, version: Optional[str]) -> bool:
     return True
 
 
-def is_mandatory(data: Optional[dict]) -> bool:
-    """pending.json carries `mandatory: true` (copied from version.json by the agent)."""
-    return bool(data) and data.get("mandatory") is True
-
-
-def should_close_now(app_dir: Path, captures_busy: bool, sessions_open: bool = False) -> Optional[str]:
-    """The pending version if the app should close itself for it now, else None. A mandatory update
-    needs only 30 s of idle at once, but never while a session with content is open: then the usual
-    rules apply, so a mandatory update is never slower than a normal one."""
+def should_close_now(app_dir: Path, captures_busy: bool, seconds_since_capture: float) -> Optional[str]:
+    """The pending version if the app should close itself for it now, else None: no capture has
+    come in for CAPTURE_QUIET_SECONDS and none is still being written. Whether the PC is idle does
+    not matter. At most MAX_CLOSES_PER_DAY per version."""
     data = pending_update()
-    if not data or captures_busy:
+    if not data or captures_busy or seconds_since_capture < CAPTURE_QUIET_SECONDS:
         return None
     ver = str(data["version"])
     if _closes_today(app_dir, ver) >= MAX_CLOSES_PER_DAY:
         return None
-    fast = is_mandatory(data) and not sessions_open
-    idle_needed = (LONG_WAIT_IDLE_SECONDS if fast or _staged_hours(data) >= LONG_WAIT_HOURS
-                   else IDLE_SECONDS)
-    return ver if seconds_since_input() >= idle_needed else None
+    return ver
 
 
 # Runs in the user's session: start the agent, wait for the install to finish, reopen the app.

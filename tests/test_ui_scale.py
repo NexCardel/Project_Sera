@@ -157,3 +157,63 @@ def test_the_display_control_is_a_setting_row_with_two_actions(ini_settings):
 def test_the_display_scale_dialog_has_no_literal_styles():
     source = (ROOT / "ui" / "dialogs" / "display_scale_dialog.py").read_text(encoding="utf-8")
     assert "setStyleSheet(" not in source
+
+
+# --- Sharp text -------------------------------------------------------------------------------------
+
+def test_sharp_text_is_on_by_default_and_round_trips(ini_settings):
+    assert ui_scale.read_sharp_text() is True
+    ui_scale.write_sharp_text(False)
+    assert ui_scale.read_sharp_text() is False
+    ui_scale.write_sharp_text(True)
+    assert ui_scale.read_sharp_text() is True
+
+
+def test_sharp_text_reads_true_when_settings_fail(monkeypatch):
+    def boom():
+        raise RuntimeError("registry unavailable")
+    monkeypatch.setattr(ui_scale, "_settings", boom)
+    assert ui_scale.read_sharp_text() is True
+
+
+def test_platform_args_ask_for_the_gdi_font_engine_on_windows():
+    assert ui_scale.platform_args(["sera"], True, "win32", {}) == ["sera", "-platform", "windows:fontengine=gdi"]
+
+
+@pytest.mark.parametrize("enabled, platform, env, argv", [
+    (False, "win32", {}, ["sera"]),                                      # switched off
+    (True, "linux", {}, ["sera"]),                                       # not Windows
+    (True, "win32", {"QT_QPA_PLATFORM": "offscreen"}, ["sera"]),         # user / tests chose a platform
+    (True, "win32", {}, ["sera", "-platform", "windows"]),               # already on the command line
+])
+def test_platform_args_leave_argv_alone(enabled, platform, env, argv):
+    assert ui_scale.platform_args(argv, enabled, platform, env) == argv
+
+
+def test_platform_args_never_touch_the_environment(monkeypatch):
+    monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
+    ui_scale.platform_args(["sera"], True, "win32")
+    assert "QT_QPA_PLATFORM" not in os.environ
+
+
+def test_app_font_is_whole_pixel_and_fully_hinted():
+    from PySide6.QtGui import QFont
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    font = ui_scale.make_app_font(True)
+    assert font.family() == "Segoe UI" and font.pixelSize() == 13
+    assert font.hintingPreference() == QFont.PreferFullHinting
+    assert ui_scale.make_app_font(False).hintingPreference() == QFont.PreferDefaultHinting
+
+
+def test_the_sharp_text_switch_saves_on_this_pc_only(ini_settings):
+    from PySide6.QtWidgets import QApplication
+    from ui.dialogs.display_scale_dialog import DisplayScaleDialog, SharpTextControl
+    QApplication.instance() or QApplication([])
+    control = SharpTextControl()
+    assert control.switch.isChecked() is True
+    control.switch.click()
+    assert ui_scale.read_sharp_text() is False
+    dialog = DisplayScaleDialog()
+    assert dialog.sharp_text.switch.isChecked() is False
+    assert dialog.frame.body_layout.indexOf(dialog.sharp_text) >= 0

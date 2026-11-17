@@ -8,8 +8,9 @@
 #   2. Download that release's installer into %ProgramData%\AmasSera\updater (SYSTEM/admins
 #      write, users read) and check its SHA-256 against version.json. The URL must be a
 #      release asset of this repo; a version.json without a sha256 is ignored.
-#   3. Write pending.json. A running app reads it and closes itself at the next idle moment
-#      (see core/update_agent.py), handing over to a helper that reopens it afterwards.
+#   3. Write pending.json. A running app reads it and closes itself once no capture has come in
+#      for 30 s, PC idle or not (see core/update_agent.py), handing over to a helper that
+#      reopens it afterwards.
 #   4. Once no Amas_Sera.exe is running, install silently and write last_result.json.
 #      At boot the app is not running yet, so a staged update always lands on a restart.
 
@@ -170,10 +171,10 @@ try {
             if ($prev.version -eq $target -and $prev.staged_at) { $stagedAt = [string]$prev.staged_at }
         } catch { }
     }
-    # mandatory (version.json): the app closes at the first quiet 30 s, never with a session open
+    # mandatory (version.json) is kept for the record; the app now closes for every update after 30 s without a capture
     Write-Json $PendingPath @{ version = $target; staged_at = $stagedAt; mandatory = ($feed.mandatory -eq $true) }
 
-    # The app closes itself when idle once it sees pending.json; wait for that.
+    # The app closes itself after 30 s without a capture once it sees pending.json; wait for that.
     $deadline = (Get-Date).AddMinutes($WaitMinutes)
     while ((Test-AppRunning) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 10 }
     if (Test-AppRunning) {

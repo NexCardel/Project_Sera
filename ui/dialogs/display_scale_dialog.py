@@ -8,7 +8,7 @@ ordinary staff can open. The choice is saved in QSettings on this PC only and ap
 """
 from PySide6.QtWidgets import QDialog, QMessageBox, QVBoxLayout
 
-from ui.components.kit import MessageBox, DialogFrame, LabelledAction, Select, SettingRow
+from ui.components.kit import MessageBox, DialogFrame, LabelledAction, Select, SettingRow, Switch
 from ui.utils import ui_scale
 
 _OPTIONS = (
@@ -75,6 +75,23 @@ class DisplayScaleControl(SettingRow):
         version.restart_app()
 
 
+_SHARP_SUB = "Crisper text on low-resolution screens (Windows GDI text engine). On this PC only."
+
+
+class SharpTextControl(SettingRow):
+    """On / off switch for sharp text. Saves to this PC's QSettings at once; applies after a restart."""
+
+    def __init__(self, parent=None):
+        switch = Switch(checked=ui_scale.read_sharp_text(), tooltip="Sharp text")
+        super().__init__("Sharp text", _SHARP_SUB, switch, parent, width="auto")
+        self.switch = switch
+        switch.toggled.connect(self._save)
+
+    def _save(self, enabled: bool) -> None:
+        ui_scale.write_sharp_text(enabled)
+        self.set_sub(f"Saved: sharp text {'on' if enabled else 'off'}. Restart Sera to apply.")
+
+
 class DisplayScaleDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -89,6 +106,9 @@ class DisplayScaleDialog(QDialog):
         # Stacked: beside three controls the "Running at ..." line had no room (clipped at 520 px).
         self.control.set_compact(True)
         self.frame.add_widget(self.control)
+        self.sharp_text = SharpTextControl()
+        self.sharp_text.set_compact(True)
+        self.frame.add_widget(self.sharp_text)
         close = self.frame.add_action("Close", variant="secondary")
         close.clicked.connect(self.accept)
         self.frame.closeRequested.connect(self.accept)
