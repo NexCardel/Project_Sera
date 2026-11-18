@@ -159,61 +159,82 @@ def test_the_display_scale_dialog_has_no_literal_styles():
     assert "setStyleSheet(" not in source
 
 
-# --- Sharp text -------------------------------------------------------------------------------------
+# --- Text rendering ---------------------------------------------------------------------------------
 
-def test_sharp_text_is_on_by_default_and_round_trips(ini_settings):
-    assert ui_scale.read_sharp_text() is True
-    ui_scale.write_sharp_text(False)
-    assert ui_scale.read_sharp_text() is False
-    ui_scale.write_sharp_text(True)
-    assert ui_scale.read_sharp_text() is True
+def test_text_rendering_defaults_to_clean_and_round_trips(ini_settings):
+    assert ui_scale.read_text_rendering() == ui_scale.TEXT_CLEAN
+    for mode in ui_scale.TEXT_MODES:
+        ui_scale.write_text_rendering(mode)
+        assert ui_scale.read_text_rendering() == mode
 
 
-def test_sharp_text_reads_true_when_settings_fail(monkeypatch):
+def test_text_rendering_rejects_unknown_modes(ini_settings):
+    with pytest.raises(ValueError):
+        ui_scale.write_text_rendering("blurry")
+    ui_scale._settings().setValue(ui_scale.KEY_TEXT_RENDERING, "blurry")
+    assert ui_scale.read_text_rendering() == ui_scale.TEXT_DEFAULT
+
+
+@pytest.mark.parametrize("old, expected", [
+    (False, "system"), ("false", "system"), (True, "clean"), ("true", "clean"),
+])
+def test_the_old_sharp_text_switch_is_migrated(ini_settings, old, expected):
+    ui_scale._settings().setValue(ui_scale.KEY_SHARP_TEXT, old)
+    assert ui_scale.read_text_rendering() == expected
+
+
+def test_text_rendering_reads_the_default_when_settings_fail(monkeypatch):
     def boom():
         raise RuntimeError("registry unavailable")
     monkeypatch.setattr(ui_scale, "_settings", boom)
-    assert ui_scale.read_sharp_text() is True
+    assert ui_scale.read_text_rendering() == ui_scale.TEXT_DEFAULT
 
 
-def test_platform_args_ask_for_the_gdi_font_engine_on_windows():
-    assert ui_scale.platform_args(["sera"], True, "win32", {}) == ["sera", "-platform", "windows:fontengine=gdi"]
+@pytest.mark.parametrize("mode, engine", [("clean", "freetype"), ("smooth", "directwrite"), ("sharp", "gdi")])
+def test_platform_args_ask_for_the_mode_font_engine_on_windows(mode, engine):
+    assert ui_scale.platform_args(["sera"], mode, "win32", {}) == ["sera", "-platform", f"windows:fontengine={engine}"]
 
 
-@pytest.mark.parametrize("enabled, platform, env, argv", [
-    (False, "win32", {}, ["sera"]),                                      # switched off
-    (True, "linux", {}, ["sera"]),                                       # not Windows
-    (True, "win32", {"QT_QPA_PLATFORM": "offscreen"}, ["sera"]),         # user / tests chose a platform
-    (True, "win32", {}, ["sera", "-platform", "windows"]),               # already on the command line
+@pytest.mark.parametrize("mode, platform, env, argv", [
+    ("system", "win32", {}, ["sera"]),                                   # left to Qt
+    ("clean", "linux", {}, ["sera"]),                                    # not Windows
+    ("clean", "win32", {"QT_QPA_PLATFORM": "offscreen"}, ["sera"]),      # user / tests chose a platform
+    ("clean", "win32", {}, ["sera", "-platform", "windows"]),            # already on the command line
 ])
-def test_platform_args_leave_argv_alone(enabled, platform, env, argv):
-    assert ui_scale.platform_args(argv, enabled, platform, env) == argv
+def test_platform_args_leave_argv_alone(mode, platform, env, argv):
+    assert ui_scale.platform_args(argv, mode, platform, env) == argv
 
 
 def test_platform_args_never_touch_the_environment(monkeypatch):
     monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
-    ui_scale.platform_args(["sera"], True, "win32")
+    ui_scale.platform_args(["sera"], "clean", "win32")
     assert "QT_QPA_PLATFORM" not in os.environ
 
 
-def test_app_font_is_whole_pixel_and_fully_hinted():
+def test_app_font_is_whole_pixel_and_hinted_per_mode():
     from PySide6.QtGui import QFont
     from PySide6.QtWidgets import QApplication
     QApplication.instance() or QApplication([])
-    font = ui_scale.make_app_font(True)
-    assert font.family() == "Segoe UI" and font.pixelSize() == 13
-    assert font.hintingPreference() == QFont.PreferFullHinting
-    assert ui_scale.make_app_font(False).hintingPreference() == QFont.PreferDefaultHinting
+    clean = ui_scale.make_app_font("clean")
+    assert clean.family() == "Segoe UI" and clean.pixelSize() == 13
+    assert clean.hintingPreference() == QFont.PreferFullHinting
+    assert clean.styleStrategy() & QFont.NoSubpixelAntialias
+    assert ui_scale.make_app_font("sharp").hintingPreference() == QFont.PreferFullHinting
+    smooth = ui_scale.make_app_font("smooth")
+    assert smooth.hintingPreference() == QFont.PreferDefaultHinting
+    assert not smooth.styleStrategy() & QFont.NoSubpixelAntialias
 
 
-def test_the_sharp_text_switch_saves_on_this_pc_only(ini_settings):
+def test_the_text_rendering_picker_saves_on_this_pc_only(ini_settings):
     from PySide6.QtWidgets import QApplication
-    from ui.dialogs.display_scale_dialog import DisplayScaleDialog, SharpTextControl
+    from ui.dialogs.display_scale_dialog import DisplayScaleDialog, TextRenderingControl
     QApplication.instance() or QApplication([])
-    control = SharpTextControl()
-    assert control.switch.isChecked() is True
-    control.switch.click()
-    assert ui_scale.read_sharp_text() is False
+    control = TextRenderingControl()
+    assert control.combo.currentData() == ui_scale.TEXT_CLEAN
+    assert [control.combo.itemData(i) for i in range(control.combo.count())] == list(ui_scale.TEXT_MODES)
+    control.combo.setCurrentIndex(control.combo.findData(ui_scale.TEXT_SMOOTH))
+    assert ui_scale.read_text_rendering() == ui_scale.TEXT_SMOOTH
+    assert "restart" in control.sub_label.text().lower()
     dialog = DisplayScaleDialog()
-    assert dialog.sharp_text.switch.isChecked() is False
-    assert dialog.frame.body_layout.indexOf(dialog.sharp_text) >= 0
+    assert dialog.text_rendering.combo.currentData() == ui_scale.TEXT_SMOOTH
+    assert dialog.frame.body_layout.indexOf(dialog.text_rendering) >= 0

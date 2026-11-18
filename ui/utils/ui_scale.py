@@ -137,53 +137,92 @@ def write_settings(mode: str, value: float | None = None) -> None:
     s.sync()
 
 
-# --- Sharp text (per PC) ---------------------------------------------------------------------------
-# Qt 6.8+ draws text on Windows through DirectWrite with light (vertical-only) hinting, which looks
-# soft on low-resolution screens such as 1366x768 at 100 %. Qt's older GDI font engine snaps glyphs
-# to the pixel grid like other Windows programs. Default on; a per-PC switch in Settings -> Display
-# turns it off. Like the scale it is stored in QSettings and applies at the next start.
-KEY_SHARP_TEXT = "sharp_text"
-GDI_PLATFORM_ARG = "windows:fontengine=gdi"
+# --- Text rendering (per PC) -----------------------------------------------------------------------
+# Which Qt font engine draws text on Windows. Compared on a 1366x768, 96 DPI, ClearType PC
+# (2026-11-18, Qt 6.11):
+# - gdi: snapped to the pixel grid, but whole-pixel glyph advances leave uneven gaps ("Octob er",
+#   "Aud it") and ClearType adds coloured fringes on the dark theme. This was "Sharp text" in 2.13.9.
+# - Qt's own default looked almost the same as gdi there, and ignored the hinting / AA requests.
+# - freetype + full hinting + greyscale AA: crisp, even spacing, no fringes, semibold kept. Default.
+# - directwrite: even, natural spacing like Windows 11 apps, a little softer.
+# Stored in QSettings like the scale and applied at the next start. A 2.13.9 "sharp_text" switch that
+# was turned off becomes "system"; anything else starts on "clean".
+KEY_TEXT_RENDERING = "text_rendering"
+KEY_SHARP_TEXT = "sharp_text"   # 2.13.9 on/off switch, only read to migrate it
+
+TEXT_CLEAN = "clean"
+TEXT_SMOOTH = "smooth"
+TEXT_SHARP = "sharp"
+TEXT_SYSTEM = "system"
+TEXT_DEFAULT = TEXT_CLEAN
+
+# mode -> (label, description, engine for -platform windows:fontengine=..., full hinting, greyscale AA)
+TEXT_MODES = {
+    TEXT_CLEAN: ("Clean (recommended)",
+                 "Crisp text, even letter spacing, no colour fringes (FreeType engine).",
+                 "freetype", True, True),
+    TEXT_SMOOTH: ("Smooth",
+                  "Softer, natural letter shapes like Windows 11 apps (DirectWrite engine).",
+                  "directwrite", False, False),
+    TEXT_SHARP: ("Sharp (ClearType)",
+                 "Classic Windows look; can show uneven letter gaps (GDI engine).",
+                 "gdi", True, False),
+    TEXT_SYSTEM: ("Qt default",
+                  "Leaves text rendering to Qt. Use this if another mode causes problems.",
+                  None, False, False),
+}
+
 APP_FONT_FAMILY = "Segoe UI"
 APP_FONT_PX = 13   # 10 pt was 13.33 px at 96 DPI; a whole pixel size keeps glyphs on the grid
 
 
-def read_sharp_text() -> bool:
+def read_text_rendering() -> str:
     try:
-        raw = _settings().value(KEY_SHARP_TEXT, True)
+        s = _settings()
+        raw = s.value(KEY_TEXT_RENDERING, None)
+        if raw is None:
+            old = s.value(KEY_SHARP_TEXT, None)
+            if isinstance(old, str):
+                old = old.strip().lower() not in ("false", "0", "no", "off")
+            return TEXT_SYSTEM if old is False else TEXT_DEFAULT
     except Exception:
-        return True
-    if isinstance(raw, str):
-        return raw.strip().lower() not in ("false", "0", "no", "off")
-    return bool(raw)
+        return TEXT_DEFAULT
+    mode = str(raw).strip().lower()
+    return mode if mode in TEXT_MODES else TEXT_DEFAULT
 
 
-def write_sharp_text(enabled: bool) -> None:
+def write_text_rendering(mode: str) -> None:
+    if mode not in TEXT_MODES:
+        raise ValueError(f"unknown text rendering mode: {mode}")
     s = _settings()
-    s.setValue(KEY_SHARP_TEXT, bool(enabled))
+    s.setValue(KEY_TEXT_RENDERING, mode)
     s.sync()
 
 
-def platform_args(argv: list[str], enabled: bool, platform: str = sys.platform,
+def platform_args(argv: list[str], mode: str, platform: str = sys.platform,
                   env: dict | None = None) -> list[str]:
-    """argv for QApplication, with the GDI font engine requested when sharp text is on (Windows only).
+    """argv for QApplication, asking for the mode's font engine (Windows only).
 
     Passed as an argument rather than through QT_QPA_PLATFORM, so a restarted Sera does not inherit
     it as if the user had set it. A -platform argument or QT_QPA_PLATFORM already present is left alone.
     """
     env = os.environ if env is None else env
-    if not enabled or platform != "win32" or "QT_QPA_PLATFORM" in env or "-platform" in argv:
+    engine = TEXT_MODES.get(mode, TEXT_MODES[TEXT_DEFAULT])[2]
+    if engine is None or platform != "win32" or "QT_QPA_PLATFORM" in env or "-platform" in argv:
         return list(argv)
-    return list(argv) + ["-platform", GDI_PLATFORM_ARG]
+    return list(argv) + ["-platform", f"windows:fontengine={engine}"]
 
 
-def make_app_font(sharp: bool = True):
-    """The application-wide font: Segoe UI at a whole pixel size, fully hinted when sharp text is on."""
+def make_app_font(mode: str = TEXT_DEFAULT):
+    """The application-wide font: Segoe UI at a whole pixel size, hinted and anti-aliased per mode."""
     from PySide6.QtGui import QFont
+    _label, _sub, _engine, full_hinting, greyscale = TEXT_MODES.get(mode, TEXT_MODES[TEXT_DEFAULT])
     font = QFont(APP_FONT_FAMILY)
     font.setPixelSize(APP_FONT_PX)
-    if sharp:
+    if full_hinting:
         font.setHintingPreference(QFont.PreferFullHinting)
+    if greyscale:
+        font.setStyleStrategy(QFont.StyleStrategy(QFont.PreferAntialias | QFont.NoSubpixelAntialias))
     return font
 
 

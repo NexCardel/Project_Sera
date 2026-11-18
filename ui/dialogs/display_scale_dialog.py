@@ -8,7 +8,7 @@ ordinary staff can open. The choice is saved in QSettings on this PC only and ap
 """
 from PySide6.QtWidgets import QDialog, QMessageBox, QVBoxLayout
 
-from ui.components.kit import MessageBox, DialogFrame, LabelledAction, Select, SettingRow, Switch
+from ui.components.kit import MessageBox, DialogFrame, LabelledAction, Select, SettingRow
 from ui.utils import ui_scale
 
 _OPTIONS = (
@@ -75,21 +75,43 @@ class DisplayScaleControl(SettingRow):
         version.restart_app()
 
 
-_SHARP_SUB = "Crisper text on low-resolution screens (Windows GDI text engine). On this PC only."
-
-
-class SharpTextControl(SettingRow):
-    """On / off switch for sharp text. Saves to this PC's QSettings at once; applies after a restart."""
+class TextRenderingControl(SettingRow):
+    """Text rendering picker. Saves to this PC's QSettings on change; applies after a restart."""
 
     def __init__(self, parent=None):
-        switch = Switch(checked=ui_scale.read_sharp_text(), tooltip="Sharp text")
-        super().__init__("Sharp text", _SHARP_SUB, switch, parent, width="auto")
-        self.switch = switch
-        switch.toggled.connect(self._save)
+        combo = Select()
+        combo.setMinimumWidth(180)
+        for mode, (label, *_rest) in ui_scale.TEXT_MODES.items():
+            combo.addItem(label, mode)
+        self._running = ui_scale.read_text_rendering()
+        combo.setCurrentIndex(max(0, combo.findData(self._running)))
+        restart_btn = LabelledAction("Restart now", variant="secondary", icon="mdi.refresh")
+        restart_btn.clicked.connect(self._restart_now)
+        super().__init__("Text rendering", self._describe(self._running), [combo, restart_btn], parent,
+                         width="auto")
+        self.combo = combo
+        self.btn_restart = restart_btn
+        combo.currentIndexChanged.connect(self._save)
 
-    def _save(self, enabled: bool) -> None:
-        ui_scale.write_sharp_text(enabled)
-        self.set_sub(f"Saved: sharp text {'on' if enabled else 'off'}. Restart Sera to apply.")
+    @staticmethod
+    def _describe(mode: str) -> str:
+        return ui_scale.TEXT_MODES[mode][1]
+
+    def _save(self, _index=None) -> None:
+        mode = self.combo.currentData()
+        ui_scale.write_text_rendering(mode)
+        note = "" if mode == self._running else " Saved; restart Sera to apply."
+        self.set_sub(self._describe(mode) + note)
+
+    def _restart_now(self) -> None:
+        answer = MessageBox.question(
+            self, "Restart Sera",
+            "Restart Sera now to apply the text rendering? Anything unsaved in Sera will be lost.")
+        if answer != QMessageBox.Yes:
+            return
+        self._save()
+        import version
+        version.restart_app()
 
 
 class DisplayScaleDialog(QDialog):
@@ -106,9 +128,9 @@ class DisplayScaleDialog(QDialog):
         # Stacked: beside three controls the "Running at ..." line had no room (clipped at 520 px).
         self.control.set_compact(True)
         self.frame.add_widget(self.control)
-        self.sharp_text = SharpTextControl()
-        self.sharp_text.set_compact(True)
-        self.frame.add_widget(self.sharp_text)
+        self.text_rendering = TextRenderingControl()
+        self.text_rendering.set_compact(True)
+        self.frame.add_widget(self.text_rendering)
         close = self.frame.add_action("Close", variant="secondary")
         close.clicked.connect(self.accept)
         self.frame.closeRequested.connect(self.accept)
