@@ -278,8 +278,8 @@ def test_last_successful_sync_prefers_peer_status_over_address_book(tmp_path):
     engine.peer_status.return_value = {own_device_id: {"last_ok": 1_700_000_000.0, "online": True}}
     dlg._refresh_members()
 
-    assert dlg.members_table.item(0, 3).text() != "never"
-    assert "2023-11" in dlg.members_table.item(0, 3).text()  # 1_700_000_000 -> 2023-11-14
+    assert dlg.members_table.item(0, 4).text() != "never"
+    assert "2023-11" in dlg.members_table.item(0, 4).text()  # 1_700_000_000 -> 2023-11-14
 
 
 def test_stalled_streams_shown_in_summary(tmp_path):
@@ -665,7 +665,7 @@ def test_last_successful_sync_stamps_use_the_same_format_for_engine_and_address_
 
     engine.peer_status.return_value = {own_device_id: {"last_ok": 1_700_000_000.0, "online": True}}
     dlg._refresh_members()
-    engine_text = dlg.members_table.item(0, 3).text()
+    engine_text = dlg.members_table.item(0, 4).text()
     assert stamp_re.match(engine_text), engine_text
 
     engine.peer_status.return_value = {}
@@ -674,7 +674,7 @@ def test_last_successful_sync_stamps_use_the_same_format_for_engine_and_address_
         sync_discovery.record_successful_session(conn, own_device_id, "10.0.0.5", 49159,
                                                    ok_at="2026-09-25T00:00:00Z")
     dlg._refresh_members()
-    addr_text = dlg.members_table.item(0, 3).text()
+    addr_text = dlg.members_table.item(0, 4).text()
     assert stamp_re.match(addr_text), addr_text
 
 

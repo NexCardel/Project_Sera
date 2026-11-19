@@ -594,6 +594,35 @@ def test_add_revoked_member_refused(admin_office):
 
 
 @windows_only
+def test_rename_member_signs_new_name_and_bumps_rev(admin_office):
+    app, conn, admin_dev = admin_office["app"], admin_office["conn"], admin_office["device_id"]
+    pub = sync_admin._office_pubkey(app)
+    cert, dev = _new_cert_pem()
+    first = sync_admin.add_member(app, conn, admin_dev, cert, "PC B")
+    renamed = sync_admin.rename_member(app, conn, admin_dev, dev, "  Front Desk  ")
+    assert renamed["name"] == "Front Desk"
+    assert renamed["rev"] == first["rev"] + 1
+    assert renamed["token_letter"] == first["token_letter"]
+    assert sync_admin.get_member(conn, dev, pub)["name"] == "Front Desk"
+    # the admin PC itself can be renamed too
+    assert sync_admin.rename_member(app, conn, admin_dev, admin_dev, "Boss PC")["name"] == "Boss PC"
+
+
+@windows_only
+def test_rename_member_refuses_non_admin_removed_and_blank(admin_office):
+    app, conn, admin_dev = admin_office["app"], admin_office["conn"], admin_office["device_id"]
+    cert, dev = _new_cert_pem()
+    sync_admin.add_member(app, conn, admin_dev, cert, "PC B")
+    with pytest.raises(NotAdmin):
+        sync_admin.rename_member(app, conn, "f" * 32, dev, "X")
+    with pytest.raises(ValueError):
+        sync_admin.rename_member(app, conn, admin_dev, dev, "   ")
+    sync_admin.revoke_member(app, conn, admin_dev, dev)
+    with pytest.raises(MembershipError):
+        sync_admin.rename_member(app, conn, admin_dev, dev, "Y")
+
+
+@windows_only
 def test_admin_cannot_revoke_itself(admin_office):
     app, conn, admin_dev = admin_office["app"], admin_office["conn"], admin_office["device_id"]
     with pytest.raises(MembershipError):

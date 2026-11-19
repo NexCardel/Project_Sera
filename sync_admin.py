@@ -604,6 +604,29 @@ def revoke_member(app_dir, conn, admin_device_id: str, device_id: str) -> dict:
     return record
 
 
+def rename_member(app_dir, conn, admin_device_id: str, device_id: str, new_name: str) -> dict:
+    """Admin PC only: sign a new member record with a different ``name`` (``rev`` + 1).
+
+    Works for any active member, the admin PC included. The letter, certificate and role are
+    unchanged, so the record replaces the old one on every PC as soon as it syncs. A removed
+    member can't be renamed.
+    """
+    key, pub = _require_named_admin(app_dir, conn, admin_device_id)
+    new_name = _check_name(new_name)
+    with _transaction(conn):
+        existing = get_member(conn, device_id, admin_pubkey=pub)
+        if existing is None:
+            raise MembershipError("that PC is not a member of this office")
+        if existing["revoked_at"] is not None:
+            raise MembershipError("that PC was removed from the office")
+        if existing["name"] == new_name:
+            return existing
+        record = sign_record(dict(_body(existing), name=new_name,
+                                  rev=max(existing["rev"], _stored_rev(conn, device_id)) + 1), key)
+        store_record(conn, record, pub)
+    return record
+
+
 def claim_admin(app_dir, conn, password: str, device_id: str) -> dict:
     """Make this PC the office admin PC with the master password (D3). Returns the office_admin record.
 

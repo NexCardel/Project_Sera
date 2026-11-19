@@ -52,6 +52,7 @@ _DEVICE_COLUMNS = (
 )
 _MEMBER_COLUMNS = (
     ("Name", dict(kind="strong", minimum=96, stretch=2)),
+    ("Device name", dict(minimum=96, stretch=1)),
     ("Online", dict(width=150, stretch=0)),
     ("Role", dict(width=80, stretch=0)),
     ("Last Successful Sync (this PC)", dict(kind="num", minimum=120, stretch=1)),
@@ -361,6 +362,10 @@ class SeraSyncDialog(QDialog):
                                                   tooltip="Shows a code the new PC types in to join this office")
         self.btn_add_workstation.clicked.connect(self._on_add_workstation)
         btn_row.addWidget(self.btn_add_workstation)
+        self.btn_rename_member = LabelledAction("Rename", icon="mdi.pencil",
+                                                tooltip="Change the selected workstation's name (admin PC only)")
+        self.btn_rename_member.clicked.connect(self._on_rename_member)
+        btn_row.addWidget(self.btn_rename_member)
         self.btn_remove_member = LabelledAction("Remove", icon="mdi.account-remove", tooltip="Asks first")
         self.btn_remove_member.clicked.connect(self._on_remove_member)
         btn_row.addWidget(self.btn_remove_member)
@@ -578,6 +583,16 @@ class SeraSyncDialog(QDialog):
             if not admin_pubkey:
                 return
             own_device_id, _ = self._own_identity()
+            # PC names: peers announce theirs in their beacons; remembered so an offline peer
+            # still shows its last known one. This PC's own comes straight from the OS.
+            seen_hosts = {}
+            if self.discovery_service is not None:
+                try:
+                    seen_hosts = {s["device_id"]: s["host"]
+                                  for s in self.discovery_service.get_all_beacon_sightings(max_age_seconds=300.0)
+                                  if s.get("host")}
+                except Exception:
+                    seen_hosts = {}
             peer_status = {}
             if self.sync_engine is not None:
                 try:
@@ -588,6 +603,14 @@ class SeraSyncDialog(QDialog):
                 members = sync_admin.list_members(conn, admin_pubkey, include_revoked=False)
                 office_admin = sync_admin.get_office_admin(conn, admin_pubkey)
                 sync_discovery.ensure_address_book_table(conn)
+                try:
+                    sync_discovery.remember_hostnames(conn, seen_hosts)
+                    hostnames = sync_discovery.get_hostnames(conn)
+                except Exception:
+                    hostnames = dict(seen_hosts)
+                if own_device_id:
+                    import socket
+                    hostnames[own_device_id] = socket.gethostname()
                 warnings = sync_discovery.get_unreachable_member_warnings(conn, members)
                 last_ok = {}
                 for m in members:
@@ -642,17 +665,18 @@ class SeraSyncDialog(QDialog):
             name_item = QTableWidgetItem(m.get("name", ""))
             name_item.setData(Qt.UserRole, dev_id)
             self.members_table.setItem(row, 0, name_item)
+            self.members_table.setItem(row, 1, QTableWidgetItem(hostnames.get(dev_id, "")))
             online = self._online_status(dev_id, own_device_id)
             online_item = QTableWidgetItem(online)
             online_item.setData(ROLE_PILL, (online, "emerald" if online.startswith("Online") else "neutral", True))
-            self.members_table.setItem(row, 1, online_item)
+            self.members_table.setItem(row, 2, online_item)
             role = "Admin" if dev_id == admin_device_id else "Member"
-            self.members_table.setItem(row, 2, QTableWidgetItem(role))
-            self.members_table.setItem(row, 3, QTableWidgetItem(self._local_stamp(last_ok.get(dev_id))))
+            self.members_table.setItem(row, 3, QTableWidgetItem(role))
+            self.members_table.setItem(row, 4, QTableWidgetItem(self._local_stamp(last_ok.get(dev_id))))
             this_pc_item = QTableWidgetItem("This PC" if dev_id == own_device_id else "")
             if dev_id == own_device_id:
                 this_pc_item.setData(ROLE_PILL, ("This PC", "neutral"))
-            self.members_table.setItem(row, 4, this_pc_item)
+            self.members_table.setItem(row, 5, this_pc_item)
         self.members_table.setUpdatesEnabled(True)
 
         if warnings:
@@ -666,6 +690,7 @@ class SeraSyncDialog(QDialog):
         self.btn_add_workstation.set_disabled_reason(
             not_admin or ("A code window is already open" if self._add_workstation_session is not None else None))
         self.btn_remove_member.set_disabled_reason(not_admin)
+        self.btn_rename_member.set_disabled_reason(not_admin)
         self.btn_hand_over_admin.set_disabled_reason(not_admin)
         self.btn_become_admin.set_disabled_reason("This PC is already the admin" if is_admin else None)
 
@@ -1301,6 +1326,27 @@ class SeraSyncDialog(QDialog):
                 sync_admin.revoke_member(self._app_dir(), conn, own_device_id, member.get("device_id"))
         except Exception as exc:
             MessageBox.warning(self, "Remove", f"Could not remove the workstation: {exc}")
+            return
+        self._refresh_members()
+
+    def _on_rename_member(self):
+        member = self._selected_member()
+        if member is None:
+            MessageBox.information(self, "Rename", "Select a workstation to rename first.")
+            return
+        old_name = member.get("name") or ""
+        new_name, ok = QInputDialog.getText(
+            self, "Rename Workstation", f"New name for \"{old_name}\":", QLineEdit.Normal, old_name)
+        new_name = (new_name or "").strip()
+        if not ok or not new_name or new_name == old_name:
+            return
+        own_device_id, _ = self._own_identity()
+        try:
+            import sync_admin
+            with self.db._connect() as conn:
+                sync_admin.rename_member(self._app_dir(), conn, own_device_id, member.get("device_id"), new_name)
+        except Exception as exc:
+            MessageBox.warning(self, "Rename", f"Could not rename the workstation: {exc}")
             return
         self._refresh_members()
 

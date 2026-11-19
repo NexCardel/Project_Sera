@@ -159,6 +159,7 @@ def make_beacon_payload(
     office_name: str | None = None,
     pair_port: int = PAIRING_PORT,
     beacon_port: int = BEACON_PORT,
+    host_name: str | None = None,
 ) -> dict:
     """Builds a Sera Sync v3 beacon payload."""
     payload = {
@@ -171,6 +172,9 @@ def make_beacon_payload(
     }
     if beacon_port != BEACON_PORT and (1 <= beacon_port <= 65535):
         payload["bport"] = int(beacon_port)
+    if host_name:
+        # Optional: the PC's own (Windows) name, shown as "Device name" in the Members panel.
+        payload["host"] = str(host_name)[:MAX_STRING_LEN]
     if pair:
         if office_name is not None:
             payload["office_name"] = str(office_name)[:MAX_STRING_LEN]
@@ -235,6 +239,10 @@ def parse_beacon(data: bytes, sender_ip: str | None = None) -> dict | None:
     if isinstance(bport, int) and (1 <= bport <= 65535):
         res["bport"] = bport
 
+    host = payload.get("host")
+    if isinstance(host, str) and host and len(host) <= MAX_STRING_LEN:
+        res["host"] = host
+
     if pair:
         office_name = payload.get("office_name")
         if isinstance(office_name, str) and len(office_name) <= MAX_STRING_LEN:
@@ -244,6 +252,31 @@ def parse_beacon(data: bytes, sender_ip: str | None = None) -> dict | None:
             res["pair_port"] = pair_port
 
     return res
+
+
+# ---------------------------------------------------------------- Peer PC names (master.db, local only)
+
+HOSTNAMES_TABLE = "_local_hostnames"
+
+
+def remember_hostnames(conn, names: dict) -> None:
+    """Keeps the last PC name each peer announced (``{device_id: name}``) so it still shows
+    while that peer is offline. Local-only (``_local_*``), never replicated."""
+    names = {d: h for d, h in names.items() if isinstance(d, str) and isinstance(h, str) and h}
+    if not names:
+        return
+    with _transaction(conn):
+        conn.execute(f"CREATE TABLE IF NOT EXISTS {HOSTNAMES_TABLE} "
+                     "(device_id TEXT PRIMARY KEY, host TEXT NOT NULL)")
+        for dev, host in names.items():
+            conn.execute(f"INSERT OR REPLACE INTO {HOSTNAMES_TABLE} (device_id, host) VALUES (?, ?)", (dev, host))
+
+
+def get_hostnames(conn) -> dict:
+    """``{device_id: name}`` as last remembered by ``remember_hostnames``."""
+    conn.execute(f"CREATE TABLE IF NOT EXISTS {HOSTNAMES_TABLE} "
+                 "(device_id TEXT PRIMARY KEY, host TEXT NOT NULL)")
+    return {d: h for d, h in conn.execute(f"SELECT device_id, host FROM {HOSTNAMES_TABLE}").fetchall()}
 
 
 # ---------------------------------------------------------------- Address book (master.db)
@@ -804,6 +837,10 @@ class DiscoveryService:
         self.office_tag = office_tag
         self.device_id = device_id
         self.device_name = device_name
+        try:
+            self.host_name = socket.gethostname() or None
+        except OSError:
+            self.host_name = None
         self.bind_host = bind_host
         self.beacon_port = beacon_port
         self.sync_port = sync_port
@@ -942,6 +979,7 @@ class DiscoveryService:
                     "sync_port": peer_sync_port,
                     "bport": peer_bport,
                     "name": beacon["name"],
+                    "host": beacon.get("host"),
                     "seen_at": now_mono,
                 }
 
@@ -988,6 +1026,7 @@ class DiscoveryService:
             office_name=self._office_name,
             pair_port=self.pair_port,
             beacon_port=self.beacon_port,
+            host_name=self.host_name,
         )
         packet = encode_beacon(payload)
         if sock:
@@ -1070,6 +1109,7 @@ class DiscoveryService:
             office_name=self._office_name,
             pair_port=self.pair_port,
             beacon_port=self.beacon_port,
+            host_name=self.host_name,
         )
         packet = encode_beacon(payload)
 

@@ -192,9 +192,9 @@ def test_members_panel_visible_in_office_mode_and_populates(tmp_path):
     dlg._refresh_members()
 
     assert dlg.members_table.rowCount() == 1
-    assert dlg.members_table.item(0, 1).text() == "Online (this PC)"
-    assert dlg.members_table.item(0, 2).text() == "Admin"
-    assert dlg.members_table.item(0, 4).text() == "This PC"
+    assert dlg.members_table.item(0, 2).text() == "Online (this PC)"
+    assert dlg.members_table.item(0, 3).text() == "Admin"
+    assert dlg.members_table.item(0, 5).text() == "This PC"
     assert dlg.btn_add_workstation.isEnabled() is True
     assert dlg.btn_become_admin.isEnabled() is False
 

@@ -129,7 +129,7 @@ def test_office_panels_refresh_while_another_tab_shows(made, tmp_path):
     dlg._refresh_members()
     dlg._refresh_sync_status()
     assert dlg.members_table.rowCount() == 1
-    assert dlg.members_table.item(0, 2).text() == "Admin"
+    assert dlg.members_table.item(0, 3).text() == "Admin"
     assert dlg.mode_pill.text().startswith("Mode: ")
 
 
