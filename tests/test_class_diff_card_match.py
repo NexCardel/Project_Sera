@@ -73,7 +73,11 @@ def test_an_extra_button_lowers_only_that_cards_pairs():
     assert m["cards"][3]["overall"] < m["cards"][0]["overall"]
     st = m["structure"]
     assert st["ref"] == 0, "the medoid: first of the best-matching cards"
-    assert st["extras"] == [{"kind": "button", "path": "Group.acts / Button", "cards": [3], "count": 1}]
+    assert len(st["extras"]) == 1
+    ex = st["extras"][0]
+    assert {k: ex[k] for k in ("kind", "path", "cards", "count")} == {"kind": "button", "path": "Group.acts / Button",
+                                                                     "cards": [3], "count": 1}
+    assert ex["node_cards"] == [3] and len(ex["nodes"]) == 1
 
 
 def test_a_missing_node_breaks_its_neighbours_adjacency():
@@ -92,6 +96,55 @@ def test_structure_finds_labels_values_and_blocks():
     assert [s["label"] for s in st["slots"]] == [None, None, 1, None, 3, None], "a value's label: nearest label before it, same block"
     assert st["blocks"] == [[0], [1, 2, 3, 4], [5]]
     assert st["always"] == 5 and st["labels"] == 3 and st["values"] == 3
+
+
+def test_slots_list_one_node_per_card_for_the_picker():
+    doc = _page(drop_date=2, extra_button=1)
+    st = _match(doc)["structure"]
+    pc = shape_map.page_containers(doc)
+    for sl in st["slots"]:
+        assert len(sl["nodes"]) == 4
+        assert sum(k is not None for k in sl["nodes"]) == sl["found"]
+    date = st["slots"][4]
+    assert date["kind"] == "date" and date["nodes"][2] is None, "card 2 has no date"
+    names = [doc[k]["name"] for k in date["nodes"] if k is not None]
+    assert names == ["01/07/2026", "02/07/2026", "04/07/2026"], "the slot's nodes are the dates, in card order"
+    ex = st["extras"][0]
+    assert ex["node_cards"] == [1] and doc[ex["nodes"][0]]["name"] == "View more"
+    # card_sets: what render.py --cards draws (node indexes and paths only)
+    cs = [c for c in shape_map.card_sets(shape_map.infer(pc)) if c["tail"].endswith("card")]
+    assert len(cs) == 1 and len(cs[0]["cards"]) == 4 and cs[0]["ref"] == st["ref"]
+    assert [s["nodes"] for s in cs[0]["slots"]] == [s["nodes"] for s in st["slots"]]
+    assert cs[0]["slots"][4]["label"] == 3 and cs[0]["extras"][0]["node_cards"] == [1]
+    assert "Status" not in json.dumps(cs), "no page text in the card sets"
+
+
+def test_match_groups_chain_through_a_shared_card():
+    scores = {"0-2": 91.0, "2-5": 85.0, "0-5": 62.0, "1-3": 80.0}          # every other pair: 40
+    pairs = {f"{i}-{j}": {"overall": scores.get(f"{i}-{j}", 40.0)} for i in range(6) for j in range(i + 1, 6)}
+    groups = card_match.match_groups(6, pairs, 80)
+    assert [g["cards"] for g in groups] == [[0, 2, 5], [1, 3], [4]]
+    # 0 and 5 do not match directly (62) but both match 2: one group, and pair_min shows it is a chain
+    assert groups[0]["link_min"] == 85.0 and groups[0]["pair_min"] == 62.0
+    assert groups[1]["link_min"] == 80.0 == groups[1]["pair_min"], "a pair at the minimum is a link"
+    assert groups[2]["link_min"] is None and groups[2]["pair_min"] is None, "a card alone"
+    assert [g["cards"] for g in card_match.match_groups(6, pairs, 95)] == [[0], [1], [2], [3], [4], [5]]
+
+
+def test_a_sets_cards_carry_their_match_group():
+    doc = _page(extra_button=3)                      # card 3 against the others: 83.3 %
+    pc = shape_map.page_containers(doc)
+    m = shape_map.infer(pc)["sets"][0]["match"]
+    assert m["group_min"] == card_match.GROUP_MIN == 80.0
+    assert [g["cards"] for g in m["groups"]] == [[0, 1, 2, 3]] and {c["group"] for c in m["cards"]} == {0}
+    inf = shape_map.infer(pc, group_min=90)
+    m = inf["sets"][0]["match"]
+    assert [g["cards"] for g in m["groups"]] == [[0, 1, 2], [3]]
+    assert [c["group"] for c in m["cards"]] == [0, 0, 0, 1]
+    rep = "\n".join(shape_map.report(inf))
+    assert "group 1: cards 0, 1, 2" in rep and "group 2: cards 3  (alone)" in rep
+    html = shape_map.build_html(pc, inf, {})
+    assert "Match groups" in html
 
 
 def test_kind_of_text_inside_link_and_button():

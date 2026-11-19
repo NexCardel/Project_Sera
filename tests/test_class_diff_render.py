@@ -310,3 +310,18 @@ def test_outline_containers_depth_texts_and_shapes():
     assert sec["stats"]["outlines"] == 4 and sec["stats"]["outlines_2plus_texts"] == 3
     assert sec["stats"]["shapes_repeated"] == 1
     assert data["outline"] is True and _page(CARDS, outline=True)[0] == html, "same input, same bytes"
+
+
+def test_cards_outline_record_sets_and_make_slots_pickable():
+    _, plain = _page(CARDS)
+    assert "cards" not in plain["docs"][0], "no card sets without cards=True"
+    html, data = _page(CARDS, cards=True)
+    sec = data["docs"][0]
+    assert sec["stats"]["card_sets"] == 1 and sec["stats"]["card_slots"] == 2
+    cs = sec["cards"][0]
+    assert cs["cards"] == [1, 4], "the two cards are the members"
+    assert [(s["role"], s["nodes"]) for s in cs["slots"]] == [("label", [2, 5]), ("value", [3, 6])]
+    assert cs["slots"][1]["label"] is None, "each text is its own block here: no label pairing across blocks"
+    assert all(sec["nodes"][k]["b"] for s in cs["slots"] for k in s["nodes"]), "every slot node has a box to click"
+    assert "Copy picks" in html and "has-cards" in html
+    assert _page(CARDS, cards=True)[0] == html, "same input, same bytes"

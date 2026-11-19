@@ -30,8 +30,10 @@ page text. The HTML map draws text boxes as grey bars, never their text.
 
 Usage:
     python tools/pre_dev/class_diff/shape_map.py FILE [--snapshot N] [--doc N] [--no-match]
-                                                 [--match-min PCT] [--open]
+                                                 [--match-min PCT] [--group-min PCT] [--open]
 --match-min: how much two lined-up boxes must match inside to be one record set (default MATCH_MIN).
+--group-min: how much two cards of a set must match to be linked into one match group (default
+             card_match.GROUP_MIN). Links chain: 0-2 and 2-5 linked puts 0, 2 and 5 in one group.
 FILE: a comp page, a key_probe capture or read (.json), or a record file (.jsonl, with --record N).
 Writes output/shape_map_<file>.html.
 """
@@ -131,9 +133,11 @@ def layout(insts: List[Dict[str, Any]]) -> Dict[str, Any]:
             "w_spread": _spread([e["w"] for e in insts]), "h_spread": _spread([e["h"] for e in insts])}
 
 
-def infer(pc: Dict[str, Any], match: bool = True, match_min: Optional[float] = None) -> Dict[str, Any]:
+def infer(pc: Dict[str, Any], match: bool = True, match_min: Optional[float] = None,
+          group_min: Optional[float] = None) -> Dict[str, Any]:
     """Record sets, their parts and nested lists, lifts and loose merges (module doc). match_min: the
-    percentage two lined-up boxes must match inside (None = MATCH_MIN)."""
+    percentage two lined-up boxes must match inside (None = MATCH_MIN). group_min: the pair percentage
+    that links two cards of a set into one match group (None = card_match.GROUP_MIN)."""
     match_min = MATCH_MIN if match_min is None else float(match_min)
     ols, by_k = pc["ols"], pc["by_k"]
     anc = {e["k"]: set(_ancestors(by_k, e["k"])) for e in ols}
@@ -191,7 +195,7 @@ def infer(pc: Dict[str, Any], match: bool = True, match_min: Optional[float] = N
                      "strict_shapes": len(n_sh), "link_min": weakest[min(e["k"] for e in insts)],
                      "texts": [e["nt"] for e in insts], "members": [e["k"] for e in insts],
                      "layout": layout(insts), "lift": lift, "inner": inner,
-                     "match": card_match.match_set([e["k"] for e in insts], pc["nodes"], pc["flat"])
+                     "match": card_match.match_set([e["k"] for e in insts], pc["nodes"], pc["flat"], group_min)
                      if match and "nodes" in pc else None})
     return {"sets": sets, "merges": _loose_merges(pc, groups, anc), "repeated": len(repeated), "boxes": boxes}
 
@@ -396,7 +400,16 @@ def match_report(m: Optional[Dict[str, Any]]) -> List[str]:
     out = [f"    card match: overall {m['overall']}%  ({lay})"]
     for i, c in enumerate(m["cards"]):
         cl = "  ".join(f"{k} {v}%" for k, v in c["layers"].items())
-        out.append(f"      card {i}: {c['nodes']:3d} nodes  overall {c['overall']:5.1f}%  ({cl})")
+        out.append(f"      card {i}: {c['nodes']:3d} nodes  overall {c['overall']:5.1f}%  ({cl})  group {c['group'] + 1}")
+    out.append(f"    match groups (pairs >= {m['group_min']:g}% linked, links chain): {len(m['groups'])}")
+    for g, grp in enumerate(m["groups"]):
+        if grp["link_min"] is None:
+            how = "alone"
+        else:
+            how = f"weakest link {grp['link_min']}%, lowest pair inside {grp['pair_min']}%"
+            if grp["pair_min"] < m["group_min"]:
+                how += " (a chain: not every pair matches directly)"
+        out.append(f"      group {g + 1}: cards {', '.join(map(str, grp['cards']))}  ({how})")
     st = m["structure"]
     if st:
         out.append(f"    structure (reference card {st['ref']}): {len(st['slots'])} slots, in every card {st['always']}, "
@@ -410,6 +423,25 @@ def match_report(m: Optional[Dict[str, Any]]) -> List[str]:
             out.append(f"      block {b}: " + " ".join(parts))
         for e in st["extras"]:
             out.append(f"      extra: {e['kind']} x{e['count']} in cards {e['cards']}  ...{e['path'][-50:]}")
+    return out
+
+
+def card_sets(inf: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The record sets as render.py --cards draws them: each set's cards (member node indexes), its slots
+    (kind, role, path, label slot, found in, one node per card or None) and its extras (kind, path, nodes).
+    Sets without a card match are left out. Node indexes and paths only, no text."""
+    out = []
+    for i, s in enumerate(inf["sets"]):
+        st = (s.get("match") or {}).get("structure")
+        if not st:
+            continue
+        out.append({"set": i, "tail": s["tail"], "layout": s["layout"]["kind"], "cards": s["members"],
+                    "ref": st["ref"],
+                    "slots": [{"slot": sl["slot"], "kind": sl["kind"], "role": sl["role"], "path": sl["path"],
+                               "label": sl["label"], "found": sl["found"], "nodes": sl["nodes"]}
+                              for sl in st["slots"]],
+                    "extras": [{"kind": e["kind"], "path": e["path"], "nodes": e["nodes"], "node_cards": e["node_cards"]}
+                               for e in st["extras"]]})
     return out
 
 
@@ -433,12 +465,15 @@ def main(argv=None) -> int:
     ap.add_argument("--no-match", action="store_true", help="leave out the card match (card_match.py)")
     ap.add_argument("--match-min", type=float, default=None, metavar="PCT",
                     help=f"lined-up boxes are one record set when they match inside this much (default {MATCH_MIN:g})")
+    ap.add_argument("--group-min", type=float, default=None, metavar="PCT",
+                    help=f"two cards of a set are in one match group when their pair matches this much "
+                         f"(default {card_match.GROUP_MIN:g})")
     a = ap.parse_args(argv)
     src = Path(a.src)
     docs, meta = render.load(src, snapshot=a.snapshot, record=a.record)
     k = render._pick_docs(docs, a.doc if a.doc in ("auto", "all") else int(a.doc))[0]
     pc = page_containers(docs[k], a.comp_view)
-    inf = infer(pc, match=not a.no_match, match_min=a.match_min)
+    inf = infer(pc, match=not a.no_match, match_min=a.match_min, group_min=a.group_min)
     for line in report(inf):
         print(line)
     out = render.PRE_DEV_OUT / f"shape_map_{src.stem}.html"
@@ -480,6 +515,8 @@ TEMPLATE = r"""<!doctype html>
   .cm td, .cm th { border:1px solid var(--line); padding:2px 5px; text-align:right; }
   .cm th { color:var(--muted); font-weight:500; }
   .cm td.self { color:var(--muted); text-align:center; }
+  .cm td.link { font-weight:700; }
+  .cm .grp { cursor:default; }
   .cm .slots { font:11px/1.5 ui-monospace, Consolas, monospace; }
   .cm .blk { margin:3px 0; }
   .chip { display:inline-block; border:1px solid var(--line); border-radius:4px; padding:0 4px; margin:1px 2px 1px 0; }
@@ -528,11 +565,25 @@ D.sets.forEach((s, i) => {
     g.push({r: rect(D.boxes[k], {fill:'none', stroke:col, 'stroke-opacity':.7, 'stroke-width':1 / scale}), kind:'part'});
   if (s.match) s.members.forEach((k, ci) => {
     const b = D.boxes[k], c = s.match.cards[ci];
+    const many = s.match.groups.length > 1;
+    const tip = document.createElementNS(NS, 'title');           // the full label: hover the card
+    tip.textContent = 'card ' + ci + (many ? ' · group ' + (c.group + 1) : '') + ' · ' + c.overall + '%';
+    g[ci].r.appendChild(tip);
+    // the label is fitted to the card (screen px: 18 down to 8), cut to "c0" when it does not fit, left
+    // out when that does not fit either, and clipped to the card's box so it never runs over a neighbour
+    const bw = b[2] * scale, bh = b[3] * scale;
+    const fit = s_ => Math.min(18, (bw - 6) / (s_.length * 0.62), bh - 2);
+    let txt = 'c' + ci + (many ? ' · g' + (c.group + 1) : '') + ' · ' + Math.round(c.overall) + '%', f = fit(txt);
+    if (f < 8) { txt = 'c' + ci; f = fit(txt); }
+    if (f < 8) return;
+    const v = document.createElementNS(NS, 'svg');               // a nested svg clips its content to its box
+    v.setAttribute('x', b[0]); v.setAttribute('y', b[1]); v.setAttribute('width', Math.max(1, b[2])); v.setAttribute('height', Math.max(1, b[3]));
+    v.style.pointerEvents = 'none';
     const t = document.createElementNS(NS, 'text');
-    t.setAttribute('x', b[0] + 8 / scale); t.setAttribute('y', b[1] + 22 / scale);
-    t.setAttribute('font-size', 18 / scale); t.setAttribute('font-weight', 700); t.setAttribute('fill', col);
-    t.textContent = 'card ' + ci + ' · ' + c.overall + '%';
-    svg.appendChild(t); g.push({r: t, kind: 'pct'});
+    t.setAttribute('x', 3 / scale); t.setAttribute('y', (f * 0.85 + 1) / scale);
+    t.setAttribute('font-size', f / scale); t.setAttribute('font-weight', 700); t.setAttribute('fill', col);
+    t.textContent = txt;
+    v.appendChild(t); svg.appendChild(v); g.push({r: v, kind: 'pct'});
   });
   layers.push({i, g, col});
 });
@@ -577,7 +628,7 @@ function matchPanel(s, col) {
   const tb = el_('table');
   let tr = el_('tr'); tr.appendChild(el_('th'));
   for (let j = 0; j < n; j++) tr.appendChild(el_('th', '', 'c' + j));
-  tr.appendChild(el_('th', '', 'mean')); tr.appendChild(el_('th', '', 'nodes'));
+  tr.appendChild(el_('th', '', 'mean')); tr.appendChild(el_('th', '', 'nodes')); tr.appendChild(el_('th', '', 'group'));
   tb.appendChild(tr);
   for (let i = 0; i < n; i++) {
     tr = el_('tr');
@@ -590,6 +641,7 @@ function matchPanel(s, col) {
       else {
         const p = m.pairs[Math.min(i, j) + '-' + Math.max(i, j)];
         pctCell(td, p.overall);
+        if (p.overall >= m.group_min) td.className = 'link';
         td.title = 'card ' + i + ' vs card ' + j + '\n' + m.layer_names.map(nm => nm + ' ' + p.layers[nm] + '%').join('\n');
         td.addEventListener('mouseenter', () => highlight([s.members[i], s.members[j]], col));
       }
@@ -602,10 +654,26 @@ function matchPanel(s, col) {
     const nt = el_('td', '', String(c.nodes));
     nt.title = Object.entries(c.kinds).map(([k, v]) => k + ' ' + v).join('\n');
     tr.appendChild(nt);
+    const gt = el_('td', '', 'g' + (c.group + 1));
+    gt.addEventListener('mouseenter', () => highlight(m.groups[c.group].cards.map(x => s.members[x]), col));
+    tr.appendChild(gt);
     tb.appendChild(tr);
   }
   tb.addEventListener('mouseleave', () => highlight([], col));
   el.appendChild(tb);
+  // match groups: cards linked by a pair >= group_min, links chain (hover = highlight the group on the map)
+  el.appendChild(el_('div', 'big', 'Match groups (pairs ≥ ' + m.group_min + '% linked): ' + m.groups.length));
+  const gl = el_('div', 'slots');
+  m.groups.forEach((g, gi) => {
+    const how = g.link_min === null ? 'alone'
+      : 'weakest link ' + g.link_min + '% · lowest pair inside ' + g.pair_min + '%' + (g.pair_min < m.group_min ? ' (a chain)' : '');
+    const d = el_('div', 'blk grp', 'g' + (gi + 1) + ': cards ' + g.cards.join(', ') + ' · ' + how);
+    d.addEventListener('mouseenter', () => highlight(g.cards.map(x => s.members[x]), col));
+    d.addEventListener('mouseleave', () => highlight([], col));
+    gl.appendChild(d);
+  });
+  el.appendChild(gl);
+  el.appendChild(el_('div', 's', 'bold cell = a link · a chain = cards joined through another card, not every pair matches directly'));
   const st = m.structure;
   if (st) {
     el.appendChild(el_('div', 'big', 'Structure (reference card ' + st.ref + '): ' + st.slots.length + ' slots · in every card '

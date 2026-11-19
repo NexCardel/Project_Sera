@@ -6,7 +6,7 @@ Same CLI, same module: importing this file gives the core module itself (sys.mod
 
 usage: python tools/pre_dev/class_diff/render.py <file> [--snapshot N] [--doc N|all] [--record N|list]
                                                   [--comp-view present|all] [--out PATH] [--open]
-                                                  [--groups] [--arrange] [--outline]
+                                                  [--groups] [--arrange] [--outline] [--cards]
 """
 
 import sys

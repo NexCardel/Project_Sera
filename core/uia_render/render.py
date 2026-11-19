@@ -6,14 +6,15 @@ what the read holds: control type, screen box, name, value, class names, ids, ar
 
 Moved here from tools/pre_dev/class_diff/render.py (2026-11-07, docs/sca-uid-node-plan.md WP1) because
 the SCA UID picker ships in the installer and tools/ does not. The old path is an alias that runs the
-same CLI. The --groups / --arrange / --outline views still need the pre-dev cards.py / arrange.py.
+same CLI. The --groups / --arrange / --outline / --cards views still need the pre-dev cards.py / arrange.py /
+shape_map.py.
 
 Same input, same bytes: nothing depends on the time, random numbers, dict order or the machine.
 Python decides what is drawn and where. The page's script only measures text to fit its box.
 
 usage: python tools/pre_dev/class_diff/render.py <file> [--snapshot N] [--doc N|all] [--record N|list]
                                                   [--comp-view present|all] [--out PATH] [--open]
-                                                  [--groups] [--arrange] [--outline]
+                                                  [--groups] [--arrange] [--outline] [--cards]
 """
 
 import argparse
@@ -401,7 +402,17 @@ def _outline_els(raw, nodes, ox, oy):
     return els, list(shapes), list(loose)
 
 
-def _section(k, raw, comp_view, groups=False, arrange=False, outline=False):
+def _card_sets(raw, comp_view):
+    """--cards: the record sets of shape_map.py (pre-dev) with their card match, as node indexes: each set's
+    cards, slots (one node per card) and extras. The page outlines every card and makes every slot node
+    clickable: a click picks the slot, so the same slot lights in every card."""
+    _pre_dev()
+    import shape_map
+    pc = shape_map.page_containers(raw, comp_view)
+    return shape_map.card_sets(shape_map.infer(pc))
+
+
+def _section(k, raw, comp_view, groups=False, arrange=False, outline=False, cards=False):
     nodes = _norm(raw)
     _decide(nodes, comp_view)
     view = [n for n in nodes if n["in_view"] and _pos(n["rect"])]
@@ -464,6 +475,10 @@ def _section(k, raw, comp_view, groups=False, arrange=False, outline=False):
         stats["shapes"] = len(per)
         stats["shapes_repeated"] = sum(1 for c in per.values() if c >= 2)
         sec["shapes"], sec["loose"] = ol_shapes, ol_loose
+    if cards:
+        sec["cards"] = _card_sets(raw, comp_view)
+        stats["card_sets"] = len(sec["cards"])
+        stats["card_slots"] = sum(len(c["slots"]) for c in sec["cards"])
     return sec
 
 
@@ -480,15 +495,19 @@ def _pick_docs(docs, doc):
     return [int(doc)]
 
 
-def build(docs, meta, doc="auto", comp_view="present", groups=False, arrange=False, outline=False, pick=None):
+def build(docs, meta, doc="auto", comp_view="present", groups=False, arrange=False, outline=False, pick=None,
+          cards=False):
     """(html, summary). The summary has counts only: the caller may print it. groups=True draws the
     repeating groups of cards.py on top (plan docs/cards_rows/plan.md section 7); outline=True outlines
     every container and highlights same-shape containers on hover.
 
     pick (the SCA UID picker, docs/sca-uid-node-plan.md WP3): {"service", "post", "token",
     "cands": {"<doc>:<node>": {"text", "rules": {rule: uid}, "auto"}}}. The candidate nodes become
-    clickable and a bar sends {token, doc, i, rule} to pick["post"]. Without pick the page is unchanged."""
-    sections = [_section(k, docs[k], comp_view, groups, arrange, outline) for k in _pick_docs(docs, doc)]
+    clickable and a bar sends {token, doc, i, rule} to pick["post"]. Without pick the page is unchanged.
+
+    cards=True (pre-dev, shape_map.py + card_match.py): every card of every record set outlined, every slot
+    node clickable; clicking one picks that slot in all cards, and the bar lists the picks to copy."""
+    sections = [_section(k, docs[k], comp_view, groups, arrange, outline, cards) for k in _pick_docs(docs, doc)]
     data = {"title": meta.get("title", ""), "page": meta.get("page", ""), "browser": meta.get("browser", ""),
             "source": meta.get("source", ""), "index": meta.get("label", ""), "comp_view": comp_view,
             "anchor": meta.get("anchor", ""), "outline": bool(outline), "docs": sections}
@@ -549,6 +568,8 @@ def main(argv=None):
                     help="draw the repeating groups (cards.py): members boxed, distinct slots marked; writes *_groups.html")
     ap.add_argument("--outline", action="store_true",
                     help="outline every container (colour by depth); hover highlights every same-shape container; writes *_outline.html")
+    ap.add_argument("--cards", action="store_true",
+                    help="outline the cards of every record set (shape_map.py); click a node to pick its slot in all cards; writes *_cards.html")
     a = ap.parse_args(argv)
     src = Path(a.src)
     if not src.exists():
@@ -574,9 +595,11 @@ def main(argv=None):
             out = out.with_name(out.stem + "_arrange" + out.suffix)
         if a.outline and not a.out:
             out = out.with_name(out.stem + "_outline" + out.suffix)
+        if a.cards and not a.out:
+            out = out.with_name(out.stem + "_cards" + out.suffix)
         check_out(out)
         html, summary = build(docs, meta, doc=doc, comp_view=a.comp_view, groups=a.groups, arrange=a.arrange,
-                              outline=a.outline)
+                              outline=a.outline, cards=a.cards)
     except ValueError as e:
         raise SystemExit(str(e))
     write_html(out, html)
@@ -585,7 +608,8 @@ def main(argv=None):
               + (f", {s['groups']} groups" if "groups" in s else "")
               + (f", {s['arrange_groups']} arrangement groups" if "arrange_groups" in s else "")
               + (f", {s['outlines']} containers ({s['outlines_2plus_texts']} with 2+ texts), {s['shapes']} shapes"
-                 f" ({s['shapes_repeated']} repeated)" if "outlines" in s else ""))
+                 f" ({s['shapes_repeated']} repeated)" if "outlines" in s else "")
+              + (f", {s['card_sets']} record sets ({s['card_slots']} slots)" if "card_sets" in s else ""))
     print(f"-> {out}")
     if a.open:
         webbrowser.open(out.resolve().as_uri())
@@ -666,6 +690,23 @@ TEMPLATE = r"""<!doctype html>
   #pickbar button { font:inherit; padding:6px 14px; border-radius:4px; border:1px solid #2a9d8f; background:#2a9d8f; color:#fff; cursor:pointer; }
   #pickbar button:disabled { opacity:.5; cursor:default; }
   body.picking main { padding-bottom:90px; }
+  .n.cmcard { pointer-events:none; border:2px solid; border-radius:3px; z-index:7; }
+  .n.cmcard .ct { position:absolute; left:0; top:-15px; font:10px/13px ui-monospace,Consolas,monospace; color:#fff; padding:0 4px; border-radius:2px; white-space:nowrap; }
+  .n.cs { z-index:8; cursor:pointer; border:1px dashed; border-radius:2px; }
+  .n.cs.lab { border-color:#8a8a8e; }
+  .n.cs.val { border-color:#2f9e44; }
+  .n.cs.one { border-color:#8a8a8e; border-style:dotted; }
+  .n.cs.ext { border-color:#e8590c; }
+  .n.cs.peer { background:rgba(255,176,0,.25); border-style:solid; }
+  .n.cs.sel { background:rgba(26,115,232,.18); border:2px solid #1a73e8; }
+  body:not(.cs-on) .n.cs, body:not(.cs-on) .n.cmcard { display:none; }
+  .cpc { display:none; }
+  body.has-cards .cpc { display:flex; }
+  body.has-cards main { padding-bottom:110px; }
+  #pickbar .cpk { display:inline-flex; gap:4px; align-items:center; border:1px solid #1a73e8; border-radius:4px; padding:1px 2px 1px 6px; }
+  #pickbar .cpk button { padding:0 6px; background:transparent; color:#1a73e8; border:none; }
+  #pickbar .cpi { flex-basis:100%; }
+  #pickbar .sw { display:inline-block; width:12px; height:9px; border:1px dashed; margin:0 3px 0 8px; vertical-align:-1px; }
   #tip { position:fixed; z-index:20; pointer-events:none; background:#222; color:#fff; font:12px/1.4 ui-monospace,Consolas,monospace;
          padding:6px 8px; border-radius:4px; max-width:520px; display:none; white-space:pre-wrap; }
 </style>
@@ -680,6 +721,8 @@ TEMPLATE = r"""<!doctype html>
   <label class="olc"><input type="checkbox" id="olfew" checked> hide wrappers with &lt; 2 texts</label>
   <label class="olc">same shape by <select id="olby"><option value="sh">shape (types, ids, classes)</option><option value="lo">loose (types only)</option></select></label>
   <span class="meta olc">hover a container · [ ] parent / child · click pins · Esc clears <span id="olpin"></span></span>
+  <label class="cpc"><input type="checkbox" id="cson" checked> card slots</label>
+  <span class="meta cpc">hover a box: the same slot lights in every card · click picks it · click again drops it</span>
   <span class="meta" id="sum"></span>
 </header>
 <main id="docs"></main>
@@ -917,11 +960,13 @@ if (D.outline) {
 const root = document.getElementById('docs');
 const fits = [];
 let texts = 0, nodes = 0;
+const CARDS = [];   // one per section with record sets: {d, page}
 for (const d of D.docs) {
-  const {sec} = drawSection(d);
+  const {sec, page} = drawSection(d);
   root.appendChild(sec);
   fits.push(fit(sec, d));
   nodes += d.nodes.length;
+  if (d.cards) CARDS.push({d, page});
 }
 if (!D.docs.length) root.appendChild(mk('p', 'meta', 'no UIA nodes in this read'));
 for (const f of fits) texts += f.texts;
@@ -929,6 +974,117 @@ const shrunk = fits.reduce((a, f) => a + f.shrunk, 0);
 document.getElementById('meta').textContent = [D.page, D.browser, D.source, D.index, D.comp_view ? 'comp view: ' + D.comp_view : ''].filter(Boolean).join(' · ');
 document.getElementById('sum').textContent = nodes + ' UIA nodes · ' + texts + ' texts · ' + shrunk + ' shrunk to fit';
 body.dataset.fit = JSON.stringify(fits);
+
+// --cards: every card of every record set outlined, every slot node clickable. A slot is one place in the
+// card (card_match.structure): hovering or picking one lights it in every card of its set.
+if (CARDS.length && !D.pick) {
+  body.classList.add('has-cards', 'cs-on');
+  document.getElementById('cson').addEventListener('change', e => body.classList.toggle('cs-on', e.target.checked));
+  const bar = document.getElementById('pickbar');
+  const COLS = ['#d6336c', '#1971c2', '#7048e8', '#0c8599', '#e67700', '#5c940d'];
+  const ROLE = {label: 'label (same text in every card)', value: 'value (differs per card)', '?': 'in one card only'};
+  const picks = new Map();          // slot key -> pick
+  const slots = new Map();          // slot key -> {d, cs, sl, divs}
+  let cur = null;
+  const txt = n => n ? (n.name.trim() || n.value.trim()).split(/\s+/).join(' ') : '';
+  const labelOf = (S) => S.sl.label != null ? S.cs.slots[S.sl.label] : null;
+  const labelText = (S) => { const l = labelOf(S); return l ? txt(S.d.nodes[l.nodes[S.cs.ref]]) : null; };
+  // [card index, node index] per card holding the slot
+  const perCard = (S) => S.sl.extra ? S.sl.nodes.map((k, x) => [S.sl.node_cards[x], k])
+                                    : S.sl.nodes.map((k, j) => [j, k]).filter(([, k]) => k != null);
+  function head(S) {
+    const {cs, sl} = S;
+    return 'set ' + cs.set + ' · ' + (sl.extra ? 'extra' : 'slot ' + sl.slot) + ' · ' + sl.kind + ' · '
+         + (sl.extra ? 'extra (some cards only)' : ROLE[sl.role]) + ' · in ' + perCard(S).length + ' of ' + cs.cards.length + ' cards'
+         + (labelOf(S) ? ' · label ' + JSON.stringify(labelText(S)) : '');
+  }
+  function show() {
+    bar.textContent = '';
+    bar.hidden = false;
+    if (cur) {
+      const row = mk('span', 'cpi', head(cur) + ' ·');
+      for (const [j, k] of perCard(cur)) {
+        row.appendChild(mk('span', null, ' c' + j + ' '));
+        row.appendChild(mk('code', null, txt(cur.d.nodes[k]) || cur.d.nodes[k].t));
+      }
+      bar.appendChild(row);
+    }
+    if (!picks.size) {
+      bar.appendChild(mk('span', null, 'Hover a dashed box, click to pick its slot.'));
+      for (const [c, t] of [['#8a8a8e', 'label'], ['#2f9e44', 'value'], ['#e8590c', 'extra']]) {
+        const sw = mk('span', 'sw');
+        sw.style.borderColor = c;
+        bar.appendChild(sw);
+        bar.appendChild(mk('span', null, t));
+      }
+      return;
+    }
+    bar.appendChild(mk('span', null, 'Picked ' + picks.size + ':'));
+    for (const [key, p] of picks) {
+      const chip = mk('span', 'cpk', 's' + p.set + ' · ' + (p.label_text ? p.label_text + ' \u2192 ' : '') + p.kind + ' ' + p.role);
+      const x = mk('button', null, '\u00d7');
+      x.title = 'drop this pick';
+      x.addEventListener('click', () => toggle(key));
+      chip.appendChild(x);
+      bar.appendChild(chip);
+    }
+    const cp = mk('button', null, 'Copy picks');
+    cp.addEventListener('click', async () => {
+      const json = JSON.stringify([...picks.values()], null, 1);
+      try { await navigator.clipboard.writeText(json); cp.textContent = 'Copied'; }
+      catch (e) { const t = mk('textarea'); t.value = json; bar.appendChild(t); t.select(); cp.textContent = 'Select and copy (Ctrl+C)'; }
+    });
+    bar.appendChild(cp);
+  }
+  function toggle(key) {
+    const S = slots.get(key);
+    if (picks.has(key)) picks.delete(key);
+    else {
+      const l = labelOf(S);
+      picks.set(key, {set: S.cs.set, set_shape: S.cs.tail, layout: S.cs.layout, slot: S.sl.extra ? null : S.sl.slot,
+                      extra: !!S.sl.extra, kind: S.sl.kind, role: S.sl.role, path: S.sl.path,
+                      label_path: l ? l.path : null, label_text: labelText(S), found: perCard(S).length, of: S.cs.cards.length});
+    }
+    for (const div of S.divs) div.classList.toggle('sel', picks.has(key));
+    show();
+  }
+  for (const {d, page} of CARDS) {
+    d.cards.forEach((cs, si) => {
+      const col = COLS[si % COLS.length];
+      cs.cards.forEach((k, j) => {
+        const n = d.nodes[k];
+        if (!n || !n.b) return;
+        const div = mk('div', 'n cmcard');
+        place(div, n.b);
+        div.style.borderColor = col;
+        const t = mk('span', 'ct', 's' + cs.set + ' c' + j + (j === cs.ref ? ' ref' : ''));
+        t.style.background = col;
+        div.appendChild(t);
+        page.appendChild(div);
+      });
+      const add = (key, sl, cls) => {
+        const S = {d, cs, sl, divs: []};
+        slots.set(key, S);
+        for (const [, k] of perCard(S)) {
+          const n = d.nodes[k];
+          if (!n || !n.b) continue;
+          const div = mk('div', 'n cs ' + cls);
+          place(div, n.b);
+          div.dataset.k = k;
+          div.dataset.info = 'SLOT  ' + head(S) + '\npath  ' + (sl.path || '(the card itself)') + '\n\n- node -\n' + infoOf(n);
+          div.addEventListener('mouseenter', () => { for (const x of S.divs) x.classList.add('peer'); cur = S; show(); });
+          div.addEventListener('mouseleave', () => { for (const x of S.divs) x.classList.remove('peer'); });
+          div.addEventListener('click', ev => { ev.stopPropagation(); toggle(key); });
+          S.divs.push(div);
+          page.appendChild(div);
+        }
+      };
+      cs.slots.forEach(sl => add(d.k + ':' + si + ':s' + sl.slot, sl, sl.role === 'label' ? 'lab' : sl.role === 'value' ? 'val' : 'one'));
+      cs.extras.forEach((e, x) => add(d.k + ':' + si + ':x' + x, Object.assign({extra: true, role: 'extra', label: null}, e), 'ext'));
+    });
+  }
+  show();
+}
 
 // SCA UID picker (pick mode): only nodes whose text holds a UID are clickable
 if (D.pick) {

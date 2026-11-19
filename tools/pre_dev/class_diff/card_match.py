@@ -20,13 +20,19 @@ Two cards are compared in layers. Each layer gives a percentage:
   overall        the mean of the layers (equal weights; PROVISIONAL, not measured). LAYERS lists the layers,
                  so a further one is one more function and one more entry.
 
+match_groups() puts the cards of one set in groups: two cards whose pair is >= GROUP_MIN are linked, and a
+group is every card reached over links (0-2 and 2-5 linked: 0, 2 and 5 are one group).
+
 structure() reads the cards of one set together: the card that matches the others best (the medoid) is the
 reference; every other card is aligned to it. Each reference leaf becomes a slot with the number of cards
 it was found in and whether its text is the same in all of them (template: a label) or differs (data: a
 value). A value slot's label is the nearest same-text slot before it in the same block (the card's direct
-child it sits in). Leaves no reference leaf took are extra slots, grouped by (kind, path).
+child it sits in). Leaves no reference leaf took are extra slots, grouped by (kind, path). Every slot and
+extra also lists its node indexes (a slot: one per card, None where the card lacks it), so a picker can
+light the same slot in every card (render.py --cards).
 
-Texts are compared in memory only. Nothing returned holds a text: kinds, paths, counts and percentages.
+Texts are compared in memory only. Nothing returned holds a text: kinds, paths, counts, percentages and
+node indexes.
 Deterministic: the same input gives the same output.
 """
 
@@ -189,7 +195,7 @@ def structure(leaves: List[List[Dict[str, Any]]], ref: int) -> Dict[str, Any]:
     found: List[List[Optional[int]]] = [[None] * n for _ in R]     # slot -> card -> leaf index
     for s in range(len(R)):
         found[s][ref] = s
-    extras: Dict[Tuple[str, str], List[int]] = {}
+    extras: Dict[Tuple[str, str], List[Tuple[int, int]]] = {}      # (kind, path) -> [(card, node)]
     for c, L in enumerate(leaves):
         if c == ref:
             continue
@@ -199,7 +205,7 @@ def structure(leaves: List[List[Dict[str, Any]]], ref: int) -> Dict[str, Any]:
         taken = {j for _, j in pairs}
         for j, x in enumerate(L):
             if j not in taken:
-                extras.setdefault((x["kind"], x["path"]), []).append(c)
+                extras.setdefault((x["kind"], x["path"]), []).append((c, x["k"]))
     slots = []
     for s, x in enumerate(R):
         texts = [leaves[c][j]["text"] for c, j in enumerate(found[s]) if j is not None]
@@ -207,7 +213,8 @@ def structure(leaves: List[List[Dict[str, Any]]], ref: int) -> Dict[str, Any]:
         text = "same" if k >= 2 and len(set(texts)) == 1 else ("differs" if k >= 2 else "one card")
         slots.append({"slot": s, "kind": x["kind"], "path": x["path"], "found": k, "of": n, "text": text,
                       "block": x["block"], "role": "label" if text == "same" else ("value" if text == "differs" else "?"),
-                      "label": None})
+                      "label": None,
+                      "nodes": [leaves[c][j]["k"] if j is not None else None for c, j in enumerate(found[s])]})
     for s, sl in enumerate(slots):                  # a value's label: nearest same-text slot before it, same block
         if sl["role"] != "value":
             continue
@@ -222,14 +229,54 @@ def structure(leaves: List[List[Dict[str, Any]]], ref: int) -> Dict[str, Any]:
         if not blocks or blocks[-1]["block"] != sl["block"]:
             blocks.append({"block": sl["block"], "slots": []})
         blocks[-1]["slots"].append(sl["slot"])
-    ext = [{"kind": k, "path": p, "cards": sorted(set(cs)), "count": len(cs)} for (k, p), cs in sorted(extras.items())]
+    ext = [{"kind": k, "path": p, "cards": sorted({c for c, _ in cs}), "count": len(cs),
+            "nodes": [nk for _, nk in cs], "node_cards": [c for c, _ in cs]}
+           for (k, p), cs in sorted(extras.items())]
     return {"ref": ref, "slots": slots, "blocks": [b["slots"] for b in blocks], "extras": ext,
             "labels": sum(sl["role"] == "label" for sl in slots), "values": sum(sl["role"] == "value" for sl in slots),
             "always": sum(sl["found"] == n for sl in slots)}
 
 
-def match_set(members: List[int], nodes: List[Dict[str, Any]], flat: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Pairwise card percentages, each card's mean against the others, the set's mean, and its structure."""
+GROUP_MIN = 80.0        # PROVISIONAL: two cards of one set are in one match group when their pair matches
+                        # this much (compare()'s overall, percent)
+
+
+def match_groups(n: int, pairs: Dict[str, Dict[str, Any]], group_min: float = GROUP_MIN) -> List[Dict[str, Any]]:
+    """The cards of one set in match groups. Two cards whose pair is >= group_min are linked, and a group is
+    every card reached over links: 0-2 and 2-5 linked puts 0, 2 and 5 in one group, whatever 0-5 scores.
+    Each group: its cards (ascending), link_min (the weakest link that joined it, None for a card alone)
+    and pair_min (the lowest pair inside it, linked or not: under group_min means the group is a chain).
+    Groups are in order of their first card."""
+    root = list(range(n))
+
+    def find(i):
+        while root[i] != i:
+            root[i] = root[root[i]]
+            i = root[i]
+        return i
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if pairs[f"{i}-{j}"]["overall"] >= group_min:
+                a, b = find(i), find(j)
+                root[max(a, b)] = min(a, b)
+    by: Dict[int, List[int]] = {}
+    for i in range(n):
+        by.setdefault(find(i), []).append(i)
+    out = []
+    for cards in sorted(by.values()):
+        inside = [pairs[f"{i}-{j}"]["overall"] for x, i in enumerate(cards) for j in cards[x + 1:]]
+        links = [v for v in inside if v >= group_min]
+        out.append({"cards": cards, "link_min": min(links) if links else None,
+                    "pair_min": min(inside) if inside else None})
+    return out
+
+
+def match_set(members: List[int], nodes: List[Dict[str, Any]], flat: List[Dict[str, Any]],
+              group_min: Optional[float] = None) -> Dict[str, Any]:
+    """Pairwise card percentages, each card's mean against the others, the set's mean, its match groups
+    (match_groups; group_min None = GROUP_MIN; each card carries its group's index) and its structure."""
+    group_min = GROUP_MIN if group_min is None else float(group_min)
     kids: Dict[int, List[int]] = {}
     for x in nodes:
         if x["p"] >= 0:
@@ -256,7 +303,12 @@ def match_set(members: List[int], nodes: List[Dict[str, Any]], flat: List[Dict[s
     set_layers = {nm: round(sum(p["layers"][nm] for p in allp) / len(allp), 1) for nm in names} if allp else {}
     set_overall = round(sum(p["overall"] for p in allp) / len(allp), 1) if allp else 100.0
     ref = max(range(n), key=lambda i: (cards[i]["overall"], -i)) if n else 0
+    groups = match_groups(n, pairs, group_min)
+    for g, grp in enumerate(groups):
+        for i in grp["cards"]:
+            cards[i]["group"] = g
     return {"layer_names": names, "pairs": pairs, "cards": cards, "layers": set_layers, "overall": set_overall,
+            "groups": groups, "group_min": group_min,
             "structure": structure(leaves, ref) if n else None}
 
 
