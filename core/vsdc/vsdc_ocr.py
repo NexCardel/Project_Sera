@@ -17,9 +17,18 @@ from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from typing import Dict, List, Optional, Tuple, Any
 from PIL import Image
 
-import winrt.windows.media.ocr as ocr
-import winrt.windows.graphics.imaging as imaging
-import winrt.windows.storage.streams as streams
+# winrt ships a native DLL that Windows can refuse to load (Smart App Control / an
+# Application Control policy blocks binaries it can't verify). That must only switch
+# OCR off, never stop the app from starting, so a failed import leaves these as None
+# and _create_ocr_engine() reports OCR as unavailable.
+try:
+    import winrt.windows.media.ocr as ocr
+    import winrt.windows.graphics.imaging as imaging
+    import winrt.windows.storage.streams as streams
+    WINRT_IMPORT_ERROR: Optional[str] = None
+except Exception as _winrt_exc:  # ImportError, or OSError from a blocked DLL
+    ocr = imaging = streams = None
+    WINRT_IMPORT_ERROR = f"{type(_winrt_exc).__name__}: {_winrt_exc}"
 
 user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
@@ -33,7 +42,10 @@ _OCR_MAX_PENDING = 4
 
 
 def _create_ocr_engine():
-    """The Windows OCR engine, or None when the profile has no OCR language."""
+    """The Windows OCR engine, or None when the profile has no OCR language
+    or winrt could not be loaded."""
+    if ocr is None:
+        return None
     try:
         return ocr.OcrEngine.try_create_from_user_profile_languages()
     except Exception:
