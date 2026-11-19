@@ -1,6 +1,6 @@
 """
-tools/pre_dev/class_diff/views_ui.py - PRE-DEV: one small window for the seven HTML views
-========================================================================================
+tools/pre_dev/class_diff/views_ui.py - PRE-DEV: one small window for the eight HTML views
+=========================================================================================
 Pick a capture or comp page from output/ (newest first), tick the views, press Make views. Each
 view runs its own tool (render.py, shape_map.py, tables.py) as a child process, exactly the command
 you would type, and the pages it writes open in the default browser. The log shows the tools' console
@@ -14,6 +14,9 @@ lines, which hold counts only.
   card match            shape_map.py FILE   (the shape map plus card_match.py's percentages and structure;
                                              with both ticked only this one runs: same page)
   tables                tables.py CAPTURE --html   (a comp page is mapped to its capture_ file: same stamp)
+  page map              comp_map.py FILE   (the comp page over time, for a non-technical reader: everything
+                                            it showed, a slider to any moment, what happened in plain words;
+                                            comp_ and capture_ files only)
 
 Both shape map views find the record sets from the boxes (lined up, and matching inside). "match inside"
 is that percentage: it goes to shape_map.py as --match-min when it is not shape_map.MATCH_MIN. Lower it
@@ -48,9 +51,10 @@ VIEWS = [
     ("shape map (record sets)", "shape_map.py", ["--no-match"], False),
     ("card match (shape map + %)", "shape_map.py", [], False),
     ("tables (tables.py)", "tables.py", ["--html"], True),
+    ("page map (changes over time)", "comp_map.py", [], False),
 ]
-SHAPE_MAP, CARD_MATCH = "shape map (record sets)", "card match (shape map + %)"
-DEFAULT_TICKS = ("outline (container shapes)", CARD_MATCH)
+SHAPE_MAP, CARD_MATCH, PAGE_MAP = "shape map (record sets)", "card match (shape map + %)", "page map (changes over time)"
+DEFAULT_TICKS = ("outline (container shapes)", CARD_MATCH, PAGE_MAP)
 MATCH_MIN = 50.0        # shape_map.MATCH_MIN (a test keeps the two equal; this window imports no tool)
 
 
@@ -76,7 +80,7 @@ def picked(views):
 # Clear all captures: the captures and comp pages, and every page or table the tools made from them.
 # Files with other names in output/ and any sub-folder stay.
 CLEAR_PREFIXES = ("capture_", "comp_", "key_probe_", "record_", "render_", "shape_map_", "tables_", "groups_",
-                  "arrange_", "compare_", "cards_")
+                  "arrange_", "compare_", "cards_", "map_")
 
 
 def clearable(folder: Path = None):

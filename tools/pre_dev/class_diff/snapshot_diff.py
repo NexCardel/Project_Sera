@@ -49,7 +49,10 @@ ONE complete page (AnchorPage). key_probe.py hands each kept snapshot to it whil
     comp page     when the capture stops: every node that was ever on the anchor page, once, in
                   PAGE order (until 2026-10-16 attached nodes went to the end, which split a late
                   card from its siblings and broke the arrangement's leaf order), its latest text,
-                  every value seen, and whether it was still there at the end.
+                  every value seen, and whether it was still there at the end. Since 2026-11-19 each
+                  node also keeps seen (runs [first, last] of the snapshot numbers it was on) and steps
+                  ([snapshot, text] at each text change), so comp_map.py can rebuild the page at any
+                  snapshot.
 
 compare.py --comp compares one client's comp page with another client's of the same link.
 Not handled yet: variable list rows / cards (a separate mechanism will come).
@@ -186,6 +189,26 @@ def _everything(e: Dict[str, Any]) -> bool:
     return True
 
 
+MAX_STEPS = 50      # text changes kept per node; past it the newest text overwrites the last step
+
+
+def _mark_seen(ent: Dict[str, Any], si: int, text: str) -> None:
+    """Record that this entry was on snapshot si, showing text. seen = runs [first, last] of the snapshot
+    numbers it was on (a node that left and came back has two runs); steps = [snapshot, text] each time
+    its text differed from the step before, so the page at any snapshot can be rebuilt (comp_map.py)."""
+    runs = ent.setdefault("seen", [])
+    if runs and runs[-1][1] == si - 1:
+        runs[-1][1] = si
+    elif not runs or runs[-1][1] != si:
+        runs.append([si, si])
+    steps = ent.setdefault("steps", [])
+    if not steps or steps[-1][1] != text:
+        if len(steps) < MAX_STEPS:
+            steps.append([si, text])
+        else:
+            steps[-1] = [si, text]
+
+
 class AnchorPage:
     """One capture's snapshots of one page link merged into one complete page (module doc,
     COMP PAGE). Entries are numbered in the order they first appeared - the comp page's order."""
@@ -302,6 +325,7 @@ class AnchorPage:
                 ids[i] = len(self.entries)
                 self.entries.append({"first": stamp, "origin": ANCHOR if open_ else ATTACHED,
                                      "batch": len(self.log), "values": [], "left": 0, "came_back": 0,
+                                     "seen": [], "steps": [],
                                      "parent0": ids[e["parent"]] if e["parent"] >= 0 else -1})
                 new.append(i)
         now = set(ids)
@@ -333,6 +357,7 @@ class AnchorPage:
                 else:
                     self.order.insert(self.order.index(ids[i - 1]) + 1, k)
         changed = 0
+        si = len(self.log)                       # this snapshot's number (the log row it is about to get)
         for i, e in enumerate(flat):
             ent = self.entries[ids[i]]
             if ent.get("text", e["text"]) != e["text"]:
@@ -341,6 +366,7 @@ class AnchorPage:
                        loose=e["loose"], last=stamp)
             if e["text"] and e["text"] not in ent["values"] and len(ent["values"]) < link_map.MAX_VALUES:
                 ent["values"].append(e["text"])
+            _mark_seen(ent, si, e["text"])
         self.prev, self.prev_ids = flat, ids
 
         def texts(idx):
@@ -403,7 +429,7 @@ class AnchorPage:
                         "type": ent["type"], "text": ent["text"], "node": ent["node"], "values": ent["values"],
                         "first": ent["first"], "last": ent["last"], "origin": ent["origin"],
                         "batch": ent["batch"], "present": k in live, "left": ent["left"],
-                        "came_back": ent["came_back"]})
+                        "came_back": ent["came_back"], "seen": ent["seen"], "steps": ent["steps"]})
         return out
 
 
