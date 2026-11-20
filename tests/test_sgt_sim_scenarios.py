@@ -73,7 +73,7 @@ def _heavy_success(client, serial, read_ms, ack_visible):
 
 def test_r2_scope_stays_fresh_while_a_5s_read_runs(sim):
     """While a 5 s page read is in flight the address is still looked at (the scope worker is never queued behind it)."""
-    from core.sgt.capture.reader import URL_FRESH_SEC
+    from core.capture.reader import URL_FRESH_SEC
     c = make_client(7)
     b, t, sub = _heavy_success(c, 1, 5000.0, 14.0)
     h = sim(b)

@@ -179,7 +179,7 @@ def _walk(el, parent: int, depth: int, out: List[Dict[str, Any]]) -> None:
 
 def read_keys(hwnd: int, raw_view: bool, timeout_sec: float = READ_TIMEOUT) -> List[List[Dict[str, Any]]]:
     """One cached read, like uia_nodes.read_page_nodes, with every attribute-carrying property."""
-    from core.sgt.capture import uia_text
+    from core.capture import uia_text
 
     def _do():
         uia, uia_client = uia_text._get_uia_on_worker()
@@ -211,7 +211,7 @@ def read_keys(hwnd: int, raw_view: bool, timeout_sec: float = READ_TIMEOUT) -> L
 
 def read_url(hwnd: int, timeout_sec: float = 5.0) -> str:
     """The browser's address bar (Chrome / Edge / Firefox all name it "...address..."), or ""."""
-    from core.sgt.capture import uia_text
+    from core.capture import uia_text
 
     def _do():
         uia, uia_client = uia_text._get_uia_on_worker()

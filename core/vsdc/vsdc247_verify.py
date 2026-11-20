@@ -30,7 +30,7 @@ from typing import Any, Callable, Dict, Optional, Sequence
 from .vsdc247 import SINGLE_FRAME_SCORE, analyze_frame
 from .vsdc247_verify_pages import PageSpec, classify_page, read_login_username
 from .vsdc_alerts import device_name
-from core.sgt.capture.scope import sanitize_page_url
+from core.capture.scope import sanitize_page_url
 
 PORTAL = "GST Portal"
 LINK_IDLE_SEC = 4 * 3600               # same idle limit SGT uses for a window

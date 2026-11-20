@@ -1,7 +1,7 @@
 """
 OS Assist UIA worker: one daemon thread that owns its own UI Automation object. Every UIA call of
 OS Assist runs on it (submit a function, get a Future), so a slow browser tree can never stall the
-Qt thread or SGT's shared reader (core/sgt/capture/uia_text). A UIA element a job returns is an
+Qt thread or SGT's shared reader (core/capture/uia_text). A UIA element a job returns is an
 opaque handle to the caller: hand it back into another job, never call it on another thread.
 """
 
@@ -40,7 +40,7 @@ class Uia:
         self._bar_cache: Dict[int, Any] = {}
 
     def url(self, hwnd: int) -> str:
-        from core.sgt.capture.uia_text import address_bar_here
+        from core.capture.uia_text import address_bar_here
         return address_bar_here(self.uia, self.c, hwnd, self._bar_cache) or ""
 
     def documents(self, hwnd: int) -> list:

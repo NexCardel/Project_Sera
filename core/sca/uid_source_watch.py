@@ -108,8 +108,8 @@ class ForegroundHook:
 def _foreground_browser() -> int:
     """The window in front when it is a browser, else 0."""
     import ctypes
-    from core.sgt.capture import windows
-    from core.sgt.capture.windows import BROWSER_EXE_NAMES
+    from core.capture import windows
+    from core.capture.windows import BROWSER_EXE_NAMES
     hwnd = int(ctypes.windll.user32.GetForegroundWindow() or 0)
     if not hwnd:
         return 0

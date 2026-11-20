@@ -22,13 +22,13 @@ from typing import Any, Callable, Dict, Optional
 from . import vsdc_diag
 from .vsdc_alerts import device_name, redact_identifiers
 
-STATES = ("ok", "no-portal", "slow", "busy-long", "blind", "uia-paused", "stalled", "scope-lost",
+STATES = ("ok", "no-portal", "slow", "busy-long", "blind", "uia-paused", "uia-restarting", "stalled", "scope-lost",
           "specs-silent", "unlisted-portal", "disk", "alerts-unconfigured", "old-build")
 # Highest priority first.
-_PRIORITY = ("stalled", "uia-paused", "blind", "scope-lost", "busy-long", "slow", "specs-silent",
+_PRIORITY = ("stalled", "uia-paused", "uia-restarting", "blind", "scope-lost", "busy-long", "slow", "specs-silent",
              "unlisted-portal", "disk", "alerts-unconfigured", "old-build", "no-portal", "ok")
 # Only these raise a HUD event and a phone alert; the rest are shown in the record only.
-FAILURE_STATES = frozenset({"stalled", "uia-paused", "blind", "scope-lost", "busy-long",
+FAILURE_STATES = frozenset({"stalled", "uia-paused", "uia-restarting", "blind", "scope-lost", "busy-long",
                             "specs-silent", "unlisted-portal", "disk"})
 OWN_HUD = frozenset({"unlisted-portal"})     # the router already shows its own prompt for these
 
@@ -55,6 +55,7 @@ HUD_BACK = "Capture back to normal"
 SENTENCES = {
     "stalled": "Capture is stuck and not reading anything. Restart Sera if this stays.",
     "uia-paused": "Page reading is paused after repeated hangs. It retries by itself.",
+    "uia-restarting": "The page reader keeps restarting. It tries again by itself; screen reading still works.",
     "blind": "Sera cannot read this page. Entries here may be missed.",
     "scope-lost": "Sera cannot confirm this window is the portal. Nothing is captured from it.",
     "busy-long": "The browser is taking very long to answer. Page reads are delayed.",
@@ -280,6 +281,10 @@ class HealthMonitor:
     def uia_paused(self, paused: bool) -> None:
         self._paused = bool(paused)
 
+    def uia_restarting(self, restarting: bool) -> None:
+        """UCW: the capture worker restarted too often and waits before the next start."""
+        self._restarting = bool(restarting)
+
     def unlisted_portal(self) -> None:
         """The scope tripwire fired."""
         self._unlisted_at = self._clock()
@@ -314,6 +319,8 @@ class HealthMonitor:
             return self._stall_s > 0       # the watch thread reports only past its own STALL_S
         if name == "uia-paused":
             return self._paused
+        if name == "uia-restarting":
+            return getattr(self, "_restarting", False)
         if name == "blind":
             return any(now - w.scope_seen <= _WINDOW_FRESH_SEC and w.attempts > 0
                        and now - w.usable_at >= BLIND_ALERT_SEC for w in self._wins.values())

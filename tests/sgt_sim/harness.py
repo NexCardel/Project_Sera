@@ -22,9 +22,9 @@ import pytest
 from core.sgt.engine import SgtEngine
 from core.sgt.specs.specs import BUILTIN_FIELDS_PATH, SpecStore
 from core.sgt.specs.toolbox import SUBMIT_LEVELS
-from core.sgt.capture import reader
+from core.capture import reader
 from core.sgt.capture.loop import FRAME_TICK_SEC, CaptureLoop
-from core.sgt.capture.reader import PageReader
+from core.capture.reader import PageReader
 
 from .fake_backend import T0, FakeBackend, SimThread, VirtualClock
 from .fake_browser import Browser

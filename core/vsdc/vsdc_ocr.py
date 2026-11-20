@@ -260,7 +260,7 @@ class VSDCOcrEngine:
         if not hwnd or not user32.IsWindow(hwnd):
             return None
 
-        from core.sgt.capture.windows import window_rect
+        from core.capture.windows import window_rect
         try:
             left, top, right, bottom = window_rect(hwnd)
         except Exception:

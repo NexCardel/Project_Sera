@@ -8,9 +8,9 @@ by the same rules as the one in front (their own scope gate, lane and reads; ctx
 Before: SGT's page reads ran inside the router's tick, behind the router's own address-bar read
 on the capture thread, and a read that took longer than 3 s was thrown away. Now, each tick:
 
-  1. Every read the reader (core/sgt/capture/reader) finished since the last tick is taken: its URL
+  1. Every read the reader (core/capture/reader) finished since the last tick is taken: its URL
      and tab update what the loop knows of that window; a clean page read is handed to SGT.
-  2. For each watched window (core/sgt/capture/windows): the scope gate first. The URL is the one
+  2. For each watched window (core/capture/windows): the scope gate first. The URL is the one
      the window's last read reported (Document first, address bar second), if it is younger than
      URL_FRESH_SEC; the reader's scope worker is asked for a URL-only read often enough to keep it
      so, even while a heavy page read runs (R2). Without a fresh URL, the title grace as before
@@ -34,12 +34,12 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Deque, Dict, List, Optional, Protocol, Tuple
 
 from core.sgt.capture import gate
-from core.sgt.capture import scope as sgt_scope
-from core.sgt.capture import windows as sgt_windows
+from core.capture import scope as sgt_scope
+from core.capture import windows as sgt_windows
 from core.sgt.capture.ocr_lane import OcrLane
-from core.sgt.capture.reader import (REASON_SCOPE, RESULT_MAX_AGE_SEC, URL_FRESH_SEC, WEDGE_SEC, PageReader, ReadContext,
-                          ReadResult)
-from core.sgt.capture.windows import PORTAL_KEYWORDS, WindowInfo
+from core.capture.reader import (ASK_AGAIN_ERRORS, REASON_SCOPE, RESULT_MAX_AGE_SEC, URL_FRESH_SEC, WEDGE_SEC,
+                                 PageReader, ReadContext, ReadResult)
+from core.capture.windows import PORTAL_KEYWORDS, WindowInfo
 
 FRAME_TICK_SEC = 0.35         # R10 / D7: the fallback until WP0's gate probe measures a tick under 15 ms
 FRAME_TICK_FAST_SEC = 0.2     # D7's frame tick, once that is measured
@@ -60,7 +60,17 @@ OCR_VERIFY_MAX_SEC = 4.0     # an OCR result whose tab no later read confirmed w
 URGENT_FRAME_CELLS = 64       # B4: cells changed (32x32) needed to trigger an urgent post-slow-read (≈6 % of screen)
 URGENT_COOLDOWN_SEC = 2.0     # B4: at most one urgent read per window in this window
 
+SLOW_SHOT_MS = 300.0          # UCW WP8: a screenshot slower than this is counted and noted in vsdc.log
+
 _seq = itertools.count(1)     # ReadContext.seq: unique per process run, shared by every loop
+
+
+def _note_limited(key: str, text: str) -> None:
+    try:
+        from core.vsdc import vsdc_diag
+        vsdc_diag.note_limited(key, text)
+    except Exception:
+        pass
 
 
 class Platform(Protocol):
@@ -166,7 +176,7 @@ class CaptureLoop:
         self._pruned_at = 0.0
         self._diag: Dict[str, Any] = {}
         self._counts = {"asked": 0, "absorbed": 0, "torn": 0, "errors": 0, "ocr_asked": 0, "ocr_absorbed": 0,
-                       "ocr_dropped": 0}
+                       "ocr_dropped": 0, "loading": 0, "restart": 0, "slow_shots": 0}
 
     # ---- the tick ----------------------------------------------------------------------------
 
@@ -229,6 +239,14 @@ class CaptureLoop:
         if self._ocr_lane is not None:
             self._ocr_lane.close()
 
+    def restarting(self) -> bool:
+        """UCW: the capture worker waits before its next start (health state uia-restarting)."""
+        try:
+            fn = getattr(self._reader, "restarting", None)
+            return bool(fn()) if fn is not None else False
+        except Exception:
+            return False
+
     def paused(self) -> bool:
         """UIA reads paused after repeated hangs (health state uia-paused)."""
         try:
@@ -273,6 +291,13 @@ class CaptureLoop:
                 frame, ws.frame, ws.frame_seq = ws.frame, None, 0
             if r.ctx.seq >= ws.pending_seq:
                 ws.pending_seq, ws.pending_at = 0, 0.0
+        if r.error in ASK_AGAIN_ERRORS:     # WP3: a page between two pages, or a restarted worker:
+            self._counts["loading" if r.error == "loading" else "restart"] += 1     # never blind, asked again
+            if not r.url_only:
+                # "frame", not "url": only the burst's own reads may come back "loading", so a page that
+                # never fills ends as an ordinary empty read (blind -> OCR) once the burst is spent
+                ws.wanted = ws.wanted or "frame"
+            return
         if r.error:                         # timeout-abandoned, uia-init, exception: never absorbed
             self._counts["errors"] += 1
             if not r.url_only:
@@ -422,10 +447,19 @@ class CaptureLoop:
                 return                      # a logout page: nothing about a client is read there
 
         # Pixels only: one screenshot and its signature.
+        t_shot = time.perf_counter()
         try:
             img = self._platform.screenshot(w.hwnd)
         except Exception:
             img = None
+        shot_ms = (time.perf_counter() - t_shot) * 1000.0
+        if shot_ms > SLOW_SHOT_MS:
+            # UCW WP4/WP8: a window not in front is captured with PrintWindow, a message the browser must
+            # answer - while it is busy with a heavy read this can hold the capture tick. Counted here so
+            # the office trial shows whether it does.
+            self._counts["slow_shots"] += 1
+            _note_limited("slow-shot", f"capture screenshot took {shot_ms:.0f} ms "
+                                       f"({'not in front' if w.background else 'in front'})")
         sig = gate.frame_signature(img)
         self._ocr_trigger(w, ws, img, sig, now, portal, owner)
 

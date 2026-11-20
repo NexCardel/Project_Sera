@@ -15,8 +15,8 @@ import time
 from concurrent.futures import Future
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from core.sgt.capture import reader
-from core.sgt.capture.reader import ReadContext, ReadResult
+from core.capture import reader
+from core.capture.reader import ReadContext, ReadResult
 
 OCR_MIN_GAP_SEC = 1.0           # per window
 MAX_OCR_PENDING = 4             # scans waiting or running; a busier lane refuses (the loop asks again)

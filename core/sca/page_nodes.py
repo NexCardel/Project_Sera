@@ -191,7 +191,7 @@ class UiaReader:
     def read_url(self, hwnd: int) -> str:
         """The browser's address bar text ('' when not found); a property read only."""
         try:
-            from core.sgt.capture import uia_text
+            from core.capture import uia_text
             uia, client = self._ensure()
             return uia_text.address_bar_here(uia, client, hwnd, self._bar_cache) or ""
         except Exception:

@@ -8,7 +8,7 @@ Every page, PAN, name and ack here is made up.
 from unittest.mock import MagicMock
 
 from core.sgt.engine import BLIND_RETRIES, BLIND_RETRY, IDLE_END_SEC, MISSING_CLEAR_SEC, RESULT_MAX_AGE_SEC
-from core.sgt.capture.reader import ReadContext, ReadResult
+from core.capture.reader import ReadContext, ReadResult
 
 from test_sgt_gst_fixes import GSTIN, R3B, client as gst_client, r3b_page
 from test_sgt_shadow import (FILED_URL, GST, ITR, LOGIN_URL, LOGOUT_URL, PROFILE_PAGE, PROFILE_URL, Rig,

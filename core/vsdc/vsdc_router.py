@@ -20,10 +20,10 @@ from PIL import Image
 import comtypes.client
 from .vsdc_crosshairs import match_url_crosshair, CrosshairDefinition, ALL_CROSSHAIRS, get_crosshair
 from .vsdc_ocr import VSDCOcrEngine
-from core.sgt.capture import uia_text as sgt_uia_text
-from core.sgt.capture.windows import BROWSER_EXE_NAMES, PORTAL_KEYWORDS
+from core.capture import uia_text as sgt_uia_text
+from core.capture.windows import BROWSER_EXE_NAMES, PORTAL_KEYWORDS
 from . import vsdc_diag
-from core.sgt.capture.scope import (
+from core.capture.scope import (
     is_in_scope_url, portal_for_url, is_government_registry_host, portal_logo_cue, TRIPWIRE_TOP_LINES, extract_host,
     sanitize_page_url, registered_domain, local_test_pages_allowed, is_local_reference,
 )
@@ -519,7 +519,7 @@ class VSDCRouter(SgtLink):
             if not (is_browser or is_gst_title):
                 # Foreground is non-browser (e.g. terminal or Sera window);
                 # inspect top visible browser window so verifier tracks in background like SGT.
-                from core.sgt.capture import windows as sgt_windows
+                from core.capture import windows as sgt_windows
                 try:
                     candidates = sgt_windows.browser_windows(hwnd or 0)
                     for cand in candidates:
@@ -645,6 +645,23 @@ class VSDCRouter(SgtLink):
             return
         attempts = (state[0] if state else 0) + 1
         self._tripwire_hosts[host] = [attempts, now]
+        if getattr(self, "tripwire_inline", False):
+            self._tripwire_probe(hwnd, host, now)
+            return
+        # UCW WP4: the read can wait up to its timeout inside the browser, so it never runs on the
+        # capture thread: one probe at a time on its own thread.
+        if getattr(self, "_tripwire_busy", False):
+            return
+        self._tripwire_busy = True
+
+        def probe():
+            try:
+                self._tripwire_probe(hwnd, host, now)
+            finally:
+                self._tripwire_busy = False
+        threading.Thread(target=probe, name="vsdc-tripwire", daemon=True).start()
+
+    def _tripwire_probe(self, hwnd: int, host: str, now: float) -> None:
         try:
             lines = sgt_uia_text.read_page_text(hwnd, max_lines=TRIPWIRE_TOP_LINES).get("lines") or []
         except Exception:
@@ -840,7 +857,7 @@ class VSDCRouter(SgtLink):
         """
         if self._mode_247 == MODE_OFF:
             return None
-        from core.sgt.capture import windows as sgt_windows
+        from core.capture import windows as sgt_windows
         now = time.time()
         last_seen = getattr(self, "_bg_247_last", None)
         if last_seen is None:
@@ -1385,7 +1402,10 @@ class VSDCRouter(SgtLink):
         try:
             h = self.health
             loop = self.capture
-            h.uia_paused(bool(sgt_uia_text.worker_health().get("disabled")) or (loop is not None and loop.paused()))
+            restarting = loop is not None and loop.restarting()
+            h.uia_paused(bool(sgt_uia_text.worker_health().get("disabled")) or (loop is not None and loop.paused()
+                                                                               and not restarting))
+            h.uia_restarting(restarting)
             h.tick()
             if h.due():
                 h.write(loop.health_extra() if loop is not None else None)
@@ -1910,7 +1930,7 @@ class VSDCRouter(SgtLink):
         full_text = ocr_res.get("text", "")
         lines = ocr_res.get("lines", [])
 
-        # VSDC-X: exact UI-Automation text read (see core/sgt/capture/uia_text.py), same
+        # VSDC-X: exact UI-Automation text read (see core/capture/uia_text.py), same
         # channel already proven on the GST route. Purely additive — if it's unavailable
         # or empty, uia_text/uia_lines stay empty and every line below behaves exactly
         # as it did before VSDC-X existed for ITR.
@@ -2494,7 +2514,7 @@ class VSDCRouter(SgtLink):
 
         # VSDC-X: one exact UI Automation text read per tick, shared below by
         # the loading-gate short-circuit and whichever crosshair branch runs
-        # (see core/sgt/capture/uia_text.py). Purely additive — if it's
+        # (see core/capture/uia_text.py). Purely additive — if it's
         # unavailable or empty, uia_text/uia_lines stay empty and every line
         # below behaves exactly as it always has, driven by OCR alone.
         uia_text = ""

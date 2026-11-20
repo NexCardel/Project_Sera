@@ -19,13 +19,41 @@ from core.vsdc import vsdc_diag
 from core.sgt.capture import loop
 from core.sgt.capture import gate as sgt_gate
 from core.sgt.capture.loop import CaptureLoop
-from core.sgt.capture.reader import PageReader
-from core.sgt.capture.windows import WindowInfo
+from core.capture.reader import PageReader
+from core.capture.windows import WindowInfo
 from tests.test_vsdc_reader import PORTAL, PORTAL_2, Clock, Doc, FakeBackend, Window, wait_until
 
 HWND = 7
 TITLE = "GST Portal - Google Chrome"
 TICK = loop.FRAME_TICK_SEC
+
+# UCW WP2: tests/test_ucw_remote_capture.py runs every test here again with READER = "remote" -
+# RemoteReader (the translation layer) over a capture worker on a thread, the same frames and pickling
+# as the worker process, with this module's fake backend.
+READER = "inproc"
+
+
+def make_reader(backend, clock):
+    if READER == "remote":
+        from core.capture.remote import RemoteReader, ThreadChild
+        reader = RemoteReader(spawn=lambda on_message: ThreadChild(backend, on_message, clock=clock), clock=clock,
+                              diag=lambda t: None, supervise=False)
+        wait_until(lambda: reader._ready)
+        return reader
+    return PageReader(backend=backend, clock=clock, diag=lambda t: None)
+
+
+def reader_lanes(reader):
+    """The lanes of the PageReader doing the reads (in this process, or the capture worker's)."""
+    chan = getattr(reader, "_chan", None)
+    return (chan.reader if chan is not None else reader)._lanes
+
+
+def reader_idle(reader):
+    lanes = reader_lanes(reader)
+    idle = all(w.job is None and w.queued is None and w.raw_queued is None
+               for lane in list(lanes.values()) for w in lane.workers())
+    return idle and not getattr(reader, "_sent", None)
 
 
 class FakePlatform:
@@ -76,7 +104,7 @@ class FakeSgt:
         pass
 
     def absorb(self, r, frame=None, ocr=None, now=None, blind_retries=0):
-        from core.sgt.capture import scope as sgt_scope
+        from core.capture import scope as sgt_scope
         self.observed.append(SimpleNamespace(hwnd=r.ctx.hwnd, portal=sgt_scope.portal_for_url(r.url) or r.ctx.portal,
                                              url=sgt_scope.sanitize_page_url(r.url), frame=frame, title=r.ctx.title,
                                              tab=r.tab_after, read={"lines": list(r.lines), "docs": r.docs}))
@@ -100,7 +128,7 @@ class Rig:
         self.win = Window(pid=1, tab=tab, docs=docs if docs is not None else [Doc(PORTAL, ["Fictional GST page"])],
                           bar=bar)
         self.backend = FakeBackend(self.clock, {HWND: self.win})
-        self.reader = PageReader(backend=self.backend, clock=self.clock, diag=lambda t: None)
+        self.reader = make_reader(self.backend, self.clock)
         self.platform = FakePlatform(self.clock, title=title)
         self.sgt = FakeSgt()
         self.health = MagicMock()
@@ -112,8 +140,7 @@ class Rig:
         self.reader.request = lambda ctx: (self.asked.append(ctx), request(ctx))[1]
 
     def settle(self):
-        wait_until(lambda: all(w.job is None and w.queued is None
-                               for lane in list(self.reader._lanes.values()) for w in lane.workers()))
+        wait_until(lambda: reader_idle(self.reader))
 
     def step(self, n=1, dt=TICK):
         for _ in range(n):
@@ -276,7 +303,8 @@ def test_scope_stays_fresh_while_a_heavy_read_runs(rig):
     for _ in range(15):                                       # 5 s
         r.clock.advance(TICK)
         r.loop.tick()
-        wait_until(lambda: r.reader._lanes[HWND].scope.job is None)
+        wait_until(lambda: reader_lanes(r.reader)[HWND].scope.job is None
+                   and all(s.ctx.reason != "scope" for s in getattr(r.reader, "_sent", {}).values()))
         assert r.health.window.call_args.args[1] is True
         assert r.health.window.call_args.kwargs["url_readable"] is True
     assert r.platform.shots - shots == 15
@@ -345,7 +373,7 @@ class FakeLane:
         pass
 
     def finish(self, ctx, lines=("Fictional toast",), tab=None):
-        from core.sgt.capture.reader import ReadResult
+        from core.capture.reader import ReadResult
         tab = ctx.tab if tab is None else tab
         self.finished.append(ReadResult(ctx=ctx, source="ocr", lines=list(lines), docs=[], doc_urls=[], tab_before=tab,
                                         tab_after=tab, url_before=ctx.url, url_after=ctx.url, started_at=ctx.asked_at,
@@ -562,7 +590,7 @@ def _behind(r, title=TITLE):
 
 
 def test_a_background_window_is_looked_at_every_bg_tick(rig):
-    from core.sgt.capture import windows as sgt_windows
+    from core.capture import windows as sgt_windows
     r = rig()
     _behind(r)
     r.step(30)                                                # 10.5 s at 0.35 s a tick

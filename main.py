@@ -9,6 +9,10 @@ import sys
 if '--sdis-mine' in sys.argv:
     from core.sdis.mine_process import run
     sys.exit(run(sys.argv))
+# UCW: the capture worker (core/capture/worker_main) - all of SGT's UI Automation reads, in a process of its own.
+if '--capture-worker' in sys.argv:
+    from core.capture.worker_main import run as run_capture_worker
+    sys.exit(run_capture_worker(sys.argv))
 import os
 import re
 import socket
@@ -754,7 +758,7 @@ class SeraApp:
                     sys.path.insert(0, sys._MEIPASS)
 
             from core.vsdc import VSDCWorker
-            from core.sgt.capture import scope
+            from core.capture import scope
             # SDIS Part T: portals registered from service login links join the scope gate (read lazily).
             scope.set_services_source(self.db.get_services)
             # SDIS Part Q / S.3: the synced sdis_fields table -> sdis_fields.json, SGT's third spec
@@ -2931,7 +2935,7 @@ class SeraApp:
         """Called from SyncPeerService background TCP thread when an incoming
         database push has been accepted and written to disk. Emits Qt signal for main thread handling."""
         try:
-            from core.sgt.capture import scope
+            from core.capture import scope
             scope.reload_extra_domains()   # another PC may have saved or deleted a service (Part T)
         except Exception:
             pass

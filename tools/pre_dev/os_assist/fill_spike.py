@@ -176,7 +176,7 @@ class Uia:
         self._bar_cache = {}
 
     def url(self, hwnd: int) -> str:
-        from core.sgt.capture.uia_text import address_bar_here
+        from core.capture.uia_text import address_bar_here
         return address_bar_here(self.uia, self.c, hwnd, self._bar_cache) or ""
 
     def documents(self, hwnd: int):

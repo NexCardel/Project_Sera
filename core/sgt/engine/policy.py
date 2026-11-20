@@ -39,7 +39,7 @@ SOURCE_POLICY = {
 }
 BLIND_RETRIES = 2               # a page that read fine before is read again this often before OCR
 BLIND_RETRY = "blind-retry"     # absorb()'s answer: the capture loop asks for the page again
-RESULT_MAX_AGE_SEC = 60.0       # as core/sgt/capture/reader: an older result is dropped, never absorbed
+RESULT_MAX_AGE_SEC = 60.0       # as core/capture/reader: an older result is dropped, never absorbed
 OWNERS_KEPT = 500               # requests remembered (request_made) at most
 CLOSED_RING = 20                # ended sessions a late result may still land in...
 CLOSED_KEEP_SEC = 300.0         # ...for this long

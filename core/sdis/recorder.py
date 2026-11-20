@@ -82,6 +82,11 @@ class SdisRecorder:
         # counts only: written, dropped as slow, dropped as empty, replaced in the slot, failed
         self.stats = {"written": 0, "slow": 0, "empty": 0, "replaced": 0, "failed": 0}
 
+    def set_reader(self, read_nodes: Optional[Callable[[int], Dict[str, Any]]]) -> None:
+        """UCW WP5: read pages through the capture worker (RemoteReader.read_raw: the same raw-view read,
+        queued on the window's lane behind SGT's page reads), or None for this recorder's own UIA read."""
+        self._read_nodes = read_nodes
+
     @property
     def directory(self) -> Path:
         if self._directory is None:
@@ -146,6 +151,8 @@ class SdisRecorder:
             self.stats["failed"] += 1
             return None
         took = time.perf_counter() - t0
+        if isinstance(read, dict) and isinstance(read.get("ms"), (int, float)):
+            took = read["ms"] / 1000.0               # UCW: the read's own time, not its wait in the lane
         if took > self.budget_s:
             self.stats["slow"] += 1                  # over budget: dropped, not retried (Part K)
             return None

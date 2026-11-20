@@ -9,7 +9,7 @@ UI Automation reads a real OS window's accessibility tree, so it can't be pointe
 at a headless Playwright screenshot the way the existing OCR test harness
 (tests/test_vsdc_with_sample_html.py) is. This opens the sample in a real, visible
 browser window via Playwright, finds its native Win32 window handle, and feeds it
-through the exact same core/sgt/capture/uia_text.py + core/vsdc/vsdc_regex.py path
+through the exact same core/capture/uia_text.py + core/vsdc/vsdc_regex.py path
 the live pipeline uses.
 
 Usage:
@@ -24,7 +24,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # These tools drive local simulation pages (file://), which VSDC refuses by default -
-# it only ever looks at the two tax portals. See core/sgt/capture/scope.py.
+# it only ever looks at the two tax portals. See core/capture/scope.py.
 os.environ.setdefault("VSDC_ALLOW_LOCAL_TEST", "1")
 os.environ["VSDC_ALERT_CONFIG"] = os.path.join(os.environ.get("TEMP", "."), "no_such_vsdc_alert.json")   # dev tools must never push real phone alerts
 for _v in ("VSDC_ALERT_TOPIC", "VSDC_ALERT_SERVER"):
@@ -32,7 +32,7 @@ for _v in ("VSDC_ALERT_TOPIC", "VSDC_ALERT_SERVER"):
 
 from playwright.sync_api import sync_playwright
 
-from core.sgt.capture import uia_text
+from core.capture import uia_text
 from core.vsdc.vsdc_regex import repair_gst_arn, repair_numeric_ack, classify_verification_status
 
 user32 = ctypes.windll.user32

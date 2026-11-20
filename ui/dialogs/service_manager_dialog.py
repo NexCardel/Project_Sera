@@ -300,7 +300,7 @@ class ServiceEditDialog(QDialog):
     def _confirm_watched_domain(self) -> bool:
         """SDIS Part T (D21): show the domain the login link puts in scope and ask once (only when it
         changed). A link that gives no domain, or a never_register one, saves without watching."""
-        from core.sgt.capture import scope
+        from core.capture import scope
         name = self.name_input.text().strip()
         link = self.url_input.text().strip()
         if not link:
@@ -425,7 +425,7 @@ class ServiceManagerDialog(QDialog):
 
     def _sync_extension_services(self):
         try:
-            from core.sgt.capture import scope
+            from core.capture import scope
             scope.reload_extra_domains()     # SDIS Part T: a saved / deleted service (un)registers its portal
         except Exception:
             pass

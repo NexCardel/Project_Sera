@@ -96,7 +96,9 @@ class SgtLink:
         if on and host is None:
             from core.sgt_i import SgtIntelligence, default_components
             from core.sgt_i.uia_events import FlashWatcher
-            host = self._sgt_i_host = SgtIntelligence(default_components(), flashes=FlashWatcher())
+            reader = getattr(self.capture, "_reader", None) if self.capture is not None else None
+            flashes = reader.flashes if reader is not None and hasattr(reader, "flashes") else FlashWatcher()
+            host = self._sgt_i_host = SgtIntelligence(default_components(), flashes=flashes)
         if host is not None:
             host.set_enabled(on)
             self._sgt.set_intelligence(host if on else None)
@@ -187,9 +189,8 @@ class SgtLink:
             if self.capture is None:
                 self._ensure_sgt()
                 from core.sgt.capture.loop import CaptureLoop, WinPlatform
-                from core.sgt.capture.reader import PageReader
                 clock = self.capture_clock or time.monotonic
-                reader = PageReader(backend=self.capture_backend, clock=clock)
+                reader = self._build_reader(clock)
                 self.capture = CaptureLoop(self.capture_platform or WinPlatform(self.ocr), reader, self._sgt,
                                            self.ocr, self.health, clock=clock,
                                            on_out_of_scope=self._check_unlisted_portal)
@@ -199,6 +200,49 @@ class SgtLink:
         except Exception as e:
             vsdc_diag.tick_error(e)
 
+    def capture_worker_mode(self) -> str:
+        """UCW: "process" (the capture worker) or "inproc". A test or tool that hands the router its own
+        backend (capture_backend) reads in-process unless capture_worker_override says otherwise."""
+        override = getattr(self, "capture_worker_override", None)
+        if override in ("process", "inproc"):
+            return override
+        if self.capture_backend is not None:
+            return "inproc"
+        from core.vsdc.vsdc_engines import read_capture_worker
+        db = getattr(self, "db", None)
+        return read_capture_worker(getattr(db, "get_setting", None))
+
+    def _build_reader(self, clock):
+        """The capture loop's reader. In process mode it is RemoteReader (core/capture/remote): every UIA
+        read - SGT's, the SDIS recorder's raw reads (WP5) and SGT-I's flash events (WP6) - runs in the
+        capture worker process."""
+        mode = self.capture_worker_mode()
+        if mode == "process":
+            from core.capture.remote import RemoteReader
+            from core.sgt.capture import loop as capture_loop
+            reader = RemoteReader(clock=clock, seq=lambda: next(capture_loop._seq))
+            print("[SGT] page reads run in the capture worker process (capture_worker = process)")
+        else:
+            from core.capture.reader import PageReader
+            reader = PageReader(backend=self.capture_backend, clock=clock)
+        self._attach_reader_users(reader)
+        return reader
+
+    def _attach_reader_users(self, reader) -> None:
+        """WP5 / WP6: the SDIS recorder and SGT-I's flash listener use the capture worker when there is
+        one, and their own UIA objects (as before) when there is not."""
+        sdis = getattr(self._sgt, "_sdis", None) if self._sgt is not None else None
+        remote = hasattr(reader, "read_raw")
+        if sdis is not None and hasattr(sdis, "set_reader"):
+            sdis.set_reader(reader.read_raw if remote else None)
+        host = getattr(self, "_sgt_i_host", None)
+        if host is not None and hasattr(host, "set_flashes"):
+            if remote:
+                host.set_flashes(reader.flashes)
+            else:
+                from core.sgt_i.uia_events import FlashWatcher
+                host.set_flashes(FlashWatcher())
+
     def _drop_capture(self) -> None:
         """SGT is off: the loop's reader lanes close and the heartbeat reads the old reader again."""
         from core.vsdc import vsdc_diag
@@ -206,6 +250,9 @@ class SgtLink:
         if loop is not None:
             vsdc_diag.register_reader(None)
             loop.close()
+            sdis = getattr(self._sgt, "_sdis", None) if self._sgt is not None else None
+            if sdis is not None and hasattr(sdis, "set_reader"):
+                sdis.set_reader(None)
 
     on_demotion = None          # set by the app: shows the "lower this status?" dialog (called from SGT's thread)
 

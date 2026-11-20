@@ -61,7 +61,7 @@ def office_path() -> Path:
 def _domain_entry_ok(raw: Any) -> bool:
     """Part T's domain checks: a plain hostname that gives a registered domain (never a bare
     suffix, localhost or a URL)."""
-    from core.sgt.capture.scope import extract_host, registered_domain
+    from core.capture.scope import extract_host, registered_domain
     if not isinstance(raw, str):
         return False
     dom = raw.strip().lower().rstrip(".")

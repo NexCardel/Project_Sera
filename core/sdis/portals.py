@@ -11,7 +11,7 @@ from typing import Dict, List
 
 def registered_portals() -> List[Dict]:
     """[{name, domains, source}] - source "builtin" or "service"."""
-    from core.sgt.capture import scope        # imported when needed
+    from core.capture import scope        # imported when needed
     out = [{"name": "Income Tax", "domains": (scope.INCOME_TAX_DOMAIN,) + scope.extra_domains().get("Income Tax", ()),
             "source": "builtin"},
            {"name": "GST Portal", "domains": (scope.GST_DOMAIN,) + scope.extra_domains().get("GST Portal", ()),

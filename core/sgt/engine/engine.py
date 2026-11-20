@@ -189,7 +189,7 @@ class SgtEngine(Boundaries, Reading, DraftBuilder, Identity, Merging, Demotion, 
         # changes again before it is sent is simply sent once, in its latest state).
         self._outbox: "OrderedDict[int, Tuple[Session, Slot]]" = OrderedDict()
         if read_uia is None:
-            from core.sgt.capture import uia_text
+            from core.capture import uia_text
 
             def read_uia(hwnd: int) -> Dict[str, Any]:
                 # Ticked radio buttons / checkboxes too: a filing type is often a radio choice.

@@ -5,7 +5,7 @@ Fake UIA objects only - no browser, no portal.
 from types import SimpleNamespace
 
 from core.sgt_i import uia_nodes
-from core.sgt.capture import uia_text
+from core.capture import uia_text
 from core.vsdc.vsdc_router import BROWSER_SUFFIX_RE, VSDCRouter
 
 CT_COMBOBOX, CT_EDIT = 50003, 50004

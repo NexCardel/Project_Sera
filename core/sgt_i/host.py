@@ -96,6 +96,16 @@ class SgtIntelligence:
         with self._lock:
             self._components.append(component)
 
+    def set_flashes(self, flashes: Any) -> None:
+        """UCW WP6: the flash listener is swapped (the capture worker's, or this process's own). The old
+        one stops listening; windows are pointed at the new one on their next read."""
+        old, self._flashes = self._flashes, flashes
+        if old is not None and old is not flashes:
+            try:
+                old.stop()
+            except Exception:
+                pass
+
     def set_enabled(self, on: bool) -> None:
         with self._lock:
             self._enabled = bool(on)

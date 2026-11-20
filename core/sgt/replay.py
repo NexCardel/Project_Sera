@@ -14,7 +14,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from core.sgt.capture.reader import ReadContext, ReadResult
+from core.capture.reader import ReadContext, ReadResult
 
 from core.sgt.corpus import group_sessions
 from core.sgt.engine import BLIND_RETRIES, SgtEngine

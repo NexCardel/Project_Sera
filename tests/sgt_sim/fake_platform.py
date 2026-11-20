@@ -10,8 +10,8 @@ from typing import Any, List
 
 from PIL import Image, ImageDraw
 
-from core.sgt.capture import windows as sgt_windows
-from core.sgt.capture.windows import TopWindow, WindowInfo
+from core.capture import windows as sgt_windows
+from core.capture.windows import TopWindow, WindowInfo
 
 from .fake_backend import VirtualClock
 from .fake_browser import OTHER_APP, Browser

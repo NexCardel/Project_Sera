@@ -1,7 +1,7 @@
-"""core/sgt/capture/windows: which windows the capture loop watches (never-miss blueprint 4.7, WP10).
+"""core/capture/windows: which windows the capture loop watches (never-miss blueprint 4.7, WP10).
 pick_windows is the whole choice; the Win32 listing feeds it. Fictional windows only."""
-from core.sgt.capture import windows
-from core.sgt.capture.windows import MAX_WATCHED_WINDOWS, TopWindow, is_covered, pick_windows
+from core.capture import windows
+from core.capture.windows import MAX_WATCHED_WINDOWS, TopWindow, is_covered, pick_windows
 
 FULL = (0, 0, 1920, 1040)
 LEFT, RIGHT = (0, 0, 960, 1040), (960, 0, 1920, 1040)

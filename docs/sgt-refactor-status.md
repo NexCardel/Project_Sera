@@ -19,7 +19,7 @@ Files were moved with `git mv`, so their history is kept. Method bodies were mov
 | Specs | `core/sgt/sgt_specs, sgt_resolver, sgt_toolbox, sgt_fields.json` | `core/sgt/specs/specs, resolver, toolbox, sgt_fields.json` |
 | Other SGT files | `core/sgt/sgt_<x>.py` | `core/sgt/<x>.py` (`sgt_health` is `spec_health`) |
 | Router's SGT wiring | inside `core/vsdc/vsdc_router.py` | `core/sgt/router_link.py` (`SgtLink`, inherited by `VSDCRouter`) |
-| Browser and portal names | `vsdc_router.PORTAL_KEYWORDS, BROWSER_EXE_NAMES` | `core/sgt/capture/windows.py` |
+| Browser and portal names | `vsdc_router.PORTAL_KEYWORDS, BROWSER_EXE_NAMES` | `core/capture/windows.py` |
 
 **Engine parts:** `engine` (constructor, entry points), `boundaries` (tabs, portals, login/logout, idle), `reading` (page reads, blind pages, OCR), `identity` (who the client is), `draft` (dataset in progress), `merge` (folding datasets into rows), `demotion` (asking before a status is lowered), `rows` (outbox, keys, payload), `sdis_rows` (SDIS containers), `ending` (parking, finishing), `persistence` (crash snapshot), `journal` (HUD, log, digest), `evidence_hooks` (the `sgt_ev` block).
 

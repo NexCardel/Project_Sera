@@ -19,7 +19,7 @@ from core.vsdc import vsdc_diag
 
 @pytest.fixture
 def uia(monkeypatch):
-    import core.sgt.capture.uia_text as u
+    import core.capture.uia_text as u
     monkeypatch.setattr(u, "_inflight", None)
     monkeypatch.setattr(u, "_paused_until", 0.0)
     monkeypatch.setattr(u, "_disabled_reason", None)

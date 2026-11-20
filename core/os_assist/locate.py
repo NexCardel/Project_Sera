@@ -12,7 +12,7 @@ from typing import Any, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from core.os_assist import worker
-from core.sgt.capture.windows import BROWSER_EXE_NAMES
+from core.capture.windows import BROWSER_EXE_NAMES
 from sca_protocol import host_matches, service_host
 
 BROWSER_OWN_CLASS = "NativeViewHost"          # the browser's own panes, not the page

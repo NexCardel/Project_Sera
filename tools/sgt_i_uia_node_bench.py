@@ -3,7 +3,7 @@ tools/sgt_i_uia_node_bench.py - time the cached UIA node read against today's li
 ================================================================================================
 Opens local test pages in a real Edge window (Playwright; it only loads them - nothing is
 clicked or typed) and reads each one, alternately, with
-  * core/sgt/capture/uia_text.read_page_text   (today: element-by-element, include_selection=True)
+  * core/capture/uia_text.read_page_text   (today: element-by-element, include_selection=True)
   * core/sgt_i/uia_nodes.read_page_nodes     (one FindAllBuildCache, control view and raw view)
 and prints median / min milliseconds, node and line counts, and whether the lines rebuilt from
 the nodes are identical to today's (the blueprint 14.2 gate).
@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("VSDC_ALLOW_LOCAL_TEST", "1")
 
 from core.sgt_i import uia_nodes
-from core.sgt.capture import uia_text
+from core.capture import uia_text
 from tools.vsdc_x_html_sample_test import find_hwnd_by_title_substring
 
 TIMEOUT_SEC = 20.0

@@ -16,7 +16,7 @@ from PIL import Image
 
 from core.vsdc.vsdc_assembler import VisualSessionAssembler
 from core.vsdc.vsdc_router import VSDCRouter
-from core.sgt.capture.scope import extract_host, is_in_scope_url, portal_for_url
+from core.capture.scope import extract_host, is_in_scope_url, portal_for_url
 
 
 class TestScopeHostParsing(unittest.TestCase):
@@ -164,7 +164,7 @@ class TestRouterNeverTouchesOutOfScopePages(unittest.TestCase):
     def test_the_bare_words_mca_and_traces_no_longer_make_a_window_look_like_a_portal(self):
         # Substring keywords for two other government sites; both matched inside unrelated
         # words ("stack traces", "Amcat"), and neither has a crosshair here.
-        from core.sgt.capture.windows import PORTAL_KEYWORDS
+        from core.capture.windows import PORTAL_KEYWORDS
         self.assertNotIn("mca", PORTAL_KEYWORDS)
         self.assertNotIn("traces", PORTAL_KEYWORDS)
 
@@ -185,19 +185,19 @@ class TestAdminAllowlistConfig(unittest.TestCase):
         os.environ["VSDC_SCOPE_CONFIG"] = os.path.join(self._tmp.name, "vsdc_scope.json")
 
     def tearDown(self):
-        from core.sgt.capture import scope
+        from core.capture import scope
         self._env.stop()
         scope.reload_extra_domains()
         self._tmp.cleanup()
 
     def _write(self, text):
-        from core.sgt.capture import scope
+        from core.capture import scope
         with open(os.environ["VSDC_SCOPE_CONFIG"], "w", encoding="utf-8") as f:
             f.write(text)
         return scope.reload_extra_domains()
 
     def test_no_file_means_the_built_in_list_only(self):
-        from core.sgt.capture import scope
+        from core.capture import scope
         scope.reload_extra_domains()
         self.assertIsNone(portal_for_url("https://efile.newtax.gov.in/x"))
         self.assertEqual(portal_for_url("https://eportal.incometax.gov.in/x"), "Income Tax")
@@ -228,13 +228,13 @@ class TestAdminAllowlistConfig(unittest.TestCase):
 
 class TestPortalLogoCue(unittest.TestCase):
     def test_the_two_real_logo_names_are_recognised(self):
-        from core.sgt.capture.scope import portal_logo_cue
+        from core.capture.scope import portal_logo_cue
         self.assertEqual(portal_logo_cue(["Skip to content", "E Filing logo", "Login"]), "Income Tax")
         self.assertEqual(portal_logo_cue(["Goods and Services Tax Home", "Services"]), "GST Portal")
         self.assertEqual(portal_logo_cue(["[Image] (navbarBrandPart1 logomargin) E Filing logo"]), "Income Tax")
 
     def test_ordinary_text_is_not_a_cue(self):
-        from core.sgt.capture.scope import portal_logo_cue
+        from core.capture.scope import portal_logo_cue
         for lines in (
             ["How to e-file your income tax return - a complete guide"],
             ["Goods and Services Tax: what changed in the budget and why it matters to small traders this year"],
@@ -244,7 +244,7 @@ class TestPortalLogoCue(unittest.TestCase):
             self.assertIsNone(portal_logo_cue(lines), lines)
 
     def test_only_the_top_of_the_page_is_looked_at(self):
-        from core.sgt.capture.scope import portal_logo_cue, TRIPWIRE_TOP_LINES
+        from core.capture.scope import portal_logo_cue, TRIPWIRE_TOP_LINES
         self.assertIsNone(portal_logo_cue(["x"] * TRIPWIRE_TOP_LINES + ["E Filing logo"]))
 
 
@@ -264,6 +264,7 @@ class TestUnlistedPortalTripwire(unittest.TestCase):
         self.ocr = ocr
         self.router = VSDCRouter(ocr_engine=ocr, assembler=VisualSessionAssembler(),
                                  on_activity=lambda *a: self.events.append(a))
+        self.router.tripwire_inline = True      # UCW WP4 moved the probe to a thread; the tests watch it here
         self.router.get_foreground_info = MagicMock(return_value=(7, "Efile - Google Chrome", "chrome.exe"))
         self.router.extract_browser_url = MagicMock(return_value="https://efile.newtax.gov.in/dashboard")
 
@@ -273,7 +274,7 @@ class TestUnlistedPortalTripwire(unittest.TestCase):
     def _run(self, lines, ticks=3):
         self.clock = getattr(self, "clock", 1_000_000.0)
         read = MagicMock(return_value={"text": "", "lines": lines})
-        with patch("core.sgt.capture.uia_text.read_page_text", read):
+        with patch("core.capture.uia_text.read_page_text", read):
             for _ in range(ticks):
                 self.clock += 6
                 with patch("core.vsdc.vsdc_router.time.time", side_effect=lambda: self.clock):
@@ -314,7 +315,7 @@ class TestUnlistedPortalTripwire(unittest.TestCase):
     def test_a_listed_portal_never_trips_it(self):
         self.router.extract_browser_url.return_value = "https://eportal.incometax.gov.in/iec/foservices/#/dashboard"
         read = MagicMock(return_value={"text": "", "lines": []})
-        with patch("core.sgt.capture.uia_text.read_page_text", read):
+        with patch("core.capture.uia_text.read_page_text", read):
             self.router.evaluate_tick()
         self.assertFalse([c for c in read.call_args_list if c.kwargs.get("max_lines")])
 
@@ -323,7 +324,7 @@ class TestSanitizePageUrl(unittest.TestCase):
     """The URL stored with a capture says which page it came from - and nothing secret."""
 
     def test_the_route_is_kept(self):
-        from core.sgt.capture.scope import sanitize_page_url
+        from core.capture.scope import sanitize_page_url
         self.assertEqual(
             sanitize_page_url("https://eportal.incometax.gov.in/iec/foservices/#/foreturns-ay26/fo-itr1-ay2026/fo-e-verify-later"),
             "https://eportal.incometax.gov.in/iec/foservices/#/foreturns-ay26/fo-itr1-ay2026/fo-e-verify-later")
@@ -331,7 +332,7 @@ class TestSanitizePageUrl(unittest.TestCase):
                          "services.gst.gov.in/services/auth/fowelcome")
 
     def test_query_strings_are_dropped_including_inside_a_hash_route(self):
-        from core.sgt.capture.scope import sanitize_page_url
+        from core.capture.scope import sanitize_page_url
         for url, want in (
             ("https://x.incometax.gov.in/a/b?token=SECRET&ack=123", "https://x.incometax.gov.in/a/b"),
             ("https://x.incometax.gov.in/#/route/page?session=SECRET", "https://x.incometax.gov.in/#/route/page"),
@@ -341,12 +342,12 @@ class TestSanitizePageUrl(unittest.TestCase):
             self.assertNotIn("SECRET", out)
 
     def test_user_info_is_dropped(self):
-        from core.sgt.capture.scope import sanitize_page_url
+        from core.capture.scope import sanitize_page_url
         self.assertEqual(sanitize_page_url("https://user:pw@eportal.incometax.gov.in/x"), "https://eportal.incometax.gov.in/x")
         self.assertNotIn("pw", sanitize_page_url("eportal.incometax.gov.in@evil.example/x"))
 
     def test_junk_and_overlong_values_give_nothing_or_are_capped(self):
-        from core.sgt.capture.scope import sanitize_page_url
+        from core.capture.scope import sanitize_page_url
         self.assertEqual(sanitize_page_url(""), "")
         self.assertEqual(sanitize_page_url(None), "")
         self.assertEqual(sanitize_page_url("https://a.gov.in/\x00x"), "")

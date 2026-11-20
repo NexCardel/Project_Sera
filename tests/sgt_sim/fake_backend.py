@@ -1,5 +1,5 @@
 """
-The reader's Backend (core/sgt/capture/reader.Backend) over the scripted browser, on a virtual clock.
+The reader's Backend (core/capture/reader.Backend) over the scripted browser, on a virtual clock.
 
 No thread is ever started: a reader job runs at once, inline, on the harness's thread, at the virtual
 time it starts. What it costs in browser time is added to the clock's `offset` by the backend calls

@@ -171,7 +171,7 @@ class _Tab:
 
 
 def test_the_selected_tab_is_named_by_its_runtime_id():
-    from core.sgt.capture import uia_text as u
+    from core.capture import uia_text as u
     client = SimpleNamespace(UIA_SelectionItemPatternId=10010, IUIAutomationSelectionItemPattern=object)
     tabs = [_Tab((42, 7, 4, 1), False, broken=True), _Tab((42, 7, 4, 2), False), _Tab((42, 7, 4, 3), True)]
     assert u._selected_among(client, tabs) == "42.7.4.3"
@@ -179,7 +179,7 @@ def test_the_selected_tab_is_named_by_its_runtime_id():
 
 
 # SGT is handed the tab of the read itself (the capture loop, core/sgt/capture/loop - WP4). A busy
-# reader no longer skips a tick: the read is queued and answered later (core/sgt/capture/reader).
+# reader no longer skips a tick: the read is queued and answered later (core/capture/reader).
 def _loop(tab):
     from tests.test_vsdc_capture import Rig
     from tests.test_vsdc_reader import Doc

@@ -133,7 +133,7 @@ def status_of(dp: Any, memories: List[Any]) -> str:
 
 
 def portal_of(link: str) -> str:
-    from core.sgt.capture import scope
+    from core.capture import scope
     return scope.portal_for_url(link or "") or ""
 
 

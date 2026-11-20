@@ -26,7 +26,7 @@ def client_ids(m: Any) -> set:
     the page never shows them, or the link is no portal."""
     from core.sgt.specs.resolver import resolve_page          # importing core.vsdc loads Qt: only when needed
     from core.sgt.specs.specs import load_registry
-    from core.sgt.capture.scope import portal_for_url
+    from core.capture.scope import portal_for_url
     global _registry
     page = getattr(m, "link", "") or getattr(m, "page", "")     # the link, without " [browser] [screen n]"
     url = "https://" + page

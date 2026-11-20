@@ -1,4 +1,4 @@
-"""Reader v2 (core/sgt/capture/reader): tickets, one lane per window with a content and a scope
+"""Reader v2 (core/capture/reader): tickets, one lane per window with a content and a scope
 worker, the cached read, torn detection, the Document URL first.
 
 SGT never-miss blueprint WP3 with R2, R3, R9. A fake backend only - no browser, no portal, no COM;
@@ -17,9 +17,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.sgt_i import uia_nodes
 from core.vsdc import vsdc_diag
-from core.sgt.capture import reader as sgt_reader
-from core.sgt.capture import uia_text
-from core.sgt.capture.reader import PageReader, ReadContext
+from core.capture import reader as sgt_reader
+from core.capture import uia_text
+from core.capture.reader import PageReader, ReadContext
 
 PORTAL = "https://services.gst.gov.in/services/auth/fowelcome"
 PORTAL_2 = "https://services.gst.gov.in/services/auth/returns"
