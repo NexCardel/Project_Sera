@@ -32,8 +32,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tools.sera_tool_common import actor_name as _actor, app_dir_default, app_is_running, open_database as _open_database  # noqa: E402,F401
-from core.sgt.sgt_resolver import resolve_page                    # noqa: E402
-from core.sgt.sgt_specs import BUILTIN_FIELDS_PATH, SpecStore, compose_values, load_registry   # noqa: E402
+from core.sgt.specs.resolver import resolve_page                    # noqa: E402
+from core.sgt.specs.specs import BUILTIN_FIELDS_PATH, SpecStore, compose_values, load_registry   # noqa: E402
 from core.sgt_i.uia_nodes import lines_from_nodes                 # noqa: E402
 
 DAY = "2026-10-06"
@@ -355,14 +355,14 @@ def write_test_corpus(src: Path, dst: Path, pages: Sequence[Dict[str, Any]]) -> 
 
 # ── Tracker rows: built by the app's own payload code, written by its own insert ─
 def tracker_payload(session_id: str, arn: str, page_url: str, row_ts: str) -> Dict[str, Any]:
-    from core.sgt.sgt_shadow import MODE_LIVE, SgtShadow, _Session, _Slot
+    from core.sgt.engine import SgtEngine, Session, Slot
     with tempfile.TemporaryDirectory() as tmp:
-        sgt = SgtShadow(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
+        sgt = SgtEngine(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
                         read_uia=lambda h: {"lines": []}, log_dir=Path(tmp) / "log",
-                        state_path=Path(tmp) / "state.json", mode=MODE_LIVE,
+                        state_path=Path(tmp) / "state.json",
                         today=lambda: TODAY, echo=lambda m: None)
-        s = _Session(session_id=session_id, portal=PORTAL)              # not confirmed: no PAN / GSTIN
-        slot = _Slot(values={"arn": arn, "status": STATUS}, record=RECORD_SPEC,
+        s = Session(session_id=session_id, portal=PORTAL)              # not confirmed: no PAN / GSTIN
+        slot = Slot(values={"arn": arn, "status": STATUS}, record=RECORD_SPEC,
                      confidence=SPEC_CONFIDENCE, first_page=page_url)
         payload = sgt._tracker_payload(s, slot)
     payload["filing_date"] = _local(row_ts).strftime("%Y-%m-%d %H:%M:%S")

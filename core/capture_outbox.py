@@ -32,7 +32,7 @@ REPLAY = object()                                # queue marker: replay the dead
 
 
 def default_dir() -> Path:
-    """Same folder as sgt_shadow.shadow_dir(), without importing the SGT engine at start-up."""
+    """Same folder as core.sgt.engine.sgt_data_dir(), without importing the SGT engine at start-up."""
     env = os.environ.get("SGT_SHADOW_DIR")
     return Path(env) if env else Path.home() / "AmanAssociates_Sera" / "sgt_shadow"
 

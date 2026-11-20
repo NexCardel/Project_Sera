@@ -56,7 +56,7 @@ def _query_categories_comtypes() -> List[str]:
     idempotent per thread, but CoUninitialize-ing while COM objects created
     on that thread are still reachable (e.g. about to be garbage collected)
     crashes the interpreter (comtypes releases the interface pointer after
-    the apartment is gone). Same convention as core/vsdc/vsdc_uia_text.py.
+    the apartment is gone). Same convention as core/sgt/capture/uia_text.py.
     """
     import comtypes
     import comtypes.client

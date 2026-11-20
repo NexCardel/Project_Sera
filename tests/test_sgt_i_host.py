@@ -13,10 +13,10 @@ from pathlib import Path
 
 import pytest
 
-import core.sgt.sgt_shadow as sgt_shadow
-from core.sgt.sgt_replay import replay_session
-from core.sgt.sgt_shadow import SgtShadow
-from core.sgt.sgt_specs import BUILTIN_FIELDS_PATH, SpecStore
+from sgt_engine_patch import patch_engine
+from core.sgt.replay import replay_session
+from core.sgt.engine import SgtEngine
+from core.sgt.specs.specs import BUILTIN_FIELDS_PATH, SpecStore
 from core.sgt_i import SgtIntelligence, make_observation
 from core.sgt_i.ledger import LedgerComponent
 from core.vsdc.vsdc_engines import SGT_I_DEFAULT, read_sgt_i_mode
@@ -216,7 +216,7 @@ def core(log_dir, host_obj=None):
     def read_uia(_h):
         reads.append(1)
         return {"lines": lines}
-    s = SgtShadow(store=STORE, read_uia=read_uia, log_dir=log_dir, echo=lambda m: None, intelligence=host_obj)
+    s = SgtEngine(store=STORE, read_uia=read_uia, log_dir=log_dir, echo=lambda m: None, intelligence=host_obj)
     return s, reads
 
 
@@ -322,8 +322,8 @@ def _payloads(doc, intelligence, strip=False):
 
 @pytest.mark.parametrize("path", SCENARIOS, ids=[p.stem for p in SCENARIOS])
 def test_core_rows_identical_with_sgt_i_on_and_off(path, monkeypatch):
-    monkeypatch.setattr(sgt_shadow, "datetime", _FixedDatetime)
-    monkeypatch.setattr(sgt_shadow, "uuid", _SeqUuid)
+    patch_engine(monkeypatch, "datetime", _FixedDatetime)
+    patch_engine(monkeypatch, "uuid", _SeqUuid)
     doc = json.loads(path.read_text(encoding="utf-8"))
     off = _payloads(doc, None)
     # On, with no components (today's app): byte-identical, nothing added.
@@ -366,13 +366,13 @@ def test_sgt_i_enrichment_is_never_identity_or_name_evidence():
 
 # ── The corpus's node dump (W2-4, format v2): only while SGT-I is on, never disturbs capture ────
 def test_recorder_gets_nodes_only_while_sgt_i_is_on(tmp_path):
-    from core.sgt.sgt_corpus import PageRecorder, load_pages
+    from core.sgt.corpus import PageRecorder, load_pages
     lines = json.loads(SCENARIOS[0].read_text(encoding="utf-8"))["pages"][0]["lines"]
     fake_nodes = [[{"parent": -1, "depth": 0, "ctype": 50020, "name": "x"}]]
     rec = PageRecorder(tmp_path, echo=lambda m: None)
 
     def build(intelligence):
-        return SgtShadow(store=STORE, read_uia=lambda h: {"lines": lines},
+        return SgtEngine(store=STORE, read_uia=lambda h: {"lines": lines},
                          read_nodes=lambda h: {"docs": fake_nodes}, recorder=rec,
                          log_dir=tmp_path, echo=lambda m: None, intelligence=intelligence)
 
@@ -387,7 +387,7 @@ def test_recorder_gets_nodes_only_while_sgt_i_is_on(tmp_path):
 def test_sgt_i_gets_the_node_tree_the_recorder_already_read_and_no_extra_read(tmp_path):
     # 2026-09-28: SGT-I's page maps get real zones (menu / footer) from the nodes the Core read
     # for the corpus. With recording off there is no node read at all, and SGT-I gets lines only.
-    from core.sgt.sgt_corpus import PageRecorder
+    from core.sgt.corpus import PageRecorder
     lines = json.loads(SCENARIOS[0].read_text(encoding="utf-8"))["pages"][0]["lines"]
     fake_nodes = [[{"parent": -1, "depth": 0, "ctype": 50020, "name": "x"}]]
     reads, got = [], []
@@ -400,7 +400,7 @@ def test_sgt_i_gets_the_node_tree_the_recorder_already_read_and_no_extra_read(tm
         rec = PageRecorder(tmp_path / str(recording), echo=lambda m: None)
         rec.enabled = recording
         on = host(Comp(lambda o, c: got.append(o.nodes)))
-        SgtShadow(store=STORE, read_uia=lambda h: {"lines": lines}, read_nodes=read_nodes, recorder=rec,
+        SgtEngine(store=STORE, read_uia=lambda h: {"lines": lines}, read_nodes=read_nodes, recorder=rec,
                   log_dir=tmp_path, echo=lambda m: None, intelligence=on
                   ).observe(1, "itr", "https://example.test/rec-%s" % recording, frame=Frame())
         assert wait_for(lambda: len(got) == (1 if recording else 2))
@@ -409,7 +409,7 @@ def test_sgt_i_gets_the_node_tree_the_recorder_already_read_and_no_extra_read(tm
 
 
 def test_a_failing_node_read_never_breaks_recording_or_capture(tmp_path):
-    from core.sgt.sgt_corpus import PageRecorder, load_pages
+    from core.sgt.corpus import PageRecorder, load_pages
     lines = json.loads(SCENARIOS[0].read_text(encoding="utf-8"))["pages"][0]["lines"]
     rec = PageRecorder(tmp_path, echo=lambda m: None)
 
@@ -417,7 +417,7 @@ def test_a_failing_node_read_never_breaks_recording_or_capture(tmp_path):
         raise RuntimeError("no window")
 
     on = SgtIntelligence([], enabled=True, echo=lambda m: None)
-    s = SgtShadow(store=STORE, read_uia=lambda h: {"lines": lines}, read_nodes=boom, recorder=rec,
+    s = SgtEngine(store=STORE, read_uia=lambda h: {"lines": lines}, read_nodes=boom, recorder=rec,
                  log_dir=tmp_path, echo=lambda m: None, intelligence=on)
     res = s.observe(1, "itr", "https://example.test/broken-nodes", frame=Frame())
     pages = load_pages(tmp_path)

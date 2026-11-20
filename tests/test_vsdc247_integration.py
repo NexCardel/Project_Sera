@@ -56,7 +56,7 @@ class Harness:
         )
         self.router.get_foreground_info = MagicMock(return_value=(4242, title, "chrome.exe"))
         self.router.extract_browser_url = MagicMock(return_value=url)
-        # SGT's capture loop (core/vsdc/vsdc_capture) never looks at the real screen in a test: no
+        # SGT's capture loop (core/sgt/capture/loop) never looks at the real screen in a test: no
         # window is in front unless a test attaches its own fake (tests/test_vsdc_capture).
         self.router.capture_platform = MagicMock()
         self.router.capture_platform.foreground.return_value = 0
@@ -153,7 +153,7 @@ class TestRunsOnPagesWithNoCrosshair(unittest.TestCase):
             return_value=(9999, "Notes & Media — Client", "python.exe"))
         h.router._timed_capture = lambda hwnd: h.router.ocr.capture_window_image(hwnd)
         h.screen(["Dashboard"], shade=245)
-        with patch("core.vsdc.vsdc_windows.browser_windows",
+        with patch("core.sgt.capture.windows.browser_windows",
                    return_value=[SimpleNamespace(hwnd=4242, title=TITLE_ITR, proc_name="chrome.exe")]):
             h.tick()
             h.screen(ITR_CONFIRMATION)
@@ -516,7 +516,7 @@ class TestVsdc247OnlyTestMode(unittest.TestCase):
         os.environ["VSDC247_ONLY"] = "1"
         h = Harness(url=self.LOCAL_PAGE, title=self.TITLE)
         h.screen(["Dashboard"], shade=245)
-        with patch("core.vsdc.vsdc_router.vsdc_uia_text.read_page_text") as uia:
+        with patch("core.sgt.capture.uia_text.read_page_text") as uia:
             h.tick()
             h.screen(self.PAGE)
             h.run(4)

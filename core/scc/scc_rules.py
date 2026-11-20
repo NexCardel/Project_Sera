@@ -2,7 +2,7 @@
 core/scc/scc_rules.py - the wording SCC-U reads a login outcome from
 =====================================================================
 Autofill-tweaks blueprint G.2 step 4. All wording lives in scc_rules.json and is loaded here with
-self-tests, like SGT's specs (core/sgt/sgt_specs.py): a rule must carry `examples` it matches and
+self-tests, like SGT's specs (core/sgt/specs/specs.py): a rule must carry `examples` it matches and
 `counter_examples` it does not, and a rule that fails them - or whose example a rule of a different
 outcome claims first - is refused at load. The previous version of that rule keeps running.
 
@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from core.sgt.sgt_specs import MAX_LINE_LEN, SpecError, safe_compile
+from core.sgt.specs.specs import MAX_LINE_LEN, SpecError, safe_compile
 
 RULES_PATH = Path(__file__).resolve().parent / "scc_rules.json"
 

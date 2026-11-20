@@ -2548,7 +2548,7 @@ class TrackerDumpWindow(QWidget):
 
     def _add_wrong_client_action(self, menu, item: dict):
         """"Mark Wrong Client" on a capture row: the mark is stored on the row (so it syncs) and puts
-        the row in the SGT evidence export (core/sgt/sgt_evidence.py)."""
+        the row in the SGT evidence export (core/sgt/evidence.py)."""
         dump_id = item.get("id")
         if not dump_id:
             return
@@ -2571,7 +2571,7 @@ class TrackerDumpWindow(QWidget):
     def _export_sgt_evidence(self):
         """Writes every marked, flagged or audited SGT row with its evidence block to one JSON file."""
         import datetime as _dt
-        from core.sgt import sgt_evidence
+        from core.sgt import evidence
         from core.vsdc.vsdc_alerts import device_name
         from version import APP_VERSION
         try:
@@ -2588,7 +2588,7 @@ class TrackerDumpWindow(QWidget):
         if not file_path:
             return
         try:
-            n = sgt_evidence.write_export(entries, file_path, device_name(), APP_VERSION,
+            n = evidence.write_export(entries, file_path, device_name(), APP_VERSION,
                                           now.isoformat(timespec="seconds"))
             MessageBox.information(self, "Export Complete", f"Exported {n} records to:\n{file_path}")
         except Exception as e:

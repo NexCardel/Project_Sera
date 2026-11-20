@@ -1,6 +1,8 @@
 """
-SGT rows in the tracker dump: shown beside the other engines' rows, tagged, and never able to
-replace, drop or purge another engine's row (or be removed by one). All identifiers fictional.
+SGT rows in the tracker dump: what the engine hands to the pipeline, how the router hands them over,
+and how the database treats rows the retired shadow mode wrote (capture method "SGT_shadow", still in
+office databases): shown beside the other engines' rows, tagged, and never able to replace, drop or
+purge another engine's row (or be removed by one). All identifiers fictional.
 """
 import json
 import os
@@ -15,8 +17,8 @@ from PIL import Image
 
 import security
 from database import SeraDatabase
-from core.sgt.sgt_shadow import CAPTURE_METHOD, SgtShadow
-from core.sgt.sgt_specs import BUILTIN_FIELDS_PATH, SpecStore
+from core.sgt.engine import CAPTURE_METHOD, SgtEngine
+from core.sgt.specs.specs import BUILTIN_FIELDS_PATH, SpecStore
 
 ITR = "Income Tax"
 PROFILE_URL = "https://eportal.incometax.gov.in/iec/foservices/#/dashboard/myProfile/profileDetail"
@@ -25,6 +27,8 @@ WIZ_PI = "https://eportal.incometax.gov.in/iec/foservices/#/foreturns-ay26/fo-it
 PROFILE_PAGE = ["Name", "ASHOK KUMAR SEN", "PAN", "ABCPD1234E", "Date of Birth", "12-Mar-1980"]
 # A second page showing the same PAN: the client is confirmed only on two sightings.
 CONTACT_URL = "https://eportal.incometax.gov.in/iec/foservices/#/dashboard/myProfile/contactDetails"
+KEY = "ITR:ABCPD1234E:ITR4:AY_2025_26"           # the tracker's canonical key (core/dataset_key.py)
+SHADOW_METHOD = "SGT_shadow"                     # rows the retired shadow mode wrote
 
 
 def filed_page(status="Pending for e-verification", ack="123456789150925"):
@@ -35,7 +39,7 @@ class Rig:
     def __init__(self, tmp_path):
         self.clock = [1_000_000.0]
         self.page = []
-        self.sgt = SgtShadow(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
+        self.sgt = SgtEngine(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
                              read_uia=lambda h: {"lines": list(self.page)}, log_dir=tmp_path / "log",
                              clock=lambda: self.clock[0], today=lambda: date(2026, 7, 15), echo=lambda m: None)
         self.shade = 90
@@ -61,7 +65,7 @@ class TestRows:
         assert (row["pan"], row["client_name"], row["filing_type"], row["period_label"], row["arn"], row["status"]) == \
             ("ABCPD1234E", "ASHOK KUMAR SEN", "ITR-4", "AY 2025-26", "123456789150925", "Submitted (Not Verified)")
         assert row["filing_preference"] == "Original"
-        assert row["dataset_key"] == "SGT:ITR:ABCPD1234E:ITR4:AY202526"
+        assert row["dataset_key"] == KEY
         assert row["raw_text"] == "" and row["supersedes_dataset_key"] is None
         assert row["raw_payload"]["source"]["engine"] == "SGT"
 
@@ -88,11 +92,11 @@ class TestRows:
         r = Rig(tmp_path)
         r.see(FILED_URL, filed_page())                                     # no PAN yet
         early = r.sgt.drain()[0]
-        assert early["dataset_key"].startswith("SGT:ITR:S") and early["pan"] == ""
+        assert early["dataset_key"].startswith("ITR:SGT") and early["pan"] == ""
         r.see(PROFILE_URL, PROFILE_PAGE)                                   # now the client is known
         later = [x for x in r.sgt.drain() if x["arn"] == "123456789150925"][-1]
         assert later["pan"] == "ABCPD1234E"
-        assert later["dataset_key"] == "SGT:ITR:ABCPD1234E:ITR4:AY202526"
+        assert later["dataset_key"] == KEY
         assert later["supersedes_dataset_key"] == early["dataset_key"]
 
     def test_a_return_in_progress_is_written_as_soon_as_it_is_complete(self, tmp_path):
@@ -105,7 +109,7 @@ class TestRows:
 
     def test_only_a_complete_filing_gets_an_original_author(self, tmp_path):
         """An in-progress capture must not claim authorship; the PC that files it does."""
-        with patch("core.sgt.sgt_shadow.device_name", return_value="DESK-PC-1"):
+        with patch("core.sgt.engine.rows.device_name", return_value="DESK-PC-1"):
             draft_rig = Rig(tmp_path / "draft")
             draft_rig.see(PROFILE_URL, PROFILE_PAGE)
             draft_rig.see(WIZ_PI, ["Personal Information", "x", "y"])
@@ -178,7 +182,7 @@ class TestRouter:
         assert len(rows) == 1 and "device_name" in rows[0]
 
 
-# ── The database keeps the engines apart ─────────────────────────────────────────
+# ── The database keeps the retired shadow mode's rows apart ──────────────────────
 class TestDatabaseIsolation(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -205,39 +209,39 @@ class TestDatabaseIsolation(unittest.TestCase):
 
     def test_same_arn_seconds_apart_keeps_both_engines_rows(self):
         self.insert("VSDC247_itr_ack", arn="123456789150925")
-        self.insert(CAPTURE_METHOD, arn="123456789150925", key="SGT:ITR:ABCPD1234E:ITR4:AY202526")
+        self.insert(SHADOW_METHOD, arn="123456789150925", key="SGT:ITR:ABCPD1234E:ITR4:AY202526")
         self.insert("VSDC-X_itr_submitted", arn="123456789150925")        # still VSDC's own dedupe
         methods = [r[0] for r in self.rows()]
-        assert methods == ["VSDC247_itr_ack", CAPTURE_METHOD]
+        assert methods == ["VSDC247_itr_ack", SHADOW_METHOD]
 
     def test_an_sgt_row_never_removes_vsdc247s_pending_placeholder(self):
         self.insert("VSDC247_itr_ack", arn="123456789150925", pan="")        # client unknown
         assert self.rows()[0][3] == "Pending_123456789150925"
-        self.insert(CAPTURE_METHOD, arn="123456789150925", key="SGT:ITR:ABCPD1234E:ITR4:AY202526")
+        self.insert(SHADOW_METHOD, arn="123456789150925", key="SGT:ITR:ABCPD1234E:ITR4:AY202526")
         assert "Pending_123456789150925" in [r[3] for r in self.rows()]
 
     def test_an_sgt_row_never_purges_a_vsdc_draft(self):
         self.insert("VSDC-X_itr_personal_info", status="Visited / In Progress")
-        self.insert(CAPTURE_METHOD, status="Draft", key="SGT:ITR:ABCPD1234E:ITR4:AY202526")
-        assert [r[0] for r in self.rows()] == ["VSDC-X_itr_personal_info", CAPTURE_METHOD]
+        self.insert(SHADOW_METHOD, status="Draft", key="SGT:ITR:ABCPD1234E:ITR4:AY202526")
+        assert [r[0] for r in self.rows()] == ["VSDC-X_itr_personal_info", SHADOW_METHOD]
 
     def test_a_vsdc_row_never_purges_an_sgt_row(self):
-        self.insert(CAPTURE_METHOD, status="Visited / In Progress", key="SGT:ITR:ABCPD1234E:ITR4:AY202526")
+        self.insert(SHADOW_METHOD, status="Visited / In Progress", key="SGT:ITR:ABCPD1234E:ITR4:AY202526")
         self.insert("VSDC-X_itr_personal_info", status="Visited / In Progress")
-        assert CAPTURE_METHOD in [r[0] for r in self.rows()]
+        assert SHADOW_METHOD in [r[0] for r in self.rows()]
 
     def test_sgt_rows_replace_only_themselves(self):
         key = "SGT:ITR:ABCPD1234E:ITR4:AY202526"
-        self.insert(CAPTURE_METHOD, status="Draft", key=key)
-        self.insert(CAPTURE_METHOD, status="Submitted (Not Verified)", arn="123456789150925", key=key)
-        sgt = [r for r in self.rows() if r[0] == CAPTURE_METHOD]
+        self.insert(SHADOW_METHOD, status="Draft", key=key)
+        self.insert(SHADOW_METHOD, status="Submitted (Not Verified)", arn="123456789150925", key=key)
+        sgt = [r for r in self.rows() if r[0] == SHADOW_METHOD]
         assert len(sgt) == 1 and sgt[0][2] == "Submitted (Not Verified)"
 
     def test_superseded_delete_is_sgt_only(self):
         self.insert("VSDC-X_itr_submitted", arn="123456789150925")
         vsdc_key = self.rows()[0][4]
         assert self.db.delete_sgt_rows_by_dataset_key(vsdc_key) == 0          # not an SGT row: untouched
-        self.insert(CAPTURE_METHOD, status="Draft", key="SGT:ITR:SABC:ITR4:AY202526")
+        self.insert(SHADOW_METHOD, status="Draft", key="SGT:ITR:SABC:ITR4:AY202526")
         assert self.db.delete_sgt_rows_by_dataset_key("SGT:ITR:SABC:ITR4:AY202526") == 1
         assert [r[0] for r in self.rows()] == ["VSDC-X_itr_submitted"]
 
@@ -248,7 +252,7 @@ class TestDatabaseIsolation(unittest.TestCase):
         key = "SGT:ITR:ABCPD1234E:ITR4:AY202526"
         sgt_i = {"gps": {"route": "stopped at Payment"}, "assertions": {"second_opinion": "not yet verified"}}
         payload = {
-            "pan": "ABCPD1234E", "arn": "123456789150925", "capture_method": CAPTURE_METHOD,
+            "pan": "ABCPD1234E", "arn": "123456789150925", "capture_method": SHADOW_METHOD,
             "dataset_key": key,
             "raw_payload": {
                 "source": {"engine": "SGT", "mode": "shadow"},
@@ -257,7 +261,7 @@ class TestDatabaseIsolation(unittest.TestCase):
             },
         }
         self.db.insert_tracker_dump(portal="Income Tax (ITR-4)", period_label="AY 2025-26",
-                                    arn_number="123456789150925", capture_method=CAPTURE_METHOD,
+                                    arn_number="123456789150925", capture_method=SHADOW_METHOD,
                                     status="Submitted (Not Verified)", pan="ABCPD1234E", filing_type="ITR-4",
                                     raw_payload_json=json.dumps(payload), dataset_key=key)
         with self.db._connect_raw() as c:

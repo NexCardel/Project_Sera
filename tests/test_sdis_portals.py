@@ -5,7 +5,7 @@ import json
 import pytest
 
 from core.sdis import config, portals
-from core.vsdc import vsdc_scope as scope
+from core.sgt.capture import scope
 
 
 @pytest.fixture(autouse=True)

@@ -1,5 +1,5 @@
 """
-core/sgt/sgt_client_link.py - a portal user ID -> the saved client it belongs to
+core/sgt/client_link.py - a portal user ID -> the saved client it belongs to
 ================================================================================
 SGT's own page rules name the client from the portal's top header (PAN / GSTIN). Some pages the
 session starts on do not show it, but SDIS has captured the portal's USER ID there. A user ID is

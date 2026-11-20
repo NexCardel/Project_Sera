@@ -18,7 +18,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # These tools drive local simulation pages (file://), which VSDC refuses by default -
-# it only ever looks at the two tax portals. See core/vsdc/vsdc_scope.py.
+# it only ever looks at the two tax portals. See core/sgt/capture/scope.py.
 os.environ.setdefault("VSDC_ALLOW_LOCAL_TEST", "1")
 os.environ["VSDC_ALERT_CONFIG"] = os.path.join(os.environ.get("TEMP", "."), "no_such_vsdc_alert.json")   # dev tools must never push real phone alerts
 for _v in ("VSDC_ALERT_TOPIC", "VSDC_ALERT_SERVER"):
@@ -31,7 +31,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="repla
 
 from playwright.sync_api import sync_playwright
 
-from core.vsdc import vsdc_uia_text
+from core.sgt.capture import uia_text
 from core.vsdc.vsdc_regex import repair_gst_arn, repair_numeric_ack, classify_verification_status
 
 user32 = ctypes.windll.user32
@@ -68,7 +68,7 @@ def find_hwnd_by_title_substring(substr: str, timeout_sec: float = 10.0):
 
 def read_and_report(hwnd, label):
     print(f"\n{'=' * 70}\n{label}\n{'=' * 70}")
-    res = vsdc_uia_text.read_page_text(hwnd)
+    res = uia_text.read_page_text(hwnd)
     text = res.get("text", "")
     lines = res.get("lines", [])
 
@@ -163,7 +163,7 @@ def main():
         last_lines = []
         while time.perf_counter() - t0 < max_duration_sec:
             attempt += 1
-            res = vsdc_uia_text.read_page_text(hwnd)
+            res = uia_text.read_page_text(hwnd)
             text = res.get("text", "")
             last_lines = res.get("lines", [])
             arn = repair_gst_arn(text) or repair_numeric_ack(text)

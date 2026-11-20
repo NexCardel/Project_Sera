@@ -3,7 +3,7 @@ core/sgt_i/lab.py - the SGT lab: accept / reject logic for step 11's proposals
 ===============================================================================
 Blueprint 14.4 step 11 / 14.10 W12-2. `core/sgt_i/miner.py` drafts proposals and writes
 them to `proposals.json`; this module is what a **decision** does to that file and to the
-local override `sgt_fields.json` (`core/sgt/sgt_specs.override_path()`). No UI here - the
+local override `sgt_fields.json` (`core/sgt/specs/specs.override_path()`). No UI here - the
 SGT lab dialog (`ui/dialogs/sgt_lab_dialog.py`) calls these functions so the decision logic
 has its own tests, independent of Qt.
 
@@ -25,7 +25,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ..sgt import sgt_specs
+from core.sgt.specs import specs
 from . import miner
 
 __all__ = ["load_proposals", "set_status", "accept", "reject", "merge_into_override", "run_miner"]
@@ -73,7 +73,7 @@ def merge_into_override(section: str, spec: Dict[str, Any], path: Optional[Path]
     same name there; every other section and top-level key is left exactly as it was. An override
     file that exists but cannot be read raises ValueError: it may hold hand-made Core specs, and
     rewriting it from nothing would silently remove them."""
-    path = path or sgt_specs.override_path()
+    path = path or specs.override_path()
     data: Any = {}
     if path.is_file():
         try:
@@ -141,7 +141,7 @@ def run_miner(atlas_dir: Optional[Path] = None, corpus_dir: Optional[Path] = Non
     the atlas and the recent corpus, written to proposals.json (keeping earlier decisions). Slow -
     it replays the corpus per proposal - so the dialog runs it off the UI thread. Returns
     {"proposals": n pending, "dropped": {...}}."""
-    from ..sgt.sgt_corpus import load_pages
+    from core.sgt.corpus import load_pages
     from .atlas import Atlas
 
     result = miner.mine(atlas=Atlas(atlas_dir), pages=load_pages(corpus_dir, days=days))

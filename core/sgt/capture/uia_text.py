@@ -1,5 +1,5 @@
 """
-core/vsdc/vsdc_uia_text.py — VSDC-X: UI Automation Exact-Text Capture
+core/sgt/capture/uia_text.py — VSDC-X: UI Automation Exact-Text Capture
 ========================================================================
 Reads the visible text of a portal page via its Windows UI Automation
 accessibility tree (the same read-only OS channel screen readers use) instead
@@ -304,7 +304,7 @@ def selected_tab_id(hwnd: int, timeout_sec: float = 1.0) -> Optional[str]:
     return _run_with_timeout(_do, timeout_sec)
 
 
-# ---- helpers shared by both readers (this module's pool and core/vsdc/vsdc_reader's lanes) ----
+# ---- helpers shared by both readers (this module's pool and core/sgt/capture/reader's lanes) ----
 # Each runs on the calling thread with the caller's own UIA objects and caches, so the two readers
 # cannot drift apart.
 

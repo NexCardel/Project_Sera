@@ -6,7 +6,7 @@ a mail tab - sets the session aside and brings it back; it never ends it. Identi
 import json
 import random
 
-from core.sgt.sgt_shadow import IDLE_END_SEC, IDLE_REASON, RESUME_WINDOW_SEC, SgtShadow
+from core.sgt.engine import IDLE_END_SEC, IDLE_REASON, RESUME_WINDOW_SEC, SgtEngine
 from core.vsdc import vsdc_router
 from test_sgt_shadow import (FILED_URL, GST, ITR, LOGIN_URL, LOGOUT_URL, PROFILE_PAGE, PROFILE_URL, Rig,
                              filed_page, frame)
@@ -144,7 +144,7 @@ class TestOnlyTheListedBoundariesEnd:
         assert vsdc_router._SESSION_IDLE_TIMEOUT_SEC >= IDLE_END_SEC
 
     def _router_with(self, r, windows):
-        """A router holding `windows` (hwnd -> seconds since last seen) that feeds the rig's SgtShadow."""
+        """A router holding `windows` (hwnd -> seconds since last seen) that feeds the rig's SgtEngine."""
         import time
         from unittest.mock import MagicMock
         from core.vsdc.vsdc_assembler import VisualSessionAssembler

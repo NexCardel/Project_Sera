@@ -11,7 +11,7 @@ import pytest
 
 from core.scc.attempts import ATTEMPT_TTL_SEC, AttemptOpener, ClientInfo, db_lookup, password_page_pan
 from core.scc.scc_rules import OUTCOMES, RULES_PATH, build_rule, load_rules, self_test_rule
-from core.sgt.sgt_specs import SpecError
+from core.sgt.specs.specs import SpecError
 from core.sgt_i.observation import make_observation
 
 PW_URL = "https://eportal.example.test/iec/foservices/#/login/password"

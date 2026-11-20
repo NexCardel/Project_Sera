@@ -22,7 +22,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-os.environ["VSDC_ALLOW_LOCAL_TEST"] = "1"          # the page is a local file (see core/vsdc/vsdc_scope.py)
+os.environ["VSDC_ALLOW_LOCAL_TEST"] = "1"          # the page is a local file (see core/sgt/capture/scope.py)
 os.environ["VSDC_ALERT_CONFIG"] = os.path.join(os.environ.get("TEMP", "."), "no_such_vsdc_alert.json")
 for _v in ("VSDC_ALERT_TOPIC", "VSDC_ALERT_SERVER", "VSDC_UIA_ONLY", "VSDC247_ONLY", "VSDC247_MODE"):
     os.environ.pop(_v, None)

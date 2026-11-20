@@ -83,7 +83,7 @@ _MONTHS = {m: i + 1 for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "j
 def _period_date(label) -> Optional[datetime.date]:
     """When a period label starts, to order periods: "September (FY 2026-27)", "AY 2026-27", "Jun - 2026".
     None when the label is not a readable period."""
-    from core.sgt.sgt_toolbox import period_start
+    from core.sgt.specs.toolbox import period_start
     d = period_start(label)
     if d:
         return d

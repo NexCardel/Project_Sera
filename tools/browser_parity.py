@@ -45,7 +45,7 @@ if ROOT not in sys.path:
 
 ALIGN_DIR = os.path.join(ROOT, "tests", "class_diff_align")
 PASSWORD = "Fictional#123"          # make_form.PASSWORD; no reader may ever return it
-SELECTED_PREFIX = "Selected: "      # core.vsdc.vsdc_uia_text.SELECTED_PREFIX
+SELECTED_PREFIX = "Selected: "      # core.sgt.capture.uia_text.SELECTED_PREFIX
 WINDOW_TIMEOUT = 20.0
 SETTLE_TIMEOUT = 10.0               # the first reads wake the accessibility tree up
 READ_TIMEOUT = 10.0
@@ -278,7 +278,7 @@ def read_window(hwnd: int, with_fixture: bool) -> Dict[str, Any]:
     """The address, SGT's lines, the node trees (control and raw) and, for a fixture, key_probe's
     raw read - each timed."""
     from core.sgt_i.uia_nodes import read_page_nodes
-    from core.vsdc.vsdc_uia_text import read_page_text
+    from core.sgt.capture.uia_text import read_page_text
     from tools.pre_dev.class_diff import key_probe
 
     deadline = time.monotonic() + SETTLE_TIMEOUT            # wait until two reads agree

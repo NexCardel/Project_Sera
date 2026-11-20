@@ -45,7 +45,7 @@ def load_portal(portal: str, base: Path) -> Dict[str, Any]:
     with that field, for display only - nothing is written back."""
     atlas = PortalAtlas(portal, directory=base, config=load_config()).to_json()
     try:
-        from core.sgt.sgt_specs import load_registry
+        from core.sgt.specs.specs import load_registry
         from core.sgt_i.atlas import SEP
         from core.sgt_i.miner import _base_paths, claimed_field
         registry = load_registry(_base_paths())

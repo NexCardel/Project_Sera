@@ -185,7 +185,7 @@ def shadow_events(folder: Path, start: datetime, end: datetime) -> Iterator[Tupl
 
 
 def _level_of(status: Any) -> int:
-    from core.sgt.sgt_toolbox import submit_level
+    from core.sgt.specs.toolbox import submit_level
     return submit_level(status)
 
 

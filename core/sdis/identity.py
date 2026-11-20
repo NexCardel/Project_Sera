@@ -24,9 +24,9 @@ def client_ids(m: Any) -> set:
     """Who the client of one map is: the PAN / GSTIN that SGT-C's own specs (sgt_fields.json,
     checksums included) find in the text SGT sees there, as {"gstin:...", "pan:..."}. Empty when
     the page never shows them, or the link is no portal."""
-    from core.sgt.sgt_resolver import resolve_page          # importing core.vsdc loads Qt: only when needed
-    from core.sgt.sgt_specs import load_registry
-    from core.vsdc.vsdc_scope import portal_for_url
+    from core.sgt.specs.resolver import resolve_page          # importing core.vsdc loads Qt: only when needed
+    from core.sgt.specs.specs import load_registry
+    from core.sgt.capture.scope import portal_for_url
     global _registry
     page = getattr(m, "link", "") or getattr(m, "page", "")     # the link, without " [browser] [screen n]"
     url = "https://" + page

@@ -37,7 +37,7 @@ class MaintenanceMixin:
             except Exception as e:
                 print(f"[-] Startup placeholder client name upgrade skipped: {e}")
             try:
-                from core.sgt.sgt_repair import run_pending
+                from core.sgt.repair import run_pending
                 run_pending(self)               # GST rows SGT moved to another period (plans put in sgt_repair/plans)
             except Exception as e:
                 print(f"[-] Startup SGT row repair skipped: {e}")

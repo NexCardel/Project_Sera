@@ -1,5 +1,5 @@
 """
-The evidence block on every SGT tracker row (core/sgt/sgt_evidence.py): which read named the client,
+The evidence block on every SGT tracker row (core/sgt/evidence.py): which read named the client,
 which reads set the dataset's fields, what happened to the session, and how the tracker matched the
 row to a client record. Also the wrong-client mark and the export. All identifiers fictional.
 """
@@ -12,8 +12,8 @@ from PIL import Image
 
 import security
 from database import SeraDatabase
-from core.sgt import sgt_evidence as ev
-from core.sgt.sgt_shadow import CAPTURE_METHOD, _session_from_json, _session_to_json
+from core.sgt import evidence as ev
+from core.sgt.engine import CAPTURE_METHOD, session_from_json, session_to_json
 from test_sgt_tracker_rows import CONTACT_URL, FILED_URL, ITR, PROFILE_PAGE, PROFILE_URL, Rig, filed_page
 
 T1, T2 = "42.1.4.0.0.783", "42.1.4.0.0.891"
@@ -120,7 +120,7 @@ class TestRows:
         r.at(T1, PROFILE_URL, PROFILE_PAGE)
         r.at(T1, FILED_URL, filed_page())
         s = r.sgt._sessions[1]
-        back = _session_from_json(json.loads(json.dumps(_session_to_json(s))))
+        back = session_from_json(json.loads(json.dumps(session_to_json(s))))
         assert back.ev.ident == s.ev.ident and back.ev.trail == s.ev.trail
         assert back.slots[0].ev == s.slots[0].ev and back.slots[0].ev
 

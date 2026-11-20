@@ -1,4 +1,4 @@
-"""The OCR lane (core/vsdc/vsdc_ocr_lane): screenshots scanned on their own thread, once a second per window.
+"""The OCR lane (core/sgt/capture/ocr_lane): screenshots scanned on their own thread, once a second per window.
 
 SGT never-miss blueprint 5.1 / WP7. A fake engine and made-up lines; no portal, no real OCR.
 """
@@ -13,8 +13,8 @@ from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.vsdc import vsdc_ocr_lane
-from core.vsdc.vsdc_ocr_lane import OcrLane
+from core.sgt.capture import ocr_lane
+from core.sgt.capture.ocr_lane import OcrLane
 from tests.test_vsdc_reader import Clock, ctx, wait_until
 
 
@@ -76,7 +76,7 @@ def test_ocr_is_rate_limited_per_window(lane):
     assert ln.request(IMG, ctx(1, clock)) is True
     assert ln.request(IMG, ctx(1, clock)) is False                     # the same window, no time passed
     assert ln.request(IMG, ctx(2, clock)) is True                      # another window has its own gap
-    clock.advance(vsdc_ocr_lane.OCR_MIN_GAP_SEC - 0.1)
+    clock.advance(ocr_lane.OCR_MIN_GAP_SEC - 0.1)
     assert ln.ready(1) is False and ln.request(IMG, ctx(1, clock)) is False
     clock.advance(0.1)
     assert ln.ready(1) is True and ln.request(IMG, ctx(1, clock)) is True
@@ -122,10 +122,10 @@ def test_the_lane_never_holds_more_than_a_few_scans(lane):
     ln, _e, clock = lane(engine)
     try:
         accepted = sum(ln.request(IMG, ctx(h, clock)) for h in range(1, 10))
-        assert accepted == vsdc_ocr_lane.MAX_OCR_PENDING
+        assert accepted == ocr_lane.MAX_OCR_PENDING
     finally:
         engine.gate.set()
-    drain(ln, vsdc_ocr_lane.MAX_OCR_PENDING)
+    drain(ln, ocr_lane.MAX_OCR_PENDING)
 
 
 def test_a_stuck_scan_is_given_up_after_a_while(lane):
@@ -134,7 +134,7 @@ def test_a_stuck_scan_is_given_up_after_a_while(lane):
     ln, _e, clock = lane(engine)
     try:
         assert ln.request(IMG, ctx(1, clock)) is True
-        clock.advance(vsdc_ocr_lane.OCR_STUCK_SEC + 1)
+        clock.advance(ocr_lane.OCR_STUCK_SEC + 1)
         assert ln.results() == []
         assert ln.stats()["ocr_pending"] == 0
     finally:

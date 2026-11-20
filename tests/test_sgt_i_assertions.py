@@ -1,6 +1,6 @@
 """
 Tests for core/sgt_i/assertions.py (blueprint 14.4 step 6, first half). Wordings are the real
-phrasing from core/sgt/sgt_fields.json's own examples/patterns and from 14.1's bug table; every
+phrasing from core/sgt/specs/sgt_fields.json's own examples/patterns and from 14.1's bug table; every
 identifier-shaped value in them is fictional.
 """
 
@@ -44,7 +44,7 @@ def test_original_return_ack_reads_as_reference_not_new_submission():
     assert a.cls == "reference_to_past"
 
 
-# ── real wordings from core/sgt/sgt_fields.json's own examples and patterns ───────────────────
+# ── real wordings from core/sgt/specs/sgt_fields.json's own examples and patterns ───────────────────
 def test_itr_status_examples_from_sgt_fields():
     assert A.classify("Pending for e-Verification").cls == "future_conditional"
     assert A.classify("ITR Filed").cls == "happened"

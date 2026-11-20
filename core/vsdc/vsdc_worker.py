@@ -9,8 +9,9 @@ import time
 from typing import Optional, Dict, Any
 from PySide6.QtCore import QThread, Signal
 
-from .vsdc_router import VSDCRouter, SGT_OFF
-from .vsdc_capture import FRAME_TICK_SEC
+from .vsdc_router import VSDCRouter
+from core.sgt.router_link import SGT_OFF
+from core.sgt.capture.loop import FRAME_TICK_SEC
 from .vsdc_ocr import VSDCOcrEngine
 from .vsdc_assembler import VisualSessionAssembler
 from . import vsdc_diag

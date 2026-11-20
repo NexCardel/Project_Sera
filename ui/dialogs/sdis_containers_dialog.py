@@ -116,7 +116,7 @@ class LevelsTable(QWidget):
         self._building = False
 
     def _add_row(self, name: str, when: Dict[str, Any], status: str) -> None:
-        from core.sgt.sgt_toolbox import SUBMIT_LEVELS
+        from core.sgt.specs.toolbox import SUBMIT_LEVELS
         r = self.table.rowCount()
         self.table.insertRow(r)
         self.table.setItem(r, 0, QTableWidgetItem(name))

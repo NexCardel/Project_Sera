@@ -3,7 +3,7 @@ from pathlib import Path
 
 from core.ltt import feed, rules
 from core.ltt.engine import LTTEngine, parse_date, parse_gap
-from core.sgt.sgt_toolbox import SUBMIT_LEVELS
+from core.sgt.specs.toolbox import SUBMIT_LEVELS
 
 TODAY = date(2026, 10, 4)
 

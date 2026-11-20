@@ -1,10 +1,10 @@
-"""core/sgt/sgt_repair.py: the plan from a PC's SGT log, and putting false rows back (docs/sgt-gst-fixes-plan.md WP7)."""
+"""core/sgt/repair.py: the plan from a PC's SGT log, and putting false rows back (docs/sgt-gst-fixes-plan.md WP7)."""
 import json
 import sqlite3
 from contextlib import contextmanager
 
 from core.dataset_key import compute_dataset_key
-from core.sgt import sgt_repair as R
+from core.sgt import repair as R
 
 GSTIN = "29ABACD1191FAZK"
 JUNE = {"form": "GSTR-3B", "period": "June (FY 2026-27)", "status": "Submitted & Verified",

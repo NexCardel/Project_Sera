@@ -20,19 +20,17 @@ from PIL import Image
 import comtypes.client
 from .vsdc_crosshairs import match_url_crosshair, CrosshairDefinition, ALL_CROSSHAIRS, get_crosshair
 from .vsdc_ocr import VSDCOcrEngine
-from . import vsdc_uia_text
+from core.sgt.capture import uia_text as sgt_uia_text
+from core.sgt.capture.windows import BROWSER_EXE_NAMES, PORTAL_KEYWORDS
 from . import vsdc_diag
-from .vsdc_scope import (
+from core.sgt.capture.scope import (
     is_in_scope_url, portal_for_url, is_government_registry_host, portal_logo_cue, TRIPWIRE_TOP_LINES, extract_host,
     sanitize_page_url, registered_domain, local_test_pages_allowed, is_local_reference,
 )
 from .vsdc_alerts import AlertSender, device_name, stamp_device_name, stamp_original_author
 from .vsdc_health import HealthMonitor
 from .vsdc247 import Vsdc247Scanner, configured_mode, MODE_OFF, MODE_SHADOW, MODE_LIVE
-
-SGT_OFF = "off"
-SGT_SHADOW = "shadow"
-SGT_LIVE = "live"
+from core.sgt.router_link import SGT_LIVE, SGT_OFF, SgtLink  # noqa: F401  (SGT_LIVE: for importers)
 from .vsdc_assembler import VisualSessionAssembler, get_status_rank
 from .vsdc_regex import (
     repair_numeric_ack,
@@ -84,29 +82,6 @@ EVERIFY_PENDING_CROSSHAIR = get_crosshair("itr_everify_pending")
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
-
-PORTAL_KEYWORDS = (
-    "income tax",
-    "incometax",
-    "e-filing",
-    "gst portal",
-    "goods and services tax",
-    "gstn",
-)
-# "dashboard" and "returns" were deliberately dropped from PORTAL_KEYWORDS -
-# both are generic enough to appear in countless unrelated sites/apps' window
-# titles, and this list is also used to gate whether title-only crosshair
-# matching (no real URL/host at all - see the extract_browser_url fallback in
-# evaluate_tick) is trusted. A tab whose title merely contains "dashboard" is
-# not evidence it's a tax portal.
-
-BROWSER_EXE_NAMES = (
-    "chrome.exe",
-    "msedge.exe",
-    "firefox.exe",
-    "brave.exe",
-    "opera.exe",
-)
 
 # " - Google Chrome", " – ...", " — Mozilla Firefox": the browser's suffix on a window title
 BROWSER_SUFFIX_RE = re.compile(r"[-–—]\s*(?:google chrome|microsoft[\s​]*edge|mozilla firefox|brave|opera).*$",
@@ -212,15 +187,16 @@ _STATIC_SCREEN_TIMEOUT_SEC = 30.0
 # closed browser window's state (and its assembler, with whatever it hadn't
 # yet flushed) doesn't linger forever. Generous on purpose - VSDC ticks fast
 # but a taxpayer can legitimately sit on one page for minutes while reading it.
-# Four hours, as SGT's idle limit (core/sgt/sgt_shadow.py IDLE_END_SEC; owner D13). Never shorter:
+# Four hours, as SGT's idle limit (core/sgt/engine/policy.py IDLE_END_SEC; owner D13). Never shorter:
 # the router must not end or park a session before SGT would.
 _SESSION_IDLE_TIMEOUT_SEC = 4 * 3600
 
 
-class VSDCRouter:
+class VSDCRouter(SgtLink):
     """
     Coordinates browser detection, URL route sniffing via Windows UI Automation,
-    regional OCR capture, and session assembly.
+    regional OCR capture, and session assembly. How it builds and drives SGT is
+    core/sgt/router_link.SgtLink.
     """
 
     def __init__(
@@ -390,20 +366,7 @@ class VSDCRouter:
         self._vsdc_x_enabled: bool = True          # False: UI Automation is never read
         self._engines_off: bool = False            # all three off: the tick does nothing at all
 
-        # SGT - Sera Global Tracker (core/sgt). "live": the capture engine, its rows merge with
-        # the tracker's; "shadow": its rows kept apart, for comparison. Off until
-        # apply_engine_settings() (Settings -> Tracker) or SGT_MODE says otherwise.
-        self._sgt_mode: str = self._env_sgt_mode() or SGT_OFF
-        self._sgt_alone: bool = False              # SGT on, the other three off: no crosshair routing
-        self._sgt = None                           # core.sgt.sgt_shadow.SgtShadow, built on first use
-        # SGT's capture loop (core/vsdc/vsdc_capture): its own windows, scope gate and reader lanes,
-        # built on first use while SGT is on. The crosshair engines keep this router's own URL read
-        # (R7). The three below are for tests and tools: None = the real Windows platform, the real
-        # UI Automation backend and time.monotonic.
-        self.capture = None
-        self.capture_platform = None
-        self.capture_backend = None
-        self.capture_clock = None
+        self._init_sgt()
         self.diag_tick: Dict[str, Any] = {}        # this tick, for the heartbeat (vsdc_diag)
 
         # VSDC247-V - SGT Verifier (plan section 7)
@@ -418,13 +381,6 @@ class VSDCRouter:
             "matched": 0, "missed": 0, "last_heartbeat": 0.0,
         }
 
-        if self._sgt_mode != SGT_OFF:
-            print(f"[SGT] mode = {self._sgt_mode.upper()} (from SGT_MODE)")
-
-    @staticmethod
-    def _env_sgt_mode() -> Optional[str]:
-        env = os.environ.get("SGT_MODE", "").strip().lower()
-        return env if env in (SGT_OFF, SGT_SHADOW, SGT_LIVE) else None
 
     def apply_engine_settings(self, vsdc: bool, vsdc_x: bool, vsdc247: bool, sgt: str = "off",
                               sgt_record: bool = True, sgt_i: bool = False, scc_detect: bool = False,
@@ -444,41 +400,16 @@ class VSDCRouter:
         VSDC_UIA_ONLY / VSDC247_ONLY / VSDC247_MODE environment variables keep working as
         developer overrides on top of this.
 
-        SGT (off / shadow / live) is the fourth switch. Live is the capture engine and normally
-        runs alone (the other three off): it reads every in-scope page with no crosshair
-        routing, the same way VSDC247 works alone. Shadow keeps its rows apart from the other
-        engines', so it can run beside them. SGT_MODE overrides it. SGT-I (sgt_i) is SGT's
-        Intelligence half: it only watches what SGT reads and never changes a capture. SCC-U
-        (scc_detect) likewise only watches SGT's reads, for Income Tax logins.
+        SGT (off / live) is the fourth switch (core/sgt/router_link). Live is the capture engine and
+        normally runs alone (the other three off): it reads every in-scope page with no crosshair
+        routing, the same way VSDC247 works alone. A stored "shadow" (retired) is live. SGT_MODE
+        overrides it. SGT-I (sgt_i) is SGT's Intelligence half: it only watches what SGT reads and
+        never changes a capture. SCC-U (scc_detect) likewise only watches SGT's reads, for Income
+        Tax logins.
 
         VSDC247-V (vsdc247_verify) is the independent SGT verifier (plan section 7).
         """
-        wanted = str(sgt).strip().lower()
-        sgt_mode = self._env_sgt_mode() or (wanted if wanted in (SGT_SHADOW, SGT_LIVE) else SGT_OFF)
-        self._sgt_record = bool(sgt_record)
-        if self._sgt is not None and getattr(self._sgt, "_recorder", None) is not None:
-            self._sgt._recorder.enabled = self._sgt_record
-        self._sdis_record = bool(sdis_record)
-        if self._sgt is not None and getattr(self._sgt, "_sdis", None) is not None:
-            self._sgt._sdis.enabled = self._sdis_record
-        self._sgt_i_on = bool(sgt_i)
-        self._apply_sgt_i()
-        self._scc_on = bool(scc_detect)
-        self._apply_scc()
-        if sgt_mode != self._sgt_mode and self._sgt is not None:
-            # Open sessions end under the mode they were read in, so no dataset is keyed half
-            # one way and half the other. A read asked before the switch is never absorbed after it.
-            reason = "SGT switched off" if sgt_mode == SGT_OFF else f"SGT switched to {sgt_mode}"
-            if self.capture is not None:
-                self.capture.end_all(reason)
-            else:
-                self._sgt.end_all(reason)
-            if sgt_mode != SGT_OFF:
-                self._sgt.set_mode(sgt_mode)
-            else:
-                self._drop_capture()
-        self._sgt_mode = sgt_mode
-        sgt_on = sgt_mode != SGT_OFF
+        sgt_on = self._apply_sgt_switches(sgt, sgt_record, sgt_i, scc_detect, sdis_record)
         self._sgt_alone = sgt_on and not (vsdc or vsdc_x or vsdc247) and not self._env_247_only
         env_mode = os.environ.get("VSDC247_MODE", "").strip().lower()
         self._vsdc_x_enabled = bool(vsdc_x)
@@ -509,66 +440,6 @@ class VSDCRouter:
         print(f"[VSDC] {engines}")
         vsdc_diag.note(engines)
 
-
-    def _apply_sgt_i(self) -> None:
-        """Attaches SGT-I to SGT when switched on. One host per run: one that switched itself
-        off after a failure stays off, even if the switch is flipped again."""
-        if self._sgt is None:
-            return
-        on = getattr(self, "_sgt_i_on", False)
-        host = getattr(self, "_sgt_i_host", None)
-        if on and host is None:
-            from core.sgt_i import SgtIntelligence, default_components
-            from core.sgt_i.uia_events import FlashWatcher
-            host = self._sgt_i_host = SgtIntelligence(default_components(), flashes=FlashWatcher())
-        if host is not None:
-            host.set_enabled(on)
-            self._sgt.set_intelligence(host if on else None)
-
-    def set_client_lookup(self, lookup) -> None:
-        """lookup(portal, portal user ID) -> {"gstin", "pan"} of the saved client who owns it, or None.
-        SGT uses it where a page shows the user ID but not the client's GSTIN."""
-        self._client_lookup = lookup
-        if self._sgt is not None:
-            self._sgt.set_client_lookup(lookup)
-
-    def set_digest(self, digest) -> None:
-        """digest(today) -> the daily capture digest, run by SGT's first tick of each day (WP12)."""
-        self._digest = digest
-        if self._sgt is not None:
-            self._sgt.set_digest(digest)
-
-    def sessions_open(self) -> bool:
-        """SGT has a session with content touched in the last few minutes (holds back a mandatory
-        update restart). False when SGT never started."""
-        return self._sgt is not None and self._sgt.sessions_open()
-
-    def set_scc_handlers(self, factory) -> None:
-        """factory() -> the handlers to register on SCC-U's host. Called each time the switch is
-        applied, so a handler that shares the host (SCK) can join while SCC-U's own rules are off."""
-        self._scc_handlers = factory
-
-    def _apply_scc(self) -> None:
-        """Attaches SCC-U to SGT when switched on, the same way as SGT-I: one host per run, and
-        one that switched itself off after a failure stays off. The host may be shared with a
-        handler that has its own switch (SCK), so the handler list is refreshed on every apply."""
-        if self._sgt is None:
-            return
-        on = getattr(self, "_scc_on", False)
-        host = getattr(self, "_scc_host", None)
-        if on and host is None:
-            from core.scc import SccHost
-            host = self._scc_host = SccHost()
-        if on and host is not None:
-            factory = getattr(self, "_scc_handlers", None)
-            if factory is not None:
-                try:
-                    host.set_handlers(factory())
-                except Exception as e:
-                    print(f"[vsdc_router] SCC handlers not refreshed: {type(e).__name__}")
-        if host is not None:
-            host.set_enabled(on)
-            self._sgt.set_scc(host if on else None)
 
     def _apply_verifier(self) -> None:
         """Configures or clears VSDC247-V verifier lane."""
@@ -620,67 +491,6 @@ class VSDCRouter:
         except Exception as e:
             print(f"[VSDC247-V] alert error: {e}")
 
-    def _ensure_sgt(self) -> None:
-
-        """Builds SGT on first use. Its tracker rows leave through its own outbox (evaluate_tick
-        hands them out one per tick), never through a tick's result."""
-        if self._sgt is None:
-            from core.sdis.recorder import SdisRecorder
-            from core.sgt.sgt_corpus import PageRecorder
-            from core.sgt.sgt_health import SpecStats
-            from core.sgt.sgt_shadow import SgtShadow, shadow_dir
-            folder = shadow_dir()
-            # recorder: pages for replay; sdis: raw pages for Sera Distill; stats: portal-change
-            # watch; state: crash recovery; alert: a live submission whose client never became
-            # known (phone, like VSDC247)
-            self._sgt = SgtShadow(dispatched_ids=lambda: list(self._dispatched_ids), notify=self.notify_sgt,
-                                  recorder=PageRecorder(enabled=getattr(self, "_sgt_record", True)),
-                                  sdis=SdisRecorder(enabled=getattr(self, "_sdis_record", True)),
-                                  stats=SpecStats(folder), state_path=folder / "sessions_state.json",
-                                  mode=self._sgt_mode,
-                                  alert_unattributed=lambda form, page: self.alerts.notify_unattributed_submission(form, page),
-                                  ask_demotion=self.notify_demotion,
-                                  resolve_client=getattr(self, "_client_lookup", None),
-                                  on_read=self.health.read_result, on_hits=self.health.hits,
-                                  on_ocr_row=lambda: self.health.row("ocr_only"))
-            self._sgt.set_digest(getattr(self, "_digest", None))
-            self._apply_sgt_i()
-            self._apply_scc()
-            if self._verifier is not None:
-                self._sgt.set_verifier(self._verifier)
-                reconciler = getattr(self._verifier, "reconciler", None)
-                if reconciler is not None and hasattr(reconciler, "set_sgt_router"):
-                    reconciler.set_sgt_router(self._sgt)
-                if reconciler is not None and hasattr(reconciler, "set_db"):
-                    reconciler.set_db(getattr(self, "db", None))
-
-    def _run_capture(self) -> None:
-        """SGT's tick: the capture loop watches the browser windows, asks the reader for page reads
-        and hands SGT what comes back (core/vsdc/vsdc_capture). Its errors are logged like a tick's
-        and never stop the crosshair engines' tick."""
-        try:
-            if self.capture is None:
-                self._ensure_sgt()
-                from .vsdc_capture import CaptureLoop, WinPlatform
-                from .vsdc_reader import PageReader
-                clock = self.capture_clock or time.monotonic
-                reader = PageReader(backend=self.capture_backend, clock=clock)
-                self.capture = CaptureLoop(self.capture_platform or WinPlatform(self.ocr), reader, self._sgt,
-                                           self.ocr, self.health, clock=clock,
-                                           on_out_of_scope=self._check_unlisted_portal)
-                vsdc_diag.register_reader(reader)
-            self.capture.tick()
-            self.diag_tick.update(self.capture.diag())
-        except Exception as e:
-            vsdc_diag.tick_error(e)
-
-    def _drop_capture(self) -> None:
-        """SGT is off: the loop's reader lanes close and the heartbeat reads the old reader again."""
-        loop, self.capture = self.capture, None
-        if loop is not None:
-            vsdc_diag.register_reader(None)
-            loop.close()
-
     def _run_verifier(self) -> None:
         """VSDC247-V lane: passive OCR verifier for the GST portal (plan section 7).
         Runs on every tick when enabled, in every SGT mode, wrapped so it never
@@ -709,9 +519,9 @@ class VSDCRouter:
             if not (is_browser or is_gst_title):
                 # Foreground is non-browser (e.g. terminal or Sera window);
                 # inspect top visible browser window so verifier tracks in background like SGT.
-                from . import vsdc_windows
+                from core.sgt.capture import windows as sgt_windows
                 try:
-                    candidates = vsdc_windows.browser_windows(hwnd or 0)
+                    candidates = sgt_windows.browser_windows(hwnd or 0)
                     for cand in candidates:
                         c_low = (cand.title or "").lower()
                         c_gst = "gst" in c_low or "goods and services" in c_low
@@ -749,7 +559,7 @@ class VSDCRouter:
             img = self._capture_window(hwnd)
             if img is None:
                 return
-            from .vsdc_gate import frame_signature
+            from core.sgt.capture.gate import frame_signature
             sig = frame_signature(img)
             if (sig == getattr(self, "_verifier_sig", None)
                     and now - getattr(self, "_verifier_ocr_at", 0.0) < self._VERIFIER_FORCE_INTERVAL_SEC):
@@ -836,7 +646,7 @@ class VSDCRouter:
         attempts = (state[0] if state else 0) + 1
         self._tripwire_hosts[host] = [attempts, now]
         try:
-            lines = vsdc_uia_text.read_page_text(hwnd, max_lines=TRIPWIRE_TOP_LINES).get("lines") or []
+            lines = sgt_uia_text.read_page_text(hwnd, max_lines=TRIPWIRE_TOP_LINES).get("lines") or []
         except Exception:
             lines = []
         cue = portal_logo_cue(lines)
@@ -869,30 +679,6 @@ class VSDCRouter:
             return
         self._emit_activity(event_type, title, subtitle, snapshot)
 
-    on_demotion = None          # set by the app: shows the "lower this status?" dialog (called from SGT's thread)
-
-    def notify_demotion(self, info: Dict[str, Any]) -> None:
-        """SGT saw a lower status for a filing that has an ARN and asks the user before lowering it."""
-        cb = self.on_demotion
-        if callable(cb):
-            cb(info)
-
-    def answer_demotion(self, token: str, lower: bool) -> None:
-        if self._sgt is not None:
-            self._sgt.answer_demotion(token, lower)
-
-    def notify_sgt(self, event_type: str, title: str, subtitle: str, context: Dict[str, Optional[str]]) -> None:
-        """
-        A HUD event from SGT. It carries SGT's OWN return context (form / type / period as SGT
-        resolved them), which must not be replaced by VSDC's assembler context at flush time -
-        the two engines can disagree, and the pill must show what SGT saw.
-        """
-        own = {k: context.get(k) for k in ("portal", "form", "filing_pref", "period")}
-        own["_own"] = True
-        if self._hud_buffering:
-            self._hud_buffer.append((event_type, title, subtitle, own))
-        else:
-            self._emit_activity(event_type, title, subtitle, {k: v for k, v in own.items() if k != "_own"})
 
     @property
     def activity_context(self) -> Dict[str, Optional[str]]:
@@ -1054,7 +840,7 @@ class VSDCRouter:
         """
         if self._mode_247 == MODE_OFF:
             return None
-        from . import vsdc_windows
+        from core.sgt.capture import windows as sgt_windows
         now = time.time()
         last_seen = getattr(self, "_bg_247_last", None)
         if last_seen is None:
@@ -1063,7 +849,7 @@ class VSDCRouter:
             cutoff = now - 3600
             self._bg_247_last = last_seen = {h: t for h, t in last_seen.items() if t >= cutoff}
         try:
-            windows = vsdc_windows.browser_windows(foreground_hwnd)
+            windows = sgt_windows.browser_windows(foreground_hwnd)
         except Exception:
             return None
 
@@ -1577,7 +1363,7 @@ class VSDCRouter:
         if not self._uia or not hwnd:
             return None
         # One helper for both readers (the reader v2's lanes call it on their own threads).
-        return vsdc_uia_text.address_bar_here(self._uia, self._uia_client, hwnd, self._cached_address_elements)
+        return sgt_uia_text.address_bar_here(self._uia, self._uia_client, hwnd, self._cached_address_elements)
 
     def _health_hud(self, title: str, subtitle: str = "") -> None:
         """A capture-health HUD event. Straight to the callback, not through this tick's buffer: the
@@ -1599,7 +1385,7 @@ class VSDCRouter:
         try:
             h = self.health
             loop = self.capture
-            h.uia_paused(bool(vsdc_uia_text.worker_health().get("disabled")) or (loop is not None and loop.paused()))
+            h.uia_paused(bool(sgt_uia_text.worker_health().get("disabled")) or (loop is not None and loop.paused()))
             h.tick()
             if h.due():
                 h.write(loop.health_extra() if loop is not None else None)
@@ -2124,14 +1910,14 @@ class VSDCRouter:
         full_text = ocr_res.get("text", "")
         lines = ocr_res.get("lines", [])
 
-        # VSDC-X: exact UI-Automation text read (see core/vsdc/vsdc_uia_text.py), same
+        # VSDC-X: exact UI-Automation text read (see core/sgt/capture/uia_text.py), same
         # channel already proven on the GST route. Purely additive — if it's unavailable
         # or empty, uia_text/uia_lines stay empty and every line below behaves exactly
         # as it did before VSDC-X existed for ITR.
         uia_text = ""
         uia_lines: List[str] = []
-        if self._vsdc_x_enabled and vsdc_uia_text.is_available():
-            uia_res = vsdc_uia_text.read_page_text(hwnd)
+        if self._vsdc_x_enabled and sgt_uia_text.is_available():
+            uia_res = sgt_uia_text.read_page_text(hwnd)
             uia_text = uia_res.get("text", "")
             uia_lines = uia_res.get("lines") or []
         uia_fields_used: List[str] = []
@@ -2708,13 +2494,13 @@ class VSDCRouter:
 
         # VSDC-X: one exact UI Automation text read per tick, shared below by
         # the loading-gate short-circuit and whichever crosshair branch runs
-        # (see core/vsdc/vsdc_uia_text.py). Purely additive — if it's
+        # (see core/sgt/capture/uia_text.py). Purely additive — if it's
         # unavailable or empty, uia_text/uia_lines stay empty and every line
         # below behaves exactly as it always has, driven by OCR alone.
         uia_text = ""
         uia_lines: List[str] = []
-        if self._vsdc_x_enabled and vsdc_uia_text.is_available():
-            uia_res = vsdc_uia_text.read_page_text(hwnd)
+        if self._vsdc_x_enabled and sgt_uia_text.is_available():
+            uia_res = sgt_uia_text.read_page_text(hwnd)
             uia_text = uia_res.get("text", "")
             uia_lines = uia_res.get("lines") or []
 

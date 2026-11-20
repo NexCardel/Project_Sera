@@ -10,11 +10,11 @@ import time
 
 import pytest
 
-import core.sgt.sgt_shadow as sgt_shadow
+from sgt_engine_patch import patch_engine
 from core.scc import SccHost
 from core.scc.host import READ_WINDOW_MAX_SEC, _Context
-from core.sgt.sgt_replay import replay_session
-from core.sgt.sgt_shadow import SgtShadow
+from core.sgt.replay import replay_session
+from core.sgt.engine import SgtEngine
 from core.vsdc.vsdc_engines import SCC_DETECT_DEFAULT, read_scc_detect_mode
 from tests.test_sgt_i_host import (SCENARIOS, STORE, Changing, Frame, _FixedDatetime, _SeqUuid, obs,
                                    wait_for)
@@ -129,7 +129,7 @@ def _core(tmp_path, scc):
     def read_uia(_h):
         reads.append(1)
         return {"lines": lines}
-    return SgtShadow(store=STORE, read_uia=read_uia, log_dir=tmp_path, echo=lambda m: None, scc=scc), reads
+    return SgtEngine(store=STORE, read_uia=read_uia, log_dir=tmp_path, echo=lambda m: None, scc=scc), reads
 
 
 def test_core_hands_a_copy_with_hwnd_and_session(tmp_path):
@@ -196,8 +196,8 @@ def _payloads(doc, scc):
 
 @pytest.mark.parametrize("path", SCENARIOS, ids=[p.stem for p in SCENARIOS])
 def test_core_rows_identical_with_scc_u_on_and_off(path, monkeypatch):
-    monkeypatch.setattr(sgt_shadow, "datetime", _FixedDatetime)
-    monkeypatch.setattr(sgt_shadow, "uuid", _SeqUuid)
+    patch_engine(monkeypatch, "datetime", _FixedDatetime)
+    patch_engine(monkeypatch, "uuid", _SeqUuid)
     doc = json.loads(path.read_text(encoding="utf-8"))
     off = _payloads(doc, None)
     assert _payloads(doc, SccHost([], enabled=True, echo=lambda m: None)) == off

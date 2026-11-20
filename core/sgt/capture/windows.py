@@ -1,5 +1,5 @@
 """
-core/vsdc/vsdc_windows.py - which browser windows the capture loop watches
+core/sgt/capture/windows.py - which browser windows the capture loop watches
 ===========================================================================
 SGT never-miss blueprint section 4.7 and WP10 (owner answer D6). Win32 only (window handle,
 rectangle, title, process name): cheap, nothing here can block on a browser, and nothing reads a page.
@@ -16,6 +16,29 @@ import ctypes
 from ctypes import wintypes
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
+
+PORTAL_KEYWORDS = (
+    "income tax",
+    "incometax",
+    "e-filing",
+    "gst portal",
+    "goods and services tax",
+    "gstn",
+)
+# "dashboard" and "returns" were deliberately dropped from PORTAL_KEYWORDS -
+# both are generic enough to appear in countless unrelated sites/apps' window
+# titles, and this list is also used to gate whether title-only crosshair
+# matching (no real URL/host at all - see the extract_browser_url fallback in
+# evaluate_tick) is trusted. A tab whose title merely contains "dashboard" is
+# not evidence it's a tax portal.
+
+BROWSER_EXE_NAMES = (
+    "chrome.exe",
+    "msedge.exe",
+    "firefox.exe",
+    "brave.exe",
+    "opera.exe",
+)
 
 MAX_WATCHED_WINDOWS = 3
 BG_TICK_SEC = 1.0                # a window not in front is considered this often
@@ -90,7 +113,6 @@ def window_info(hwnd: int) -> WindowInfo:
 
 def is_watchable(info: WindowInfo) -> bool:
     """A browser window, or a window titled like a portal (the router's quick gate), with a title."""
-    from .vsdc_router import BROWSER_EXE_NAMES, PORTAL_KEYWORDS
     if not info.hwnd or not info.title:
         return False
     title = info.title.lower()
@@ -129,7 +151,6 @@ def is_covered(rect: Rect, above: Sequence[Rect]) -> bool:
 def pick_windows(foreground: int, tops: Sequence[TopWindow]) -> List[WindowInfo]:
     """The windows to watch: the window in front first (when watchable), then the browser windows behind it
     that are not covered - those titled like a portal first, then by z-order - up to MAX_WATCHED_WINDOWS."""
-    from .vsdc_router import PORTAL_KEYWORDS
     front: List[WindowInfo] = []
     behind: List[WindowInfo] = []
     above: List[Rect] = []

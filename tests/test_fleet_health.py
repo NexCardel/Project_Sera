@@ -11,9 +11,9 @@ from datetime import date, datetime, timedelta
 from PIL import Image
 
 from core import fleet_health as fh
-from core.sgt import sgt_digest as dg
-from core.sgt.sgt_shadow import SESSION_QUIET_SEC, SgtShadow
-from core.sgt.sgt_specs import BUILTIN_FIELDS_PATH, SpecStore
+from core.sgt import digest as dg
+from core.sgt.engine import SESSION_QUIET_SEC, SgtEngine
+from core.sgt.specs.specs import BUILTIN_FIELDS_PATH, SpecStore
 from core.vsdc import vsdc_health as vh
 
 NOW = datetime(2026, 10, 14, 10, 0, 0)
@@ -262,7 +262,7 @@ class SgtRig:
     def __init__(self, tmp_path):
         self.clock = [1_000_000.0]
         self.notified = []
-        self.sgt = SgtShadow(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
+        self.sgt = SgtEngine(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
                              read_uia=lambda h: {"lines": list(PROFILE_PAGE)}, log_dir=tmp_path / "log",
                              clock=lambda: self.clock[0], today=lambda: date(2026, 10, 14), echo=lambda m: None,
                              notify=lambda *a: self.notified.append(a))

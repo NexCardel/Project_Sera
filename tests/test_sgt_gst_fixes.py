@@ -6,7 +6,7 @@ banned there until the never-miss blueprint's source policy), and a quarter is r
 """
 from unittest.mock import MagicMock
 
-from core.sgt.sgt_shadow import MISSING_CLEAR_SEC
+from core.sgt.engine import MISSING_CLEAR_SEC
 
 from test_sgt_shadow import GST, ITR, PROFILE_PAGE, PROFILE_URL, WIZ_PI, WIZ_STATUS, Rig, frame
 
@@ -37,8 +37,9 @@ def client(r):
 
 
 def sent_keys(sent):
-    """The tracker keys of what was handed out, upper-cased and without dashes."""
-    return [x["dataset_key"].replace("-", "").upper() for x in sent]
+    """Which return each row handed out is: its form and period, upper-cased, without dashes or spaces.
+    (Read from the row's own fields: the tracker key codes the period its own way.)"""
+    return [f"{x['filing_type']}:{x['period_label']}".replace("-", "").replace(" ", "").upper() for x in sent]
 
 
 class TestFinishedReturnsAreNeverRewritten:
@@ -82,7 +83,7 @@ class TestFinishedReturnsAreNeverRewritten:
         assert any("JUNE" in k for k in ks) and any("SEPTEMBER" in k for k in ks), ks
         assert all(not x.get("supersedes_dataset_key") for x in sent)
         assert not [e for e in r.events("dataset") if e.get("change") == "moved"]
-        june = [x for x in sent if "JUNE" in x["dataset_key"].upper()][-1]
+        june = [x for x in sent if "JUNE" in x["period_label"].upper()][-1]
         assert june["status"] == "Submitted & Verified"
 
     def test_a_form_change_carries_nothing_over(self, tmp_path):

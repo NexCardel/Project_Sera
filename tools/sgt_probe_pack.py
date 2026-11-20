@@ -7,7 +7,7 @@ and review rules R9 and R10 in section 10a.
 
 Strictly passive: it only reads (UI Automation properties, a screenshot of the window in front).
 It never clicks, types, scrolls, focuses or submits. A page is read only when its address is on
-the scope allow-list (core/vsdc/vsdc_scope.is_in_scope_url); other windows are only counted.
+the scope allow-list (core/sgt/capture/scope.is_in_scope_url); other windows are only counted.
 
 Six probes, each appends one section to ONE report per day:
 
@@ -54,7 +54,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-# The blueprint's gate numbers (section 4.4). core/vsdc/vsdc_gate.py does not exist yet; WP7 builds
+# The blueprint's gate numbers (section 4.4). core/sgt/capture/gate.py does not exist yet; WP7 builds
 # it from the values this probe confirms.
 GATE_SIZE = 32
 GATE_LEVELS = 16
@@ -119,11 +119,11 @@ def describe_url(url: Optional[str], in_scope: Optional[bool] = None) -> str:
     as its shape (never the host or path)."""
     if not url:
         return "none"
-    from core.vsdc import vsdc_scope
+    from core.sgt.capture import scope as sgt_scope
     if in_scope is None:
-        in_scope = vsdc_scope.is_in_scope_url(url)
+        in_scope = sgt_scope.is_in_scope_url(url)
     if in_scope:
-        return vsdc_scope.sanitize_page_url(url) or "[portal address, unreadable]"
+        return sgt_scope.sanitize_page_url(url) or "[portal address, unreadable]"
     kind = "url" if is_url_shaped(url) else "not a url"
     return f"[out of scope: {kind}, {len(url)} chars]"
 
@@ -450,7 +450,7 @@ def working_set_mb(pid: int) -> Optional[float]:
 
 
 def browser_names() -> Tuple[str, ...]:
-    from core.vsdc.vsdc_router import BROWSER_EXE_NAMES
+    from core.sgt.capture.windows import BROWSER_EXE_NAMES
     return tuple(BROWSER_EXE_NAMES)
 
 
@@ -633,8 +633,8 @@ def foreground_portal(worker: ComWorker) -> Optional[Win]:
         url = worker.call(lambda ctx: window_url(ctx, hwnd), timeout=5.0)
     except ProbeTimeout:
         return None
-    from core.vsdc import vsdc_scope
-    return Win(hwnd, exe, pid, url) if url and vsdc_scope.is_in_scope_url(url) else None
+    from core.sgt.capture import scope as sgt_scope
+    return Win(hwnd, exe, pid, url) if url and sgt_scope.is_in_scope_url(url) else None
 
 
 def _countdown(seconds: int) -> None:
@@ -658,7 +658,7 @@ def probe_doc_url(args: argparse.Namespace, rep: Report) -> int:
     if not wins:
         rep.line("No browser window is open. Open Edge, Chrome and Firefox on a portal page and run again.")
         return 1
-    from core.vsdc import vsdc_scope
+    from core.sgt.capture import scope as sgt_scope
     worker = ComWorker(mta=False)
     verdict: Dict[str, List[int]] = {}      # exe -> [on-screen docs, url-shaped, in scope, bar agrees]
     for n, w in enumerate(wins, 1):
@@ -677,7 +677,7 @@ def probe_doc_url(args: argparse.Namespace, rep: Report) -> int:
             rep.line("  no Document element found")
         for i, d in enumerate(docs):
             shaped = is_url_shaped(d["value"])
-            scope = bool(shaped and vsdc_scope.is_in_scope_url(d["value"]))
+            scope = bool(shaped and sgt_scope.is_in_scope_url(d["value"]))
             agree = "n/a" if not (bar and shaped) else ("yes" if urls_agree(bar, d["value"]) else "NO")
             rep.line(f"  document {i + 1}: on-screen={'no' if d['offscreen'] else 'yes'}  framework={d['framework'] or '?'}"
                      f"  value={'empty' if not d['value'] else describe_url(d['value'], scope)}"
@@ -717,7 +717,7 @@ def _pdf_sample(rep: Report, worker: ComWorker, hwnd: int, index: int, value: st
 def _use_mta_pool() -> None:
     """Make the app's own read worker (vsdc_uia_text._POOL) an MTA thread, replacements included."""
     import comtypes
-    from core.vsdc import vsdc_uia_text as u
+    from core.sgt.capture import uia_text as u
 
     def init_mta():
         comtypes.CoInitializeEx(comtypes.COINIT_MULTITHREADED)
@@ -730,7 +730,7 @@ def _use_mta_pool() -> None:
 
 
 def _worker_apartment() -> str:
-    from core.vsdc import vsdc_uia_text as u
+    from core.sgt.capture import uia_text as u
 
     def ask():
         kind, qualifier = ctypes.c_int(), ctypes.c_int()
@@ -744,7 +744,7 @@ def probe_read_timing(args: argparse.Namespace, rep: Report) -> int:
     if args.two_windows:
         return _two_windows(args, rep)
     from core.sgt_i import uia_nodes
-    from core.vsdc import vsdc_uia_text as u
+    from core.sgt.capture import uia_text as u
     if args.mta:
         _use_mta_pool()
     rep.section(f"read-timing{' --mta' if args.mta else ''}: {args.minutes} min, one read pair every {args.every:g} s")
@@ -811,7 +811,7 @@ def _read_pair(win: Win, u: Any, uia_nodes: Any) -> Dict[str, Any]:
 def _two_windows(args: argparse.Namespace, rep: Report) -> int:
     """R9: two portal windows of one browser process, read one after the other and then both at once."""
     from core.sgt_i import uia_nodes
-    from core.vsdc import vsdc_scope
+    from core.sgt.capture import scope as sgt_scope
     rep.section(f"read-timing --two-windows: {args.minutes} min, one round every {args.every:g} s")
     rep.line("Open two windows of the SAME browser, both on portal pages (the heaviest pages you have), "
              "neither minimised, both visible.")
@@ -823,7 +823,7 @@ def _two_windows(args: argparse.Namespace, rep: Report) -> int:
             url = url_worker.call(lambda ctx: window_url(ctx, w.hwnd), timeout=5.0)
         except ProbeTimeout:
             continue
-        if url and vsdc_scope.is_in_scope_url(url):
+        if url and sgt_scope.is_in_scope_url(url):
             by_pid.setdefault((w.pid, w.exe), []).append(w)
     pair = next((ws[:2] for ws in by_pid.values() if len(ws) >= 2), None)
     if pair is None:
@@ -946,7 +946,7 @@ def probe_gate(args: argparse.Namespace, rep: Report) -> int:
 
 def probe_toast(args: argparse.Namespace, rep: Report) -> int:
     from core.sgt_i import uia_events
-    from core.vsdc import vsdc_uia_text as u
+    from core.sgt.capture import uia_text as u
     rep.section(f"toast: {args.minutes} min, a UIA sample every {args.tick:g} s (+ OCR + FlashWatcher)")
     rep.line("Run during a real filing. Nothing is submitted by this tool; ARN-shaped tokens are only numbered.")
     _countdown(args.delay)
@@ -1056,7 +1056,7 @@ def _ocr_loop(state: Dict[str, int], stop: threading.Event, samples: List[Tuple[
 # ---- probe: switches --------------------------------------------------------------------------
 
 def probe_switches(args: argparse.Namespace, rep: Report) -> int:
-    from core.vsdc import vsdc_uia_text as u
+    from core.sgt.capture import uia_text as u
     rep.section(f"switches: {args.minutes} min, polled every {SWITCH_POLL_SEC:g} s")
     rep.line("Work normally. Only the number of switches is kept: no title, address or page text is read.")
     _countdown(args.delay)

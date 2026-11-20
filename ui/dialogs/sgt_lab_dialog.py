@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core.sgt.sgt_toolbox import SUBMIT_LEVELS
+from core.sgt.specs.toolbox import SUBMIT_LEVELS
 from core.sgt_i import lab, miner
 from core.sgt_i.residues import ResidueCounts
 

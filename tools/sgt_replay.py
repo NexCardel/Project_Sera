@@ -4,7 +4,7 @@ tools/sgt_replay.py - replay the pages SGT recorded on this PC
 Before a spec change goes live, see what it changes on real pages:
 
     python tools/sgt_replay.py baseline              # remember what SGT writes today
-    ... edit core/sgt/sgt_fields.json (or the override file) ...
+    ... edit core/sgt/specs/sgt_fields.json (or the override file) ...
     python tools/sgt_replay.py diff                  # what the edit changes, per session
     python tools/sgt_replay.py diff --specs my.json  # try a spec file without installing it
     python tools/sgt_replay.py show                  # what SGT writes, per session
@@ -25,11 +25,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.sgt.sgt_corpus import corpus_dir, load_pages          # noqa: E402
-from core.sgt.sgt_health import SpecStats                       # noqa: E402
-from core.sgt.sgt_replay import diff, replay                    # noqa: E402
-from core.sgt.sgt_shadow import shadow_dir                      # noqa: E402
-from core.sgt.sgt_specs import BUILTIN_FIELDS_PATH, SpecStore, override_path  # noqa: E402
+from core.sgt.corpus import corpus_dir, load_pages          # noqa: E402
+from core.sgt.spec_health import SpecStats                       # noqa: E402
+from core.sgt.replay import diff, replay                    # noqa: E402
+from core.sgt.engine import sgt_data_dir                      # noqa: E402
+from core.sgt.specs.specs import BUILTIN_FIELDS_PATH, SpecStore, override_path  # noqa: E402
 
 
 def main(argv=None) -> int:
@@ -41,7 +41,7 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     if args.command == "health":
-        summary = SpecStats(shadow_dir()).summary(date.today())
+        summary = SpecStats(sgt_data_dir()).summary(date.today())
         print(json.dumps(summary, indent=2) if summary else "No SGT reads recorded yet.")
         return 0
 

@@ -1,5 +1,5 @@
 """
-core/sgt/sgt_toolbox.py — the shared transform / check library
+core/sgt/specs/toolbox.py — the shared transform / check library
 ================================================================
 Field specs in sgt_fields.json name the tools they want ("transforms": ["upper"],
 "checks": ["gstin_checksum"]). These are GENERIC: none of them knows which datapoint it is

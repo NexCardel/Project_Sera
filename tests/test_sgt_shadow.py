@@ -10,10 +10,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 from PIL import Image
 
-from core.sgt.sgt_shadow import IDLE_END_SEC, RESUME_WINDOW_SEC, REREAD_AFTER_SEC, SgtShadow, is_blind
-from core.sgt.sgt_specs import BUILTIN_FIELDS_PATH, SpecStore
+from core.sgt.engine import IDLE_END_SEC, RESUME_WINDOW_SEC, REREAD_AFTER_SEC, SgtEngine, is_blind
+from core.sgt.specs.specs import BUILTIN_FIELDS_PATH, SpecStore
 from core.vsdc.vsdc_engines import SGT_DEFAULT, read_sgt_mode
-from core.vsdc.vsdc_router import SGT_OFF, SGT_SHADOW
+from core.sgt.router_link import SGT_LIVE, SGT_OFF
+from sgt_engine_patch import patch_engine
 
 ITR = "Income Tax"
 GST = "GST Portal"
@@ -47,7 +48,7 @@ class Rig:
             self.reads += 1
             return {"lines": list(self.page)}
 
-        self.sgt = SgtShadow(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None), read_uia=read,
+        self.sgt = SgtEngine(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None), read_uia=read,
                              dispatched_ids=lambda: list(dispatched), log_dir=self.log_dir,
                              clock=lambda: self.clock[0], today=lambda: date(2026, 7, 15),
                              echo=self.echoes.append)
@@ -515,13 +516,13 @@ class TestSessions:
         pans = sorted(e["payload"]["client_profile"]["pan"] for e in r.events("session_end"))
         assert pans == ["ABCPD1234E", "XYZAB9876C"]
 
-    def test_datasets_without_a_client_say_where_live_mode_would_send_them(self, tmp_path):
+    def test_datasets_without_a_client_say_they_were_written_unattributed(self, tmp_path):
         r = Rig(tmp_path)
         r.see(FILED_URL, filed_page()[1:], shade=100)            # no header name, no PAN
         r.sgt.end_all("quit")
         p = r.events("session_end")[0]["payload"]
         assert p["client_known"] is False and p["datasets"]
-        assert any("live mode would write these unattributed and alert" in m for m in r.echoes)
+        assert any("no PAN/GSTIN: written unattributed" in m for m in r.echoes)
 
 
 class TestNeverDisturbs:
@@ -569,7 +570,7 @@ class TestHud:
         r.see(LOGIN_URL + "/password", ["PAN", "ABCPD1234E", "Password"], shade=100)
         r.see(PROFILE_URL, PROFILE_PAGE, shade=110)
         ids = [h for h in r.hud if h[0] == "identity"]
-        assert len(ids) == 1 and "PAN: ABCPD1234E" in ids[0][2] and ids[0][2].endswith("SGT (Shadow)")
+        assert len(ids) == 1 and "PAN: ABCPD1234E" in ids[0][2] and ids[0][2].endswith("SGT (Live)")
 
     def test_a_return_found_carries_sgts_own_context(self, tmp_path):
         r = self.rig(tmp_path)
@@ -615,7 +616,7 @@ class TestHud:
         r = h.router
         r.assembler.current_filing_type = "GSTR-1"             # VSDC thinks something else
         r._hud_buffering = True
-        r.notify_sgt("capture", "Return captured", "x • SGT (Shadow)",
+        r.notify_sgt("capture", "Return captured", "x • SGT (Live)",
                      {"portal": ITR, "form": "ITR-4", "filing_pref": "Original", "period": "AY 2026-27"})
         seen = []
         r.on_activity = lambda *a: seen.append(dict(r.activity_context))
@@ -625,8 +626,8 @@ class TestHud:
 
     def test_pill_colours_the_sgt_tag(self):
         from ui.components.vsdc_hud_pill import VSDCHudPill
-        html_out = VSDCHudPill._format_subtitle_html("ASHOK SEN • Ack: 123456789150726 • SGT (Shadow)")
-        assert "#FFA657" in html_out and "SGT (Shadow)" in html_out and "123456789150726" in html_out
+        html_out = VSDCHudPill._format_subtitle_html("ASHOK SEN • Ack: 123456789150726 • SGT (Live)")
+        assert "#FFA657" in html_out and "SGT (Live)" in html_out and "123456789150726" in html_out
 
 
 # ── The switch ───────────────────────────────────────────────────────────────────
@@ -634,7 +635,7 @@ class TestSwitch:
     def test_reading_the_setting(self):
         assert SGT_DEFAULT == "live"                                    # SGT live is the capture engine
         assert read_sgt_mode(lambda k, d=None: d) == "live"
-        assert read_sgt_mode(lambda k, d=None: "Shadow") == "shadow"
+        assert read_sgt_mode(lambda k, d=None: "Shadow") == "live"      # shadow mode was removed: reads as live
         assert read_sgt_mode(lambda k, d=None: "off") == "off"
         assert read_sgt_mode(lambda k, d=None: "garbage") == "live"
 
@@ -649,30 +650,39 @@ class TestSwitch:
     def test_off_by_default_and_applied_live(self, harness):
         r = harness.router
         assert r._sgt_mode == SGT_OFF
-        r.apply_engine_settings(True, True, False, sgt="shadow")
-        assert r._sgt_mode == SGT_SHADOW and not r._sgt_alone and not r._engines_off
+        r.apply_engine_settings(True, True, False, sgt="live")
+        assert r._sgt_mode == SGT_LIVE and not r._sgt_alone and not r._engines_off
         r.apply_engine_settings(True, True, False)
         assert r._sgt_mode == SGT_OFF
 
     def test_sgt_alone_keeps_the_worker_ticking_but_routes_no_crosshair(self, harness):
         r = harness.router
-        r.apply_engine_settings(False, False, False, sgt="shadow")
+        r.apply_engine_settings(False, False, False, sgt="live")
         assert r._sgt_alone and not r._engines_off
         r.apply_engine_settings(False, False, False)
         assert r._engines_off
 
     def test_env_override(self, harness):
+        with patch.dict(os.environ, {"SGT_MODE": "live"}):
+            harness.router.apply_engine_settings(True, True, False, sgt="off")
+            assert harness.router._sgt_mode == SGT_LIVE
+
+    def test_a_stored_shadow_mode_runs_live(self, harness):
+        """Shadow mode was removed: a PC whose setting (or SGT_MODE) still says "shadow" runs SGT live."""
+        harness.router.apply_engine_settings(True, True, False, sgt="shadow")
+        assert harness.router._sgt_mode == SGT_LIVE
+        harness.router.apply_engine_settings(True, True, False, sgt="off")
         with patch.dict(os.environ, {"SGT_MODE": "shadow"}):
             harness.router.apply_engine_settings(True, True, False, sgt="off")
-            assert harness.router._sgt_mode == SGT_SHADOW
+            assert harness.router._sgt_mode == SGT_LIVE
 
-    # The two below go through the capture loop's Platform seam (core/vsdc/vsdc_capture, WP4): the
+    # The two below go through the capture loop's Platform seam (core/sgt/capture/loop, WP4): the
     # crosshair engines still tick beside it, with the router's own URL read.
-    def test_shadow_observes_in_scope_ticks_and_never_changes_the_result(self, harness, tmp_path):
+    def test_sgt_observes_in_scope_ticks_and_never_changes_the_result(self, harness, tmp_path):
         from tests.test_vsdc247_integration import PORTAL_ITR, TITLE_ITR
         from tests.test_vsdc_capture import attach_fake_capture
         r = harness.router
-        r.apply_engine_settings(True, True, False, sgt="shadow")
+        r.apply_engine_settings(True, True, False, sgt="live")
         seen = []
         fake = MagicMock()
         fake.absorb.side_effect = lambda *a, **k: seen.append((a, k))
@@ -990,7 +1000,6 @@ class TestIdleResume:
     @staticmethod
     def _fake_time(monkeypatch, wall):
         import time as real_time
-        from core.sgt import sgt_shadow
 
         class FakeTime:
             def time(self):
@@ -999,7 +1008,7 @@ class TestIdleResume:
             def __getattr__(self, name):
                 return getattr(real_time, name)
 
-        monkeypatch.setattr(sgt_shadow, "time", FakeTime())
+        patch_engine(monkeypatch, "time", FakeTime())
 
     def _park_a_client(self, tmp_path, state):
         r = Rig(tmp_path)
@@ -1096,10 +1105,10 @@ class TestIdleResume:
     def test_idle_maths_survive_a_wall_clock_jump(self, tmp_path, monkeypatch):
         wall, mono = [5_000_000.0], [1_000.0]
         self._fake_time(monkeypatch, wall)
-        from core.sgt import sgt_shadow
-        monkeypatch.setattr(sgt_shadow.time, "monotonic", lambda: mono[0], raising=False)
+        from core.sgt.engine import engine as engine_mod
+        monkeypatch.setattr(engine_mod.time, "monotonic", lambda: mono[0], raising=False)
         page = []
-        sgt = SgtShadow(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
+        sgt = SgtEngine(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
                         read_uia=lambda h: {"lines": list(page)}, dispatched_ids=lambda: [],
                         log_dir=tmp_path / "shadow", today=lambda: date(2026, 7, 15), echo=lambda m: None)
         assert sgt._monotonic and sgt._clock() == 1_000.0

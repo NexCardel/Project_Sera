@@ -114,5 +114,5 @@ def test_counts_once_per_page_visit_not_per_read(tmp_path: Path):
 
 def test_residues_run_in_sgt_i_only():
     assert any(isinstance(c, ResiduesComponent) for c in default_components())
-    import core.sgt.sgt_health as health
+    import core.sgt.spec_health as health
     assert not hasattr(health, "compute_residues")

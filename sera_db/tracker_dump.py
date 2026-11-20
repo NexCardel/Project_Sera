@@ -316,7 +316,7 @@ class TrackerDumpMixin:
         valid_id = None
         valid_gid = None
         unassigned_identity = None
-        matched_cand = None             # the candidate a saved client holds (core/sgt/sgt_evidence)
+        matched_cand = None             # the candidate a saved client holds (core/sgt/evidence)
         ex_json = None                  # the payload of the row this one replaces
 
         # 1. Authoritative Match: Resolve identity against master.db vault
@@ -637,8 +637,8 @@ class TrackerDumpMixin:
             # replaces, and the user's wrong-client mark. Never allowed to stop the row being written.
             if isinstance(p_obj, dict):
                 try:
-                    from core.sgt import sgt_evidence
-                    if sgt_evidence.finish_row(p_obj, candidates, matched_cand, near,
+                    from core.sgt import evidence
+                    if evidence.finish_row(p_obj, candidates, matched_cand, near,
                                                bool(valid_id) and matched_cand is None, ex_json):
                         raw_payload_json = json.dumps(p_obj, ensure_ascii=False)
                 except Exception as e:
@@ -1465,23 +1465,23 @@ class TrackerDumpMixin:
             conn.commit()
         return True
 
-    # ── SGT evidence (core/sgt/sgt_evidence.py) ──────────────────────────────────
+    # ── SGT evidence (core/sgt/evidence.py) ──────────────────────────────────
     def is_tracker_dump_marked_wrong(self, dump_id: int) -> bool:
         with self._connect_raw() as conn:
             row = conn.execute("SELECT raw_payload_json FROM tracker_dump WHERE id = ?", (dump_id,)).fetchone()
-        from core.sgt import sgt_evidence
-        return bool(row) and sgt_evidence.is_marked_wrong(row[0] or "")
+        from core.sgt import evidence
+        return bool(row) and evidence.is_marked_wrong(row[0] or "")
 
     def mark_tracker_dump_wrong_client(self, dump_id: int, wrong: bool = True) -> bool:
         """Sets or clears the user's "this row is on the wrong client" mark. It lives in the payload,
         so Sera Sync carries it to every PC. Nothing else about the row changes."""
-        from core.sgt import sgt_evidence
+        from core.sgt import evidence
         from core.vsdc.vsdc_alerts import device_name
         with self._connect_raw() as conn:
             row = conn.execute("SELECT raw_payload_json FROM tracker_dump WHERE id = ?", (dump_id,)).fetchone()
             if not row:
                 return False
-            new_json = sgt_evidence.set_wrong_mark(row[0], wrong, device_name(),
+            new_json = evidence.set_wrong_mark(row[0], wrong, device_name(),
                                                    datetime.datetime.now().isoformat(timespec="seconds"))
             if new_json is None:
                 return False
@@ -1493,7 +1493,7 @@ class TrackerDumpMixin:
         """The SGT tracker rows worth a look, for the evidence export: rows marked wrong, rows whose
         evidence block carries a flag, and rows sitting on a client that does not hold the row's own
         PAN / GSTIN (this last check also covers rows older than the evidence block)."""
-        from core.sgt import sgt_evidence
+        from core.sgt import evidence
         cols = ("id", "client_id", "unassigned_identity", "portal", "period_label", "arn_number",
                 "capture_method", "status", "raw_payload_json", "captured_by", "created_at", "dataset_key")
         with self._connect_raw() as r_conn:
@@ -1506,11 +1506,11 @@ class TrackerDumpMixin:
             with self._connect() as m_conn:
                 for cid, value in m_conn.execute("SELECT client_id, value FROM client_values").fetchall():
                     if cid in wanted:
-                        ids_by_client.setdefault(cid, set()).update(sgt_evidence.id_forms([value]))
+                        ids_by_client.setdefault(cid, set()).update(evidence.id_forms([value]))
         out = []
         for r in rows:
             cid = r["client_id"]
-            entry = sgt_evidence.export_entry(r, ids_by_client.get(cid, set()) if cid else None)
+            entry = evidence.export_entry(r, ids_by_client.get(cid, set()) if cid else None)
             if entry is not None:
                 out.append(entry)
         return out

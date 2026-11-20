@@ -1,4 +1,4 @@
-"""The capture loop (core/vsdc/vsdc_capture): SGT's path out of the router.
+"""The capture loop (core/sgt/capture/loop): SGT's path out of the router.
 
 SGT never-miss blueprint WP4 with R1, R2, R7, R10. A fake platform (windows, screenshots) and the
 WP3 fake reader backend - no browser, no portal, no COM; every page, URL and line here is made up.
@@ -15,15 +15,17 @@ from PIL import Image, ImageDraw
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.vsdc import vsdc_capture, vsdc_diag, vsdc_gate
-from core.vsdc.vsdc_capture import CaptureLoop
-from core.vsdc.vsdc_reader import PageReader
-from core.vsdc.vsdc_windows import WindowInfo
+from core.vsdc import vsdc_diag
+from core.sgt.capture import loop
+from core.sgt.capture import gate as sgt_gate
+from core.sgt.capture.loop import CaptureLoop
+from core.sgt.capture.reader import PageReader
+from core.sgt.capture.windows import WindowInfo
 from tests.test_vsdc_reader import PORTAL, PORTAL_2, Clock, Doc, FakeBackend, Window, wait_until
 
 HWND = 7
 TITLE = "GST Portal - Google Chrome"
-TICK = vsdc_capture.FRAME_TICK_SEC
+TICK = loop.FRAME_TICK_SEC
 
 
 class FakePlatform:
@@ -74,9 +76,9 @@ class FakeSgt:
         pass
 
     def absorb(self, r, frame=None, ocr=None, now=None, blind_retries=0):
-        from core.vsdc import vsdc_scope
-        self.observed.append(SimpleNamespace(hwnd=r.ctx.hwnd, portal=vsdc_scope.portal_for_url(r.url) or r.ctx.portal,
-                                             url=vsdc_scope.sanitize_page_url(r.url), frame=frame, title=r.ctx.title,
+        from core.sgt.capture import scope as sgt_scope
+        self.observed.append(SimpleNamespace(hwnd=r.ctx.hwnd, portal=sgt_scope.portal_for_url(r.url) or r.ctx.portal,
+                                             url=sgt_scope.sanitize_page_url(r.url), frame=frame, title=r.ctx.title,
                                              tab=r.tab_after, read={"lines": list(r.lines), "docs": r.docs}))
 
     def wants_read(self, hwnd):
@@ -171,8 +173,8 @@ def test_title_grace_is_never_refreshed_by_a_title(rig):
         r.step()
         scope.append((r.clock(), r.health.window.call_args.args[1]))
     lost = r.clock.t - 40 * TICK
-    assert any(ok for t, ok in scope if t - lost < vsdc_capture.SCOPE_GRACE_SEC)
-    assert not any(ok for t, ok in scope if t - lost > vsdc_capture.SCOPE_GRACE_SEC + vsdc_capture.URL_FRESH_SEC)
+    assert any(ok for t, ok in scope if t - lost < loop.SCOPE_GRACE_SEC)
+    assert not any(ok for t, ok in scope if t - lost > loop.SCOPE_GRACE_SEC + loop.URL_FRESH_SEC)
 
 
 def test_a_url_change_bursts_three_reads(rig):
@@ -189,8 +191,8 @@ def test_a_still_page_costs_one_signature_per_tick(rig, monkeypatch):
     r = rig()
     r.warm()
     signed = []
-    real = vsdc_gate.frame_signature
-    monkeypatch.setattr(vsdc_gate, "frame_signature", lambda img: (signed.append(1), real(img))[1])
+    real = sgt_gate.frame_signature
+    monkeypatch.setattr(sgt_gate, "frame_signature", lambda img: (signed.append(1), real(img))[1])
     shots = r.platform.shots
     r.step(10)                                                # 3.5 s: still page, no periodic read yet
     assert len(signed) == 10 and r.platform.shots - shots == 10
@@ -297,7 +299,7 @@ def test_a_closed_window_ends_its_sgt_sessions(rig):
     r.platform.alive.clear()
     r.win.closed = True
     r.platform.fg = 0
-    r.step(int(vsdc_capture.PRUNE_EVERY_SEC / TICK) + 2)
+    r.step(int(loop.PRUNE_EVERY_SEC / TICK) + 2)
     assert (HWND, "window closed") in r.sgt.ended
 
 
@@ -343,7 +345,7 @@ class FakeLane:
         pass
 
     def finish(self, ctx, lines=("Fictional toast",), tab=None):
-        from core.vsdc.vsdc_reader import ReadResult
+        from core.sgt.capture.reader import ReadResult
         tab = ctx.tab if tab is None else tab
         self.finished.append(ReadResult(ctx=ctx, source="ocr", lines=list(lines), docs=[], doc_urls=[], tab_before=tab,
                                         tab_after=tab, url_before=ctx.url, url_after=ctx.url, started_at=ctx.asked_at,
@@ -394,7 +396,7 @@ def test_flash_ocr_fires_when_uia_is_inflight(rig):
 def test_flash_ocr_fires_when_uia_is_slow(rig):
     r = ocr_rig(rig)
     r.warm()
-    r.reader.page_ms = lambda hwnd, url: vsdc_gate.FLASH_UIA_SLOW_MS + 100
+    r.reader.page_ms = lambda hwnd, url: sgt_gate.FLASH_UIA_SLOW_MS + 100
     r.platform.paint(TOAST)
     r.step(1)
     assert [c.reason for c in r.lane.requests] == ["flash"]
@@ -434,7 +436,7 @@ def test_a_scan_the_lane_refuses_is_asked_again(rig):
     r = ocr_rig(rig)
     r.warm()
     r.lane.accept = False                                         # the window had a scan within the last second
-    r.reader.page_ms = lambda hwnd, url: vsdc_gate.FLASH_UIA_SLOW_MS + 100
+    r.reader.page_ms = lambda hwnd, url: sgt_gate.FLASH_UIA_SLOW_MS + 100
     r.platform.paint(TOAST)
     r.step(2)
     assert r.lane.requests == []
@@ -448,7 +450,7 @@ def test_a_scan_the_lane_refuses_is_asked_again(rig):
 def test_an_ocr_scan_is_absorbed_only_after_a_read_confirms_its_tab(rig):
     r = ocr_rig(rig)
     r.warm()
-    r.reader.page_ms = lambda hwnd, url: vsdc_gate.FLASH_UIA_SLOW_MS + 100
+    r.reader.page_ms = lambda hwnd, url: sgt_gate.FLASH_UIA_SLOW_MS + 100
     r.platform.paint(TOAST)
     r.step(1)
     (ctx,) = r.lane.requests
@@ -462,7 +464,7 @@ def test_an_ocr_scan_is_absorbed_only_after_a_read_confirms_its_tab(rig):
 def test_an_ocr_scan_taken_across_a_tab_switch_is_dropped(rig):
     r = ocr_rig(rig)
     r.warm()
-    r.reader.page_ms = lambda hwnd, url: vsdc_gate.FLASH_UIA_SLOW_MS + 100
+    r.reader.page_ms = lambda hwnd, url: sgt_gate.FLASH_UIA_SLOW_MS + 100
     r.win.tab = "tab-2"                                           # the user just switched tab: the loop does not know yet
     r.platform.paint(TOAST)                                       # so this picture is the new page, taken as the old one
     r.step(1)
@@ -476,7 +478,7 @@ def test_an_ocr_scan_taken_across_a_tab_switch_is_dropped(rig):
 def test_an_ocr_scan_from_before_sgt_was_switched_off_is_never_absorbed(rig):
     r = ocr_rig(rig)
     r.warm()
-    r.reader.page_ms = lambda hwnd, url: vsdc_gate.FLASH_UIA_SLOW_MS + 100
+    r.reader.page_ms = lambda hwnd, url: sgt_gate.FLASH_UIA_SLOW_MS + 100
     r.platform.paint(TOAST)
     r.step(1)
     (ctx,) = r.lane.requests
@@ -492,7 +494,7 @@ def test_a_closed_window_is_forgotten_by_the_lane(rig):
     r.platform.alive.clear()
     r.win.closed = True
     r.platform.fg = 0
-    r.step(int(vsdc_capture.PRUNE_EVERY_SEC / TICK) + 2)
+    r.step(int(loop.PRUNE_EVERY_SEC / TICK) + 2)
     assert HWND in r.lane.closed
 
 
@@ -560,11 +562,11 @@ def _behind(r, title=TITLE):
 
 
 def test_a_background_window_is_looked_at_every_bg_tick(rig):
-    from core.vsdc import vsdc_windows
+    from core.sgt.capture import windows as sgt_windows
     r = rig()
     _behind(r)
     r.step(30)                                                # 10.5 s at 0.35 s a tick
-    looks = 10.5 / vsdc_windows.BG_TICK_SEC
+    looks = 10.5 / sgt_windows.BG_TICK_SEC
     assert looks - 2 <= r.platform.shots <= looks + 1
     assert r.page_reads() and all(c.background for c in r.asked)
     assert r.backend.reads
@@ -640,12 +642,12 @@ def test_a_large_change_after_a_fast_read_keeps_the_normal_gap(rig):
     r.platform.paint((0, 0, 319, 319), 50)
     r.step(2)
     ws = r.loop._states[HWND]
-    assert ws.last_read_ms < vsdc_gate.FLASH_UIA_SLOW_MS
+    assert ws.last_read_ms < sgt_gate.FLASH_UIA_SLOW_MS
     before = ws.last_read_finished
     r.platform.paint((0, 0, 319, 319), 150)
     assert not CaptureLoop._urgent(ws, 'frame', r.clock())
-    assert not CaptureLoop._spaced(ws, 'frame', before + vsdc_capture.BURST_GAP_SEC, urgent=False)
-    assert CaptureLoop._spaced(ws, 'frame', before + vsdc_capture.MIN_READ_GAP_SEC, urgent=False)
+    assert not CaptureLoop._spaced(ws, 'frame', before + loop.BURST_GAP_SEC, urgent=False)
+    assert CaptureLoop._spaced(ws, 'frame', before + loop.MIN_READ_GAP_SEC, urgent=False)
 
 
 def test_a_missing_frame_signature_is_not_urgent(rig):
@@ -660,13 +662,13 @@ def test_a_missing_frame_signature_is_not_urgent(rig):
 
 
 def test_a_small_change_after_a_slow_read_is_not_urgent():
-    from core.vsdc.vsdc_capture import WindowState
+    from core.sgt.capture.loop import WindowState
     ws = WindowState(hwnd=1, frame_cells=20, last_read_ms=1200)
     assert not CaptureLoop._urgent(ws, 'frame', 1000.0)
 
 
 def test_urgent_has_a_cooldown():
-    from core.vsdc.vsdc_capture import WindowState
+    from core.sgt.capture.loop import WindowState
     now = 1000.0
     ws = WindowState(hwnd=1, frame_cells=500, last_read_ms=1200, last_urgent_at=now)
     assert not CaptureLoop._urgent(ws, 'frame', now + 1.0)

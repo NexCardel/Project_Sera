@@ -1,4 +1,4 @@
-"""Reader v2 (core/vsdc/vsdc_reader): tickets, one lane per window with a content and a scope
+"""Reader v2 (core/sgt/capture/reader): tickets, one lane per window with a content and a scope
 worker, the cached read, torn detection, the Document URL first.
 
 SGT never-miss blueprint WP3 with R2, R3, R9. A fake backend only - no browser, no portal, no COM;
@@ -16,9 +16,10 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.sgt_i import uia_nodes
-from core.vsdc import vsdc_diag, vsdc_reader
-from core.vsdc import vsdc_uia_text as uia_text
-from core.vsdc.vsdc_reader import PageReader, ReadContext
+from core.vsdc import vsdc_diag
+from core.sgt.capture import reader as sgt_reader
+from core.sgt.capture import uia_text
+from core.sgt.capture.reader import PageReader, ReadContext
 
 PORTAL = "https://services.gst.gov.in/services/auth/fowelcome"
 PORTAL_2 = "https://services.gst.gov.in/services/auth/returns"
@@ -246,7 +247,7 @@ def test_a_wedged_lane_is_replaced_and_its_late_result_is_marked_abandoned(clean
     c1 = ctx(1, clock)
     assert reader.request(c1) == "started"
     wait_until(lambda: backend.reads)
-    clock.advance(vsdc_reader.WEDGE_SEC)
+    clock.advance(sgt_reader.WEDGE_SEC)
     c2 = ctx(1, clock)
     assert reader.request(c2) == "started"            # a fresh worker took it
     (r2,) = collect(reader, 1)
@@ -262,20 +263,20 @@ def test_a_wedged_lane_is_replaced_and_its_late_result_is_marked_abandoned(clean
 
 def test_five_wedged_workers_pause_then_resume(cleanup):
     doc = Doc(PORTAL)
-    gates = [threading.Event() for _ in range(vsdc_reader.MAX_WEDGED_WORKERS)]
+    gates = [threading.Event() for _ in range(sgt_reader.MAX_WEDGED_WORKERS)]
     doc.gates.extend(gates)
     reader, backend, clock, notes = make({1: Window(docs=[doc])})
     cleanup[0].append(reader)
     cleanup[1].extend(gates)
-    for i in range(vsdc_reader.MAX_WEDGED_WORKERS):
+    for i in range(sgt_reader.MAX_WEDGED_WORKERS):
         assert reader.request(ctx(1, clock)) == "started"
         wait_until(lambda: len(backend.reads) == i + 1)
-        clock.advance(vsdc_reader.WEDGE_SEC)
+        clock.advance(sgt_reader.WEDGE_SEC)
     assert reader.request(ctx(1, clock)) == "paused"
-    assert reader.paused() and reader.stats()["stuck"] == vsdc_reader.MAX_WEDGED_WORKERS
-    clock.advance(vsdc_reader.PAUSE_SEC / 2)
+    assert reader.paused() and reader.stats()["stuck"] == sgt_reader.MAX_WEDGED_WORKERS
+    clock.advance(sgt_reader.PAUSE_SEC / 2)
     assert reader.request(ctx(1, clock)) == "paused"
-    clock.advance(vsdc_reader.PAUSE_SEC / 2)
+    clock.advance(sgt_reader.PAUSE_SEC / 2)
     c = ctx(1, clock)
     assert reader.request(c) == "started"             # tried again, never off for the run
     assert any(r.ctx is c and r.error == "" for r in collect(reader, 1))
@@ -478,19 +479,19 @@ def test_documents_with_urls_reads_value_and_offscreen_from_the_cache():
 # ---- lanes --------------------------------------------------------------------------------
 
 def test_background_window_gets_no_lane_past_the_cap(cleanup):
-    windows = {h: Window(pid=h, docs=[Doc(PORTAL)]) for h in range(1, vsdc_reader.MAX_LANES + 3)}
+    windows = {h: Window(pid=h, docs=[Doc(PORTAL)]) for h in range(1, sgt_reader.MAX_LANES + 3)}
     reader, backend, clock, _ = make(windows)
     cleanup[0].append(reader)
-    for h in range(1, vsdc_reader.MAX_LANES + 1):
+    for h in range(1, sgt_reader.MAX_LANES + 1):
         assert reader.request(ctx(h, clock, background=(h != 1))) == "started"
         clock.advance(1)
-    collect(reader, vsdc_reader.MAX_LANES)
-    extra = vsdc_reader.MAX_LANES + 1
+    collect(reader, sgt_reader.MAX_LANES)
+    extra = sgt_reader.MAX_LANES + 1
     assert reader.request(ctx(extra, clock, background=True)) == "no-lane"
     assert reader.stats()["no_lane"] == 1
     # the window in front always gets a lane: the least recently used background lane goes
     assert reader.request(ctx(extra + 1, clock)) == "started"
-    assert reader.stats()["lanes"] == vsdc_reader.MAX_LANES
+    assert reader.stats()["lanes"] == sgt_reader.MAX_LANES
     assert reader.page_ms(2, PORTAL) == 0.0 and reader.page_ms(1, PORTAL) >= 0.0
     collect(reader, 1)
 
@@ -511,14 +512,14 @@ def test_an_idle_lane_is_closed(cleanup):
     cleanup[0].append(reader)
     reader.request(ctx(1, clock))
     collect(reader, 1)
-    clock.advance(vsdc_reader.LANE_IDLE_SEC)
+    clock.advance(sgt_reader.LANE_IDLE_SEC)
     reader.results()
     assert reader.stats()["lanes"] == 0
 
 
 def test_a_result_too_old_is_dropped(cleanup):
     doc = Doc(PORTAL)
-    doc.cost_sec = vsdc_reader.RESULT_MAX_AGE_SEC + 1
+    doc.cost_sec = sgt_reader.RESULT_MAX_AGE_SEC + 1
     reader, backend, clock, notes = make({1: Window(docs=[doc])})
     cleanup[0].append(reader)
     reader.request(ctx(1, clock))
@@ -549,7 +550,7 @@ def test_scope_stays_fresh_while_a_5s_read_runs(cleanup):
         assert reader.request(ctx(1, clock, reason="scope")) == "started"
         (r,) = collect(reader, 1)
         assert r.url_only and r.url == PORTAL
-        assert clock() - r.finished_at < vsdc_reader.URL_FRESH_SEC
+        assert clock() - r.finished_at < sgt_reader.URL_FRESH_SEC
         assert reader.inflight(1) is page                # the page read is still running
     gate.set()
     (r,) = collect(reader, 1)
@@ -564,18 +565,18 @@ def test_flash_ocr_fires_during_a_heavy_read(cleanup):
     clock.advance(3.0)
     reader.request(ctx(1, clock, reason="scope"))
     (r,) = collect(reader, 1)
-    scope_open = clock() - r.finished_at < vsdc_reader.URL_FRESH_SEC and r.url == PORTAL
+    scope_open = clock() - r.finished_at < sgt_reader.URL_FRESH_SEC and r.url == PORTAL
     lane_busy = reader.inflight(1) is not None
     assert scope_open and lane_busy
-    from core.vsdc import vsdc_gate
-    big = vsdc_gate.FLASH_MIN_CELLS
-    assert vsdc_gate.flash_wanted(big, reader.inflight(1) is not None, reader.page_ms(1, PORTAL), reader.paused())
+    from core.sgt.capture import gate as sgt_gate
+    big = sgt_gate.FLASH_MIN_CELLS
+    assert sgt_gate.flash_wanted(big, reader.inflight(1) is not None, reader.page_ms(1, PORTAL), reader.paused())
     gate.set()
     collect(reader, 1)
     assert reader.page_ms(1, PORTAL) >= 3000          # the next frame on this page counts as slow too
     # the read is over, but the page is known to be slow: the flash trigger still fires for the next toast
-    assert vsdc_gate.flash_wanted(big, reader.inflight(1) is not None, reader.page_ms(1, PORTAL), reader.paused())
-    assert not vsdc_gate.flash_wanted(big - 1, True, reader.page_ms(1, PORTAL), reader.paused())
+    assert sgt_gate.flash_wanted(big, reader.inflight(1) is not None, reader.page_ms(1, PORTAL), reader.paused())
+    assert not sgt_gate.flash_wanted(big - 1, True, reader.page_ms(1, PORTAL), reader.paused())
 
 
 # ---- R9: at most one heavy read per browser process ---------------------------------------
@@ -590,7 +591,7 @@ def test_two_heavy_reads_of_one_browser_never_run_at_once(cleanup):
     collect(reader, 1)
     reader.request(ctx(2, clock, url=PORTAL_2))
     collect(reader, 1)
-    assert reader.page_ms(1, PORTAL) > vsdc_reader.HEAVY_READ_MS
+    assert reader.page_ms(1, PORTAL) > sgt_reader.HEAVY_READ_MS
 
     gate = threading.Event()
     a.gates.append(gate)
@@ -632,15 +633,15 @@ def test_workers_are_mta_by_default_and_sta_on_request(monkeypatch):
     calls = []
     monkeypatch.setattr(comtypes, "CoInitializeEx", lambda flags: calls.append(("ex", flags)))
     monkeypatch.setattr(comtypes, "CoInitialize", lambda: calls.append(("sta", None)))
-    assert vsdc_reader.WORKER_APARTMENT == "mta"
-    vsdc_reader.init_com()
-    vsdc_reader.init_com("sta")
+    assert sgt_reader.WORKER_APARTMENT == "mta"
+    sgt_reader.init_com()
+    sgt_reader.init_com("sta")
     assert calls == [("ex", comtypes.COINIT_MULTITHREADED), ("sta", None)]
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="real UI Automation")
 def test_the_real_backend_starts_on_an_mta_thread_and_reads_no_window():
-    backend, out = vsdc_reader.UiaBackend(), {}
+    backend, out = sgt_reader.UiaBackend(), {}
 
     def run():
         try:
@@ -715,7 +716,7 @@ def test_diag_lines_hold_no_urls(cleanup):
     cleanup[1].append(gate)
     reader.request(ctx(1, clock))
     wait_until(lambda: backend.reads)
-    clock.advance(vsdc_reader.WEDGE_SEC + vsdc_reader.RESULT_MAX_AGE_SEC)
+    clock.advance(sgt_reader.WEDGE_SEC + sgt_reader.RESULT_MAX_AGE_SEC)
     reader.request(ctx(1, clock))
     gate.set()
     collect(reader, 1)
@@ -772,13 +773,13 @@ def test_b5_early_abandon_promoted_to_wedged_if_running_past_20s(cleanup):
 
 def test_b5_early_abandon_respects_thread_cap(cleanup):
     doc = Doc(PORTAL)
-    gates = [threading.Event() for _ in range(vsdc_reader.MAX_EARLY_ABANDONED + 1)]
+    gates = [threading.Event() for _ in range(sgt_reader.MAX_EARLY_ABANDONED + 1)]
     doc.gates.extend(gates)
     reader, backend, clock, notes = make({1: Window(docs=[doc])})
     cleanup[0].append(reader)
     for g in gates:
         cleanup[1].append(g)
-    for _ in range(vsdc_reader.MAX_EARLY_ABANDONED):
+    for _ in range(sgt_reader.MAX_EARLY_ABANDONED):
         c = ctx(1, clock)
         assert reader.request(c) == "started"
         wait_until(lambda: backend.reads)

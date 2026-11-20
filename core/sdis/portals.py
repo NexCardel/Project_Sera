@@ -11,13 +11,13 @@ from typing import Dict, List
 
 def registered_portals() -> List[Dict]:
     """[{name, domains, source}] - source "builtin" or "service"."""
-    from core.vsdc import vsdc_scope        # importing core.vsdc loads Qt: only when needed
-    out = [{"name": "Income Tax", "domains": (vsdc_scope.INCOME_TAX_DOMAIN,) + vsdc_scope.extra_domains().get("Income Tax", ()),
+    from core.sgt.capture import scope        # imported when needed
+    out = [{"name": "Income Tax", "domains": (scope.INCOME_TAX_DOMAIN,) + scope.extra_domains().get("Income Tax", ()),
             "source": "builtin"},
-           {"name": "GST Portal", "domains": (vsdc_scope.GST_DOMAIN,) + vsdc_scope.extra_domains().get("GST Portal", ()),
+           {"name": "GST Portal", "domains": (scope.GST_DOMAIN,) + scope.extra_domains().get("GST Portal", ()),
             "source": "builtin"}]
     builtin = {p["name"] for p in out}
-    for name, domains in vsdc_scope.service_domains().items():
+    for name, domains in scope.service_domains().items():
         if name not in builtin:
             out.append({"name": name, "domains": tuple(domains), "source": "service"})
     return out

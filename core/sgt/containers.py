@@ -1,5 +1,5 @@
 """
-core/sgt/sgt_containers.py - SDIS dataset containers inside SGT (blueprint S.2, S.3, S.4)
+core/sgt/containers.py - SDIS dataset containers inside SGT (blueprint S.2, S.3, S.4)
 =========================================================================================
 Pure: no UIA, no database. The containers document comes from core.sdis.config (a refused file
 keeps the last good one; no file -> no containers). SGT hands this module the values its SDIS
@@ -23,7 +23,7 @@ that changed.
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from .sgt_toolbox import SUBMIT_LEVELS, is_submit_level, submit_level
+from core.sgt.specs.toolbox import SUBMIT_LEVELS, is_submit_level, submit_level
 
 SPEC_PREFIX = "sdis."                   # core/sdis/register.py names every SDIS spec so
 KEYED_MINIMUM = SUBMIT_LEVELS[1]        # a keyed dataset is at least a Draft (S.2)

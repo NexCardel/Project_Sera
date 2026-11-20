@@ -10,14 +10,14 @@ from pathlib import Path
 
 import pytest
 
-from core.sgt import sgt_specs
-from core.sgt.sgt_toolbox import CHECKS, SUBMIT_LEVELS, c_gstin_checksum, ddmmyy_tail_date
+from core.sgt.specs import specs
+from core.sgt.specs.toolbox import CHECKS, SUBMIT_LEVELS, c_gstin_checksum, ddmmyy_tail_date
 from core.sgt_i import miner
 from core.sgt_i import page_map as pm
 from core.sgt_i.atlas import Atlas
 from core.sgt_i.stats import ContainerStats
 
-BASE = [sgt_specs.BUILTIN_FIELDS_PATH]          # the shipped file only - no PC override in tests
+BASE = [specs.BUILTIN_FIELDS_PATH]          # the shipped file only - no PC override in tests
 GOLDEN = Path(__file__).parent / "sgt_golden" / "gst_return_filed.json"
 PORTAL = "Example Portal"
 
@@ -34,7 +34,7 @@ def cfg(**kw):
 
 
 def registry():
-    return sgt_specs.load_registry(BASE)
+    return specs.load_registry(BASE)
 
 
 def business_page(pan, reg_date, code, notices, help_label=None):
@@ -80,7 +80,7 @@ def test_fictional_generators_give_valid_shapes_checksums_and_dates():
         assert c_gstin_checksum(gstin, None) and gstin[2:12] == pan
         ack = miner.fictional_ack(n)
         d = ddmmyy_tail_date(ack)
-        assert len(ack) == 15 and d is not None and d < sgt_specs.SELF_TEST_TODAY
+        assert len(ack) == 15 and d is not None and d < specs.SELF_TEST_TODAY
     assert miner.fictional_date("99/99/9999") == "25/06/2026"
     assert miner.fictional_date("99-AAA-9999") == "25-Jun-2026"
     assert miner.fictional_date("AAAA") is None
@@ -209,9 +209,9 @@ def _gst_sessions():
 
 
 def test_status_wording_before_a_settled_identifier_needs_the_users_level():
-    from core.sgt.sgt_replay import replay
+    from core.sgt.replay import replay
     pages = _gst_sessions()
-    replayed = replay(pages, sgt_specs.SpecStore(BASE, log=lambda *a, **k: None))
+    replayed = replay(pages, specs.SpecStore(BASE, log=lambda *a, **k: None))
     props = miner.from_status_phrases(pages, replayed, registry(), cfg())
     p = next(p for p in props if p["container"] == "Your filing is now complete")
     assert p["needs"] == ["level"] and p["support"]["clients"] == 3

@@ -1,6 +1,6 @@
 """
 SDIS's own recorder (Part K): offer() never blocks or raises, slow and empty reads are dropped,
-a record carries every field, the size cap drops the oldest file, SgtShadow offers exactly the
+a record carries every field, the size cap drops the oldest file, SgtEngine offers exactly the
 pages its change gate let through, and the records feed link_map / mine like pre-dev captures.
 Fakes only - no real UIA. Pages are the fictional fixtures in tests/class_diff_align/.
 """
@@ -122,7 +122,7 @@ def test_switched_off_takes_nothing(tmp_path):
     assert rec._thread is None and rec._slot is None
 
 
-# ── SgtShadow offers one page per change ─────────────────────────────────────────
+# ── SgtEngine offers one page per change ─────────────────────────────────────────
 class _StubSdis:
     enabled = True
 
@@ -134,10 +134,10 @@ class _StubSdis:
 
 
 def _shadow(tmp_path, sdis, page):
-    from core.sgt.sgt_shadow import SgtShadow
-    from core.sgt.sgt_specs import BUILTIN_FIELDS_PATH, SpecStore
+    from core.sgt.engine import SgtEngine
+    from core.sgt.specs.specs import BUILTIN_FIELDS_PATH, SpecStore
     clock = [1_000_000.0]
-    sgt = SgtShadow(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
+    sgt = SgtEngine(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
                     read_uia=lambda h: {"lines": list(page)}, log_dir=tmp_path / "shadow",
                     clock=lambda: clock[0], today=lambda: date(2026, 7, 15), echo=lambda m: None, sdis=sdis)
 

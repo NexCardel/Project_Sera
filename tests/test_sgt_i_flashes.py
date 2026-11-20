@@ -7,8 +7,8 @@ import dataclasses
 import json
 import time
 
-from core.sgt.sgt_shadow import SgtShadow
-from core.sgt.sgt_specs import BUILTIN_FIELDS_PATH, SpecStore
+from core.sgt.engine import SgtEngine
+from core.sgt.specs.specs import BUILTIN_FIELDS_PATH, SpecStore
 from core.sgt_i import SgtIntelligence, default_components, make_observation
 from core.sgt_i import assertions
 from core.sgt_i import page_map as pm
@@ -286,7 +286,7 @@ def test_off_host_never_starts_the_listener_and_the_core_hands_the_window_over(t
     on = SgtIntelligence([], enabled=True, echo=lambda m: None, flashes=fw)
     page = ["Dashboard", "Returns", "GSTR-3B", "August 2026", "Status", "Not filed", "Due date",
             "20/09/2026", "Help", "Log out"]
-    s = SgtShadow(store=STORE, read_uia=lambda h: {"lines": page},
+    s = SgtEngine(store=STORE, read_uia=lambda h: {"lines": page},
                   log_dir=tmp_path, echo=lambda m: None, intelligence=on)
     s.observe(42, "gst", "https://example.test/dash")
     assert fw.watched == [(42, "https://example.test/dash")]

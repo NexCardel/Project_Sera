@@ -28,8 +28,8 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from core.sgt.sgt_resolver import resolve_page                                       # noqa: E402
-from core.sgt.sgt_specs import BUILTIN_FIELDS_PATH, SpecStore, compose_values, load_registry   # noqa: E402
+from core.sgt.specs.resolver import resolve_page                                       # noqa: E402
+from core.sgt.specs.specs import BUILTIN_FIELDS_PATH, SpecStore, compose_values, load_registry   # noqa: E402
 from core.sgt_i.uia_nodes import lines_from_nodes                                    # noqa: E402
 
 LOOKBACK = timedelta(minutes=30)
@@ -418,22 +418,22 @@ def find_answer(corpus: Corpus, t: Target) -> Finding:
 
 # ── The new row: built by SGT's own payload code ─────────────────────────────────
 class PayloadBuilder:
-    """SgtShadow._tracker_payload on a confirmed stub session: the payload SGT writes once it learns
+    """SgtEngine._tracker_payload on a confirmed stub session: the payload SGT writes once it learns
     the client (main.py's superseded-key path)."""
 
     def __init__(self) -> None:
-        from core.sgt.sgt_shadow import MODE_LIVE, SgtShadow
+        from core.sgt.engine import SgtEngine
         self._tmp = tempfile.TemporaryDirectory()
         tmp = Path(self._tmp.name)
-        self.sgt = SgtShadow(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
+        self.sgt = SgtEngine(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
                              read_uia=lambda h: {"lines": []}, log_dir=tmp / "log", state_path=tmp / "state.json",
-                             mode=MODE_LIVE, today=date.today, echo=lambda m: None)
+                             today=date.today, echo=lambda m: None)
 
     def build(self, t: Target, gstin: str, name: str, form: str, period: str, pref: str,
               evidence: str = "", report: str = "") -> Dict[str, Any]:
-        from core.sgt.sgt_shadow import _Session, _Slot
+        from core.sgt.engine import Session, Slot
         old = t.payload
-        s = _Session(session_id=t.session or "recovered", portal=old.get("portal") or PORTAL)
+        s = Session(session_id=t.session or "recovered", portal=old.get("portal") or PORTAL)
         s.profile = {"gstin": {"value": gstin}, "pan": {"value": gstin[2:12]}}
         if name:
             s.profile["name"] = {"value": name}
@@ -444,7 +444,7 @@ class PayloadBuilder:
         if pref:
             values["filing_type"] = pref
         src = (old.get("raw_payload") or {}).get("source") or {}
-        slot = _Slot(values=values, record=src.get("record") or "gst_submit_success",
+        slot = Slot(values=values, record=src.get("record") or "gst_submit_success",
                      confidence=int(src.get("confidence") or 90), first_page=old.get("page_url") or "",
                      sent_key=t.dataset_key)
         payload = self.sgt._tracker_payload(s, slot)

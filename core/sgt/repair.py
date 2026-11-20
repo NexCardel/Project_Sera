@@ -1,5 +1,5 @@
 """
-core/sgt/sgt_repair.py - repair the GST rows SGT rewrote to another period (2026-10-06 bug)
+core/sgt/repair.py - repair the GST rows SGT rewrote to another period (2026-10-06 bug)
 ============================================================================================
 Before the fix, `_update_draft` could MOVE an already-written GST row to another period: a
 finished June GSTR-3B became "October, Submitted & Verified" (the dashboard's period dropdown had
@@ -244,7 +244,7 @@ def apply_plan(db: Any, plan: Dict[str, Any], apply: bool = False, backup_to: Op
 
 # ── Admin-PC startup hook ────────────────────────────────────────────────────────
 def repair_dir() -> Path:
-    from core.sgt.sgt_shadow import SERA_DATA_DIR_NAME
+    from core.vsdc.vsdc_alerts import SERA_DATA_DIR_NAME
     return Path.home() / SERA_DATA_DIR_NAME / "sgt_repair"
 
 

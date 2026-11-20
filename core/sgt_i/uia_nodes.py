@@ -2,7 +2,7 @@
 core/sgt_i/uia_nodes.py - read the page as a map of nodes, in one cached UIA call
 =================================================================================
 Blueprint 14.4 step 1 (and 14.2 "the one shared part"). Today's reader,
-core/vsdc/vsdc_uia_text.read_page_text, asks the browser element by element: a FindAll, then
+core/sgt/capture/uia_text.read_page_text, asks the browser element by element: a FindAll, then
 one cross-process call per Name, per ControlType, per value. This module asks ONCE: a UIA
 CacheRequest with TreeScope_Subtree is attached to the FindAll that finds the Document
 elements (FindAllBuildCache), so every property below - and the parent/child structure - comes
@@ -170,7 +170,7 @@ def read_page_nodes(hwnd: int, timeout_sec: float = 3.0, raw_view: bool = False)
     each node's "parent" an index into its own list (-1 = the document). Empty on any failure,
     like read_page_text.
     """
-    from core.vsdc import vsdc_uia_text as uia_text
+    from core.sgt.capture import uia_text
 
     empty: Dict[str, Any] = {"docs": []}
     if not hwnd or not uia_text.user32.IsWindow(hwnd):
@@ -188,7 +188,7 @@ def read_page_nodes_here(uia: Any, uia_client: Any, hwnd: int, raw_view: bool = 
     """read_page_nodes on the CALLING thread, with the caller's own UIA object (SDIS's recorder,
     core/sdis/recorder.py): it never touches vsdc_uia_text's shared worker, so it can never make
     SGT's next read wait or abandon that worker. No timeout - the caller's thread is its own."""
-    from core.vsdc import vsdc_uia_text as uia_text
+    from core.sgt.capture import uia_text
 
     if not hwnd or not uia_text.user32.IsWindow(hwnd):
         return {"docs": []}
@@ -196,7 +196,7 @@ def read_page_nodes_here(uia: Any, uia_client: Any, hwnd: int, raw_view: bool = 
 
 
 def _read_docs(uia: Any, uia_client: Any, hwnd: int, raw_view: bool) -> Dict[str, Any]:
-    from core.vsdc import vsdc_uia_text as uia_text
+    from core.sgt.capture import uia_text
 
     empty: Dict[str, Any] = {"docs": []}
     if not uia:
@@ -213,7 +213,7 @@ def _read_docs(uia: Any, uia_client: Any, hwnd: int, raw_view: bool) -> Dict[str
 
 def _nodes_of(element) -> List[Dict[str, Any]]:
     """A Document whose subtree is in the cache, as its pre-order node list."""
-    from core.vsdc import vsdc_uia_text as uia_text
+    from core.sgt.capture import uia_text
 
     nodes: List[Dict[str, Any]] = []
     _walk(element, -1, 0, nodes)
@@ -225,7 +225,7 @@ def _nodes_of(element) -> List[Dict[str, Any]]:
 def read_cached_subtree(uia: Any, uia_client: Any, element: Any, raw_view: bool = False) -> List[Dict[str, Any]]:
     """One Document (found by the reader's URL-only request, so it has a live reference) read in
     one cached call: BuildUpdatedCache over its subtree, then walked in-process. The reader v2
-    (core/vsdc/vsdc_reader) reads only the Documents whose own URL passed the scope gate."""
+    (core/sgt/capture/reader) reads only the Documents whose own URL passed the scope gate."""
     updated = element.BuildUpdatedCache(build_cache_request(uia, raw_view))
     return _nodes_of(updated) if updated else []
 

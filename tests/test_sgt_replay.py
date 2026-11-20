@@ -11,10 +11,10 @@ from pathlib import Path
 
 import pytest
 
-import core.sgt.sgt_corpus as sgt_corpus
-from core.sgt.sgt_corpus import PageRecorder, group_sessions, load_pages
-from core.sgt.sgt_replay import diff, replay, replay_session
-from core.sgt.sgt_specs import BUILTIN_FIELDS_PATH, SpecStore
+import core.sgt.corpus as sgt_corpus
+from core.sgt.corpus import PageRecorder, group_sessions, load_pages
+from core.sgt.replay import diff, replay, replay_session
+from core.sgt.specs.specs import BUILTIN_FIELDS_PATH, SpecStore
 
 GOLDEN = Path(__file__).resolve().parent / "sgt_golden"
 SCENARIOS = sorted(GOLDEN.glob("*.json"))

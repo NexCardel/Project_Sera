@@ -7,7 +7,7 @@ Settings -> Tracker has three independent switches:
     vsdc_x_enabled   VSDC-X  - UI Automation exact-text reading
     vsdc247_enabled  VSDC247 - the crosshair-independent submission safety net
 
-and SGT's mode (sgt_mode: off / shadow / live). SGT live is the main capture engine
+and SGT's mode (sgt_mode: off / live). SGT live is the main capture engine
 (2026-09-26): it runs alone, the other three off.
 
 They are stored as "1" / "0" in the settings table. This module only turns those stored
@@ -27,18 +27,19 @@ ENGINE_DEFAULTS = {"vsdc_enabled": "0", "vsdc_x_enabled": "0", "vsdc247_enabled"
 HUD_SETTING = "vsdc_hud_enabled"
 HUD_DEFAULT = "1"
 
-# SGT - Sera Global Tracker - the fourth switch. Not on/off but a mode: "off", "shadow" (its
-# rows kept apart from the other engines', for comparison) or "live" (the capture engine).
+# SGT - Sera Global Tracker - the fourth switch: "off" or "live" (the capture engine). A stored
+# "shadow" (shadow mode was removed in 2026-11) reads as live.
 SGT_SETTING = "sgt_mode"
 SGT_DEFAULT = "live"
-SGT_MODES = ("off", "shadow", "live")
+SGT_MODES = ("off", "live")
+SGT_RETIRED_MODES = {"shadow": "live"}
 # One-time switch-over of the whole office to SGT live (settings are office-wide and synced):
 # SGT live, VSDC / VSDC-X / VSDC 24/7 off. The marker makes it happen once - a PC switched back
 # afterwards by hand stays as it was set.
 SGT_LIVE_ROLLOUT_SETTING = "sgt_live_rollout_done"
 SGT_LIVE_ROLLOUT_VALUES = {SGT_SETTING: "live", "vsdc_enabled": "0", "vsdc_x_enabled": "0", "vsdc247_enabled": "0"}
 # Record the text of the pages SGT reads, for replaying spec changes against real pages
-# (core/sgt/sgt_corpus.py - local only, 30 days). Only matters while SGT is on.
+# (core/sgt/corpus.py - local only, 30 days). Only matters while SGT is on.
 SGT_RECORD_SETTING = "sgt_record_pages"
 SGT_RECORD_DEFAULT = "1"
 # Record the raw node tree of each page SGT reads, for Sera Distill (core/sdis/recorder.py,
@@ -75,11 +76,13 @@ def read_engine_flags(get_setting: Callable[..., object]) -> Tuple[bool, bool, b
 
 
 def read_sgt_mode(get_setting: Callable[..., object]) -> str:
-    """SGT's mode: "off", "shadow" or "live". Anything unrecognised reads as the default."""
+    """SGT's mode: "off" or "live". A retired "shadow" reads as live; anything unrecognised reads as
+    the default."""
     try:
         value = str(get_setting(SGT_SETTING, SGT_DEFAULT) or SGT_DEFAULT).strip().lower()
     except Exception:
         return SGT_DEFAULT
+    value = SGT_RETIRED_MODES.get(value, value)
     return value if value in SGT_MODES else SGT_DEFAULT
 
 

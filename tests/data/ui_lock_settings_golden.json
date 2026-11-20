@@ -58,7 +58,7 @@
     "sck_enabled": "1",
     "sdis_record": "0",
     "sgt_i_mode": "on",
-    "sgt_mode": "shadow",
+    "sgt_mode": "off",
     "sgt_record_pages": "0",
     "show_hide_btn_enabled": "0",
     "theme": "light",

@@ -11,9 +11,9 @@ from datetime import date, timedelta
 import pytest
 from PIL import Image
 
-from core.sgt.sgt_health import ACTIVE_READS, SpecStats
-from core.sgt.sgt_shadow import SgtShadow
-from core.sgt.sgt_specs import BUILTIN_FIELDS_PATH, SpecError, SpecStore, build_dataset_rule, \
+from core.sgt.spec_health import ACTIVE_READS, SpecStats
+from core.sgt.engine import SgtEngine
+from core.sgt.specs.specs import BUILTIN_FIELDS_PATH, SpecError, SpecStore, build_dataset_rule, \
     load_registry, self_test_dataset_rule
 
 ITR = "Income Tax"
@@ -39,7 +39,7 @@ class Rig:
         self.sgt = self.build(state, notify)
 
     def build(self, state=True, notify=None):
-        return SgtShadow(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
+        return SgtEngine(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
                          read_uia=lambda h: {"lines": list(self.page)}, log_dir=self.tmp / "log",
                          clock=lambda: self.clock[0], today=lambda: date(2026, 9, 22), echo=lambda m: None,
                          notify=notify or (lambda *a: self.notified.append(a)), stats=self.stats,
@@ -200,7 +200,7 @@ class TestPortalChangeWatch:
 
 # ── #5 one hung UI Automation read must not blind every later one ────────────────
 def test_a_hung_uia_read_does_not_block_the_next_one(monkeypatch):
-    import core.vsdc.vsdc_uia_text as u
+    import core.sgt.capture.uia_text as u
     # A read still running is only "hung" past the grace (slower ones are skipped as busy -
     # tests/test_vsdc_diag.py); shortened here so the test need not wait 20 s.
     monkeypatch.setattr(u, "SLOW_GRACE_SEC", 0.1)

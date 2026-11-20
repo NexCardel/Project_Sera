@@ -1,5 +1,5 @@
 """
-core/vsdc/vsdc_scope.py — Which websites VSDC may look at
+core/sgt/capture/scope.py — Which websites VSDC may look at
 ==========================================================
 VSDC and VSDC-X are cleared to observe exactly two sites: the Income Tax e-Filing
 portal and the GST portal. Everything else a browser shows — a bank, a mail client, a

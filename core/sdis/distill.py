@@ -133,8 +133,8 @@ def status_of(dp: Any, memories: List[Any]) -> str:
 
 
 def portal_of(link: str) -> str:
-    from core.vsdc import vsdc_scope
-    return vsdc_scope.portal_for_url(link or "") or ""
+    from core.sgt.capture import scope
+    return scope.portal_for_url(link or "") or ""
 
 
 def portal_of_datapoint(dp: Any) -> str:

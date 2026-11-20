@@ -300,24 +300,24 @@ class ServiceEditDialog(QDialog):
     def _confirm_watched_domain(self) -> bool:
         """SDIS Part T (D21): show the domain the login link puts in scope and ask once (only when it
         changed). A link that gives no domain, or a never_register one, saves without watching."""
-        from core.vsdc import vsdc_scope
+        from core.sgt.capture import scope
         name = self.name_input.text().strip()
         link = self.url_input.text().strip()
         if not link:
             return True
-        dom = vsdc_scope.domain_for_link(link)
-        if dom and dom == vsdc_scope.domain_for_link(self._service_data.get("login_page_link") or ""):
+        dom = scope.domain_for_link(link)
+        if dom and dom == scope.domain_for_link(self._service_data.get("login_page_link") or ""):
             return True             # confirmed when it was first saved
         why = None
         if not dom:
             why = "this link gives no domain Sera can watch (a bare suffix, localhost or an IP)"
-        elif vsdc_scope.never_registered(dom):
+        elif scope.never_registered(dom):
             why = f"{dom} is a shared sign-in site (never_register in sdis_containers.json)"
         else:
-            builtin = vsdc_scope.builtin_portal_for_domain(dom)
-            other = next((p for p, ds in vsdc_scope.service_domains().items()
+            builtin = scope.builtin_portal_for_domain(dom)
+            other = next((p for p, ds in scope.service_domains().items()
                           if p != (self._service_data.get("name") or "") and any(
-                              vsdc_scope._overlaps(dom, d) for d in ds)), None)
+                              scope._overlaps(dom, d) for d in ds)), None)
             if builtin or other:
                 why = f"{dom} is already watched for {builtin or other}"
         if why:
@@ -425,8 +425,8 @@ class ServiceManagerDialog(QDialog):
 
     def _sync_extension_services(self):
         try:
-            from core.vsdc import vsdc_scope
-            vsdc_scope.reload_extra_domains()     # SDIS Part T: a saved / deleted service (un)registers its portal
+            from core.sgt.capture import scope
+            scope.reload_extra_domains()     # SDIS Part T: a saved / deleted service (un)registers its portal
         except Exception:
             pass
         try:

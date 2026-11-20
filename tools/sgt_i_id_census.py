@@ -48,7 +48,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.sgt.sgt_corpus import corpus_dir, load_pages          # noqa: E402
+from core.sgt.corpus import corpus_dir, load_pages          # noqa: E402
 from core.sgt_i.atlas import url_hint                           # noqa: E402
 from core.sgt_i.pairs import mask_shape                         # noqa: E402
 

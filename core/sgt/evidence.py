@@ -1,5 +1,5 @@
 """
-core/sgt/sgt_evidence.py - how a tracker row came to sit on its client
+core/sgt/evidence.py - how a tracker row came to sit on its client
 ======================================================================
 SGT sometimes files a capture under the wrong client and nobody knows why (2026-11). Every SGT
 tracker row therefore carries a small evidence block, ``raw_payload["sgt_ev"]``: which read named

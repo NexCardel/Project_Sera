@@ -1,5 +1,5 @@
 """
-The capture loop's Platform (core/vsdc/vsdc_capture.Platform) over the scripted browser.
+The capture loop's Platform (core/sgt/capture/loop.Platform) over the scripted browser.
 
 Screenshots are small grey images built from what is on screen at the virtual time: the page's own
 shade, one more 10 x 10 cell for every typed character, and `cells` cells for every toast showing. The
@@ -10,8 +10,8 @@ from typing import Any, List
 
 from PIL import Image, ImageDraw
 
-from core.vsdc import vsdc_windows
-from core.vsdc.vsdc_windows import TopWindow, WindowInfo
+from core.sgt.capture import windows as sgt_windows
+from core.sgt.capture.windows import TopWindow, WindowInfo
 
 from .fake_backend import VirtualClock
 from .fake_browser import OTHER_APP, Browser
@@ -41,7 +41,7 @@ class FakePlatform:
             page = self._b.window_of(hwnd).page_at(t)
             title = page.window_title() if page is not None else "New Tab - Google Chrome"
             tops.append(TopWindow(hwnd=hwnd, rect=rect, title=title, proc_name="chrome.exe"))
-        return vsdc_windows.pick_windows(foreground, tops)
+        return sgt_windows.pick_windows(foreground, tops)
 
     def screenshot(self, hwnd: int) -> Any:
         self.shots += 1

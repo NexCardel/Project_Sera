@@ -1,7 +1,7 @@
-"""core/vsdc/vsdc_windows: which windows the capture loop watches (never-miss blueprint 4.7, WP10).
+"""core/sgt/capture/windows: which windows the capture loop watches (never-miss blueprint 4.7, WP10).
 pick_windows is the whole choice; the Win32 listing feeds it. Fictional windows only."""
-from core.vsdc import vsdc_windows
-from core.vsdc.vsdc_windows import MAX_WATCHED_WINDOWS, TopWindow, is_covered, pick_windows
+from core.sgt.capture import windows
+from core.sgt.capture.windows import MAX_WATCHED_WINDOWS, TopWindow, is_covered, pick_windows
 
 FULL = (0, 0, 1920, 1040)
 LEFT, RIGHT = (0, 0, 960, 1040), (960, 0, 1920, 1040)
@@ -93,8 +93,8 @@ def test_is_covered_slack():
 def test_browser_windows_falls_back_to_the_window_in_front(monkeypatch):
     def broken(_fg):
         raise OSError("no EnumWindows")
-    monkeypatch.setattr(vsdc_windows, "top_windows", broken)
-    monkeypatch.setattr(vsdc_windows, "window_info",
-                        lambda h: vsdc_windows.WindowInfo(hwnd=h, title="Page - Google Chrome", proc_name="chrome.exe"))
-    assert hwnds(vsdc_windows.browser_windows(7)) == [(7, False)]
-    assert vsdc_windows.browser_windows(0) == []
+    monkeypatch.setattr(windows, "top_windows", broken)
+    monkeypatch.setattr(windows, "window_info",
+                        lambda h: windows.WindowInfo(hwnd=h, title="Page - Google Chrome", proc_name="chrome.exe"))
+    assert hwnds(windows.browser_windows(7)) == [(7, False)]
+    assert windows.browser_windows(0) == []

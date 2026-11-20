@@ -10,12 +10,12 @@ from pathlib import Path
 
 import pytest
 
-from core.sgt import sgt_specs
-from core.sgt.sgt_resolver import (drop_future_steps, prepare_lines, resolve_page, resolve_profile_field,
+from core.sgt.specs import specs as sgt_specs
+from core.sgt.specs.resolver import (drop_future_steps, prepare_lines, resolve_page, resolve_profile_field,
                                    resolve_records, resolve_single)
-from core.sgt.sgt_specs import (BUILTIN_FIELDS_PATH, SpecError, SpecStore, build_current_rules, build_field,
+from core.sgt.specs.specs import (BUILTIN_FIELDS_PATH, SpecError, SpecStore, build_current_rules, build_field,
                                 build_record, build_submit_rules, label_regex, load_registry, safe_compile)
-from core.sgt.sgt_toolbox import (CHECKS, MERGES, SUBMIT_LEVELS, TRANSFORMS, ddmmyy_tail_date, period_sort_key,
+from core.sgt.specs.toolbox import (CHECKS, MERGES, SUBMIT_LEVELS, TRANSFORMS, ddmmyy_tail_date, period_sort_key,
                                   submit_level)
 
 TODAY = date(2026, 7, 15)
@@ -360,7 +360,7 @@ class TestNewBuildingBlocks:
                          "examples": ["x"]}, "dataset")
 
     def test_compose_with_optional_parts(self):
-        from core.sgt.sgt_specs import build_compose, compose_values
+        from core.sgt.specs.specs import build_compose, compose_values
         c = build_compose({"name": "{first_name} {middle_name?} {last_name}"})
         assert compose_values({"first_name": "A", "middle_name": "B", "last_name": "C"}, c) == {"name": "A B C"}
         assert compose_values({"first_name": "A", "last_name": "C"}, c) == {"name": "A C"}
@@ -601,7 +601,7 @@ class TestLabelSpellingTolerance:
     """Labels survive the spelling slips real portals make; short words stay exact."""
 
     def _hit(self, labels, line):
-        from core.sgt.sgt_specs import label_regex
+        from core.sgt.specs.specs import label_regex
         return bool(label_regex(labels, "start").search(line))
 
     def test_ement_ment_pair(self):

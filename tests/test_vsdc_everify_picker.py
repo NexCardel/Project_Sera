@@ -152,8 +152,8 @@ class Harness:
         r.last_screen_hash = None
         r.static_since = None
         uia = {"text": text, "lines": self.uia_lines}
-        with patch("core.vsdc.vsdc_router.vsdc_uia_text.is_available", return_value=bool(self.uia_lines)), \
-                patch("core.vsdc.vsdc_router.vsdc_uia_text.read_page_text", return_value=uia):
+        with patch("core.sgt.capture.uia_text.is_available", return_value=bool(self.uia_lines)), \
+                patch("core.sgt.capture.uia_text.read_page_text", return_value=uia):
             return r.evaluate_tick()
 
     def run(self, uia_lines, ticks=4, **kw):

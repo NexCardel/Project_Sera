@@ -382,18 +382,18 @@ class PhoneAlertTests(unittest.TestCase):
 
 
 class WiringTests(unittest.TestCase):
-    """The pieces in place: SgtShadow's callbacks, the router's tick, the watch thread."""
+    """The pieces in place: SgtEngine's callbacks, the router's tick, the watch thread."""
 
     def test_shadow_reports_each_read_and_each_busy_skip(self):
         import tempfile
         from datetime import date
         from pathlib import Path
         from PIL import Image
-        from core.sgt.sgt_shadow import SgtShadow
-        from core.sgt.sgt_specs import BUILTIN_FIELDS_PATH, SpecStore
+        from core.sgt.engine import SgtEngine
+        from core.sgt.specs.specs import BUILTIN_FIELDS_PATH, SpecStore
         seen, hits, clock, page = [], [], [1_000_000.0], {"v": {"lines": []}}
         with tempfile.TemporaryDirectory() as tmp:
-            sgt = SgtShadow(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
+            sgt = SgtEngine(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
                             read_uia=lambda h: page["v"], log_dir=Path(tmp), clock=lambda: clock[0],
                             today=lambda: date(2026, 7, 15), echo=lambda m: None,
                             on_read=lambda *a: seen.append(a), on_hits=lambda *a: hits.append(a))
@@ -413,9 +413,9 @@ class WiringTests(unittest.TestCase):
         self.assertTrue(hits and all(h[2] is True for h in hits))
 
     def test_a_callback_that_raises_never_breaks_the_shadow(self):
-        from core.sgt.sgt_shadow import SgtShadow
-        SgtShadow._report(lambda *a: 1 / 0, 1)
-        SgtShadow._report(None, 1)
+        from core.sgt.engine import SgtEngine
+        SgtEngine._report(lambda *a: 1 / 0, 1)
+        SgtEngine._report(None, 1)
 
     def test_the_watch_thread_tells_the_monitor_and_the_heartbeat_names_the_state(self):
         import threading

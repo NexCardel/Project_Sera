@@ -4,12 +4,12 @@ core/sdis/register.py - Part Q: a datapoint the user picked becomes an SGT field
 draft_spec() drafts the spec the way the SGT-I miner drafts a mined one (core/sgt_i/miner.py
 draft_field): SDIS supplies the label, the value type and the values' shapes. The row goes into
 the synced `sdis_fields` table (sera_db/sdis.py); every PC then writes the active rows with
-write_fields_file() to <Sera data>/sdis_fields.json, which core/sgt/sgt_specs.SpecStore loads
+write_fields_file() to <Sera data>/sdis_fields.json, which core/sgt/specs/specs.SpecStore loads
 after the built-in file and the local override.
 
 A Profile builder field is a `profile` spec (it latches, like SGT's own profile). A dataset or
 Others field must not latch: it is a `current_dataset` spec, and SGT hands its hits to the
-containers (core/sgt/sgt_containers.py, by the "sdis." name), never to its built-in dataset
+containers (core/sgt/containers.py, by the "sdis." name), never to its built-in dataset
 (W4-7). The user's label goes into the
 spec's `note`, never its `labels` (the page labels it is found by), so renaming changes nothing
 that is captured. No values are written anywhere: the shapes are letters -> A, digits -> 9.
@@ -79,7 +79,7 @@ def clean_label(label: str) -> str:
 
 
 def _taken_fields(base_paths: Sequence[Path]) -> set:
-    from core.sgt import sgt_specs
+    from core.sgt.specs import specs as sgt_specs
     reg = sgt_specs.load_registry(list(base_paths))
     return {s.field for s in reg.profile} | {s.field for s in reg.current} | {s.name for s in reg.records}
 
@@ -103,7 +103,7 @@ def draft_spec(datapoint: Any, memories: Sequence[Any], portal: str, container: 
     Raises NotRegistrable (a counts-only reason) when it cannot be drafted or the SGT loader
     refuses the drafted spec beside the existing ones. `loose` is the user's override for values
     with no common shape ("mixed shapes"): the spec then takes any one-line value beside the label."""
-    from core.sgt import sgt_specs
+    from core.sgt.specs import specs as sgt_specs
     from core.sgt_i import miner
 
     if container not in SECTIONS:
@@ -167,7 +167,7 @@ def fields_document(rows: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def fields_path() -> Path:
-    from core.sgt.sgt_specs import sdis_fields_path
+    from core.sgt.specs.specs import sdis_fields_path
     return sdis_fields_path()
 
 
@@ -203,7 +203,7 @@ def register_field(db: Any, datapoint: Any, memories: Sequence[Any], portal: str
     The spec goes into sdis_fields linked to the field (mcl_gid), named sdis.<field>[.n]. Which
     container the field is in is a containers-file edit (core/sdis/config.py), never a spec
     change. Returns {mcl_gid, field_gid, field, name}; raises NotRegistrable."""
-    from core.sgt import sgt_specs
+    from core.sgt.specs import specs as sgt_specs
 
     library = {r["name"]: r for r in db.list_sdis_mcl()}
     specs = db.list_sdis_fields()

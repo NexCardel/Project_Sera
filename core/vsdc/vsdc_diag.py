@@ -131,7 +131,7 @@ class Heartbeat:
         self.max_tick_ms = 0.0
 
 
-_reader: Any = None        # core/vsdc/vsdc_reader.PageReader once the capture loop has one
+_reader: Any = None        # core/sgt/capture/reader.PageReader once the capture loop has one
 
 
 def register_reader(reader: Any) -> None:
@@ -142,11 +142,11 @@ def register_reader(reader: Any) -> None:
 
 def take_read_stats() -> Dict[str, Any]:
     """UIA read numbers since the last beat: the reader v2's when one is registered, else the old
-    shared worker's (core/vsdc/vsdc_uia_text)."""
+    shared worker's (core/sgt/capture/uia_text)."""
     if _reader is not None:
         return _reader.stats(reset=True)
-    from core.vsdc import vsdc_uia_text
-    return vsdc_uia_text.take_read_stats()
+    from core.sgt.capture import uia_text
+    return uia_text.take_read_stats()
 
 
 def tick_error(exc: BaseException) -> None:

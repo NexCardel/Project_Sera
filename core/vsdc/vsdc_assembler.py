@@ -206,7 +206,7 @@ STATUS_RANK: Dict[str, int] = {
     "submitted (pending e-verification)": 3,
     "submitted (e-verified)": 4,
     "filed & verified": 4,
-    # SGT's submit ladder (core/sgt/sgt_toolbox.SUBMIT_LEVELS), the same on every portal
+    # SGT's submit ladder (core/sgt/specs/toolbox.SUBMIT_LEVELS), the same on every portal
     "draft": 0,
     "submitted (not verified)": 3,
     "submitted & verified": 4,

@@ -11,7 +11,7 @@ import pytest
 
 from core.sdis import config, register
 from core.sdis.classes import suggest
-from core.sgt import sgt_specs
+from core.sgt.specs import specs as sgt_specs
 
 BASE = [sgt_specs.BUILTIN_FIELDS_PATH]
 PORTALS = ["GST Portal", "Income Tax"]

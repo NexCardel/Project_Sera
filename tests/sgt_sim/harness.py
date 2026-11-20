@@ -1,6 +1,6 @@
 """
 The SGT simulation harness (never-miss blueprint section 8): the real PageReader, CaptureLoop and
-SgtShadow wired to the scripted browser, on a virtual clock, with nothing mocked in between.
+SgtEngine wired to the scripted browser, on a virtual clock, with nothing mocked in between.
 
     h = Harness(browser, tmp_path)
     h.run(600)                     # ten virtual minutes
@@ -19,12 +19,12 @@ from unittest.mock import patch
 
 import pytest
 
-from core.sgt.sgt_shadow import SgtShadow
-from core.sgt.sgt_specs import BUILTIN_FIELDS_PATH, SpecStore
-from core.sgt.sgt_toolbox import SUBMIT_LEVELS
-from core.vsdc import vsdc_reader
-from core.vsdc.vsdc_capture import FRAME_TICK_SEC, CaptureLoop
-from core.vsdc.vsdc_reader import PageReader
+from core.sgt.engine import SgtEngine
+from core.sgt.specs.specs import BUILTIN_FIELDS_PATH, SpecStore
+from core.sgt.specs.toolbox import SUBMIT_LEVELS
+from core.sgt.capture import reader
+from core.sgt.capture.loop import FRAME_TICK_SEC, CaptureLoop
+from core.sgt.capture.reader import PageReader
 
 from .fake_backend import T0, FakeBackend, SimThread, VirtualClock
 from .fake_browser import Browser
@@ -54,7 +54,7 @@ class Harness:
         self.ticks = 0
         self.restarts = 0
         self.counts: Counter = Counter()          # SGT and capture-loop diag counts, summed over the run
-        self._patch = patch.object(vsdc_reader, "_OneThread", lambda name: SimThread(self.vc))
+        self._patch = patch.object(reader, "_OneThread", lambda name: SimThread(self.vc))
         self._patch.start()
         self._build()
 
@@ -63,7 +63,7 @@ class Harness:
         self.reader = PageReader(self.backend, clock=self.vc.now, diag=lambda m: None)
         self.platform = FakePlatform(self.browser, self.vc)
         self.ocr = FakeOcr() if self.use_ocr else None
-        self.sgt = SgtShadow(store=SpecStore([BUILTIN_FIELDS_PATH, *self.specs], log=lambda m: None),
+        self.sgt = SgtEngine(store=SpecStore([BUILTIN_FIELDS_PATH, *self.specs], log=lambda m: None),
                              read_uia=lambda hwnd: {"lines": []}, dispatched_ids=lambda: [],
                              log_dir=self.tmp / "shadow", clock=self.vc.now, today=lambda: self.today,
                              echo=lambda m: None,

@@ -8,9 +8,9 @@ import json
 import pytest
 
 from core.sdis import register
-from core.sgt import sgt_specs
+from core.sgt.specs import specs
 
-BASE = [sgt_specs.BUILTIN_FIELDS_PATH]
+BASE = [specs.BUILTIN_FIELDS_PATH]
 
 
 def _datapoint(label="Registration Number:", value_type="code"):
@@ -26,7 +26,7 @@ def _datapoint(label="Registration Number:", value_type="code"):
 @pytest.fixture
 def fields_path(tmp_path, monkeypatch):
     p = tmp_path / "sdis_fields.json"
-    monkeypatch.setenv(sgt_specs.SDIS_FIELDS_PATH_ENV, str(p))
+    monkeypatch.setenv(specs.SDIS_FIELDS_PATH_ENV, str(p))
     return p
 
 
@@ -52,7 +52,7 @@ def test_draft_spec_loads_through_load_registry(tmp_path):
     assert row["name"] == "sdis.registration_number" and row["label"] == "Registration Number"
     assert row["spec"]["labels"] == ["Registration Number"] and row["spec"]["portals"] == ["Fictional Portal"]
     out = register.write_fields_file([dict(row, status="active")], tmp_path / "sdis_fields.json")
-    reg = sgt_specs.load_registry(BASE + [out])
+    reg = specs.load_registry(BASE + [out])
     spec = reg.by_name()["sdis.registration_number"]
     assert spec.field == "registration_number" and spec.slot == "profile"
     assert not [e for e in reg.errors if "sdis." in e]
@@ -71,7 +71,7 @@ def test_dataset_and_others_fields_are_current_dataset_specs_untyped_are_not_reg
         row = register.draft_spec(dp, mems, "Fictional Portal", container=kind, base_paths=BASE)
         assert row["section"] == "current_dataset"
         out = register.write_fields_file([dict(row, status="active")], tmp_path / f"{kind}.json")
-        spec = sgt_specs.load_registry(BASE + [out]).by_name()[row["name"]]
+        spec = specs.load_registry(BASE + [out]).by_name()[row["name"]]
         assert spec.slot == "current"
     dp, mems = _datapoint(value_type="label")
     with pytest.raises(register.NotRegistrable):
@@ -91,7 +91,7 @@ def test_rename_keeps_the_field_and_retire_removes_it(tmp_path, fields_path):
     # a later registration of the same spec never overwrites the user's label
     db.add_sdis_field(row["name"], row["portal"], row["section"], row["spec"], row["label"])
     assert db.list_sdis_fields()[0]["label"] == "Reg. no. (my name)"
-    reg = sgt_specs.load_registry(BASE + [fields_path])
+    reg = specs.load_registry(BASE + [fields_path])
     assert reg.by_name()["sdis.registration_number"].field == "registration_number"
     assert db.retire_sdis_field(gid)
     assert not fields_path.exists()
@@ -113,10 +113,10 @@ def test_decisions_one_row_per_signature(tmp_path):
 
 
 def test_spec_store_loads_the_third_file_and_a_missing_one_is_fine(fields_path):
-    assert sgt_specs.default_paths()[-1] == fields_path
+    assert specs.default_paths()[-1] == fields_path
     assert not fields_path.exists()
-    plain = sgt_specs.load_registry(sgt_specs.default_paths()[:2])
-    with_missing = sgt_specs.SpecStore(log=lambda *_: None).get()
+    plain = specs.load_registry(specs.default_paths()[:2])
+    with_missing = specs.SpecStore(log=lambda *_: None).get()
     assert set(with_missing.by_name()) == set(plain.by_name())
 
 
@@ -129,5 +129,5 @@ def test_mixed_shapes_are_refused_unless_the_user_overrides(tmp_path):
     row = register.draft_spec(dp, mems, "Fictional Portal", base_paths=BASE, loose=True)
     assert row["spec"]["checks"] == ["not_ui_chrome"]
     out = register.write_fields_file([dict(row, status="active")], tmp_path / "sdis_fields.json")
-    reg = sgt_specs.load_registry(BASE + [out])
+    reg = specs.load_registry(BASE + [out])
     assert row["name"] in reg.by_name() and not [e for e in reg.errors if "sdis." in e]

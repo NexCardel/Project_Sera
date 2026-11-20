@@ -1,5 +1,5 @@
 """
-core/sgt/sgt_corpus.py - the pages SGT read, kept for replay
+core/sgt/corpus.py - the pages SGT read, kept for replay
 ============================================================
 Every bug found in a field test so far (an option list read as the choice, "ITR - 2", a lowercase
 dropdown name, an empty Last Name taking "PAN") was fixed once and could quietly return with the

@@ -1,5 +1,5 @@
 """
-core/vsdc/vsdc_gate.py - the frame signature and the change gate
+core/sgt/capture/gate.py - the frame signature and the change gate
 =================================================================
 SGT never-miss blueprint section 4.4. A window's picture is shrunk to a 32x32 grid of 16 grey
 levels (1024 bytes). Two signatures are compared cell by cell: a blinking caret or one typed
@@ -55,7 +55,7 @@ def green_boxes(img: Any) -> List[Tuple[int, int, int, int]]:
     if img is None:
         return []
     try:
-        from .vsdc247 import find_green_boxes
+        from core.vsdc.vsdc247 import find_green_boxes
         return [(b.x, b.y, b.w, b.h) for b in find_green_boxes(img)]
     except Exception:
         return []

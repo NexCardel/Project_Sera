@@ -9,7 +9,7 @@ fictional.
 """
 from types import SimpleNamespace
 
-from core.sgt.sgt_shadow import _session_from_json, _session_to_json
+from core.sgt.engine import session_from_json, session_to_json
 from test_sgt_boundaries import GST_A, GST_B, GST_LOGIN, GST_LOGOUT, GST_WELCOME, _shade, ends
 from test_sgt_shadow import GST, Rig, frame
 
@@ -102,7 +102,7 @@ class TestEachTabHasItsOwnSession:
         r = TabRig(tmp_path)
         r.at(T1, GST_WELCOME, GST_A)
         r.at(T3, DASH, DASH_PAGE)
-        s = _session_from_json(_session_to_json(r.sgt._sessions[1]))
+        s = session_from_json(session_to_json(r.sgt._sessions[1]))
         assert s.tabs == {T1, T3}
 
 
@@ -144,7 +144,7 @@ class TestTheClashPageNeverNamesTheSession:
         r = TabRig(tmp_path)
         r.at(T1, GST_WELCOME, GST_A)
         r.at(T1, DASH, STRAY)
-        s = _session_from_json(_session_to_json(r.sgt._sessions[1]))
+        s = session_from_json(session_to_json(r.sgt._sessions[1]))
         assert s.strict and s.strict_block["values"] == {"gstin": "27AAACZ9876K1ZE"}
 
 
@@ -171,15 +171,15 @@ class _Tab:
 
 
 def test_the_selected_tab_is_named_by_its_runtime_id():
-    from core.vsdc import vsdc_uia_text as u
+    from core.sgt.capture import uia_text as u
     client = SimpleNamespace(UIA_SelectionItemPatternId=10010, IUIAutomationSelectionItemPattern=object)
     tabs = [_Tab((42, 7, 4, 1), False, broken=True), _Tab((42, 7, 4, 2), False), _Tab((42, 7, 4, 3), True)]
     assert u._selected_among(client, tabs) == "42.7.4.3"
     assert u._selected_among(client, tabs[:2]) is None
 
 
-# SGT is handed the tab of the read itself (the capture loop, core/vsdc/vsdc_capture - WP4). A busy
-# reader no longer skips a tick: the read is queued and answered later (core/vsdc/vsdc_reader).
+# SGT is handed the tab of the read itself (the capture loop, core/sgt/capture/loop - WP4). A busy
+# reader no longer skips a tick: the read is queued and answered later (core/sgt/capture/reader).
 def _loop(tab):
     from tests.test_vsdc_capture import Rig
     from tests.test_vsdc_reader import Doc

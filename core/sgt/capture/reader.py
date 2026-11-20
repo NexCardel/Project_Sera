@@ -1,5 +1,5 @@
 """
-core/vsdc/vsdc_reader.py - Reader v2: page reads are tickets, one read lane per browser window
+core/sgt/capture/reader.py - Reader v2: page reads are tickets, one read lane per browser window
 ================================================================================================
 SGT never-miss blueprint (docs/sgt-never-miss-blueprint.md) sections 4.2, 4.3, 4.5, 4.6 with the
 review corrections R2, R3, R9.
@@ -47,7 +47,6 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Protocol, Tuple
 
 from core.sgt_i import uia_nodes
 
-from . import vsdc_diag
 
 MAX_LANES = 3                 # watched windows at once (foreground + 2 visible); D6
 WEDGE_SEC = 20.0              # a read running this long is abandoned (vsdc_uia_text.SLOW_GRACE_SEC)
@@ -189,19 +188,19 @@ class UiaBackend:
             return None
 
     def tab_id(self, hwnd: int, root: Any) -> Optional[str]:
-        from . import vsdc_uia_text
+        from core.sgt.capture import uia_text
         try:
-            return vsdc_uia_text.selected_tab_id_here(self._tls.uia, self._tls.client, hwnd, self._tls.tabs, root)
+            return uia_text.selected_tab_id_here(self._tls.uia, self._tls.client, hwnd, self._tls.tabs, root)
         except Exception:
             return None
 
     def documents(self, root: Any) -> List[Tuple[Any, str, bool]]:
-        from . import vsdc_uia_text
-        return vsdc_uia_text.documents_with_urls(self._tls.uia, self._tls.client, root)
+        from core.sgt.capture import uia_text
+        return uia_text.documents_with_urls(self._tls.uia, self._tls.client, root)
 
     def address_bar(self, hwnd: int, root: Any) -> str:
-        from . import vsdc_uia_text
-        return vsdc_uia_text.address_bar_here(self._tls.uia, self._tls.client, hwnd, self._tls.bars, root) or ""
+        from core.sgt.capture import uia_text
+        return uia_text.address_bar_here(self._tls.uia, self._tls.client, hwnd, self._tls.bars, root) or ""
 
     def read_document(self, element: Any) -> List[Dict[str, Any]]:
         return uia_nodes.read_cached_subtree(self._tls.uia, self._tls.client, element)
@@ -282,8 +281,15 @@ class _Lane:
 
 
 def _default_in_scope(url: str) -> bool:
-    from . import vsdc_scope
-    return vsdc_scope.is_in_scope_url(url)
+    from core.sgt.capture import scope
+    return scope.is_in_scope_url(url)
+
+
+def _diag_note(text: str) -> None:
+    """The capture worker's heartbeat log (logs/vsdc.log), looked up when first used: the capture
+    package never imports core.vsdc while it loads."""
+    from core.vsdc import vsdc_diag
+    vsdc_diag.note(text)
 
 
 class PageReader:
@@ -291,10 +297,10 @@ class PageReader:
     on the browser; everything that can block runs on the lanes' worker threads."""
 
     def __init__(self, backend: Optional[Backend] = None, clock: Callable[[], float] = time.monotonic,
-                 diag: Callable[[str], None] = vsdc_diag.note, in_scope: Optional[Callable[[str], bool]] = None):
+                 diag: Optional[Callable[[str], None]] = None, in_scope: Optional[Callable[[str], bool]] = None):
         self._backend = backend if backend is not None else UiaBackend()
         self._clock = clock
-        self._diag = diag
+        self._diag = diag or _diag_note
         self._in_scope = in_scope or _default_in_scope
         self._lock = threading.RLock()      # a finished future's callback may run inside request()
         self._lanes: Dict[int, _Lane] = {}

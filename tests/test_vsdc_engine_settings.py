@@ -58,8 +58,8 @@ def tick(h, uia_lines=(), ocr_lines=()):
     r = h.router
     r.route_captured, r.last_screen_hash, r.static_since = False, None, None
     uia = {"text": "\n".join(uia_lines), "lines": list(uia_lines)}
-    with patch("core.vsdc.vsdc_router.vsdc_uia_text.is_available", return_value=True), \
-            patch("core.vsdc.vsdc_router.vsdc_uia_text.read_page_text", return_value=uia) as read:
+    with patch("core.sgt.capture.uia_text.is_available", return_value=True), \
+            patch("core.sgt.capture.uia_text.read_page_text", return_value=uia) as read:
         out = r.evaluate_tick()
     return out, read
 
@@ -178,7 +178,7 @@ class TestTheUiAutomationSwitchCoversTheAddressTripwire(_Base):
     def test_vsdc_x_off_means_no_ui_automation_read_even_on_an_unlisted_gov_host(self):
         h = Harness(url="https://efile.newtax.gov.in/dashboard", title="Efile - Google Chrome")
         h.router.apply_engine_settings(True, False, False)
-        with patch("core.vsdc.vsdc_router.vsdc_uia_text.read_page_text") as read:
+        with patch("core.sgt.capture.uia_text.read_page_text") as read:
             for _ in range(3):
                 h.tick(advance=6)
         read.assert_not_called()
@@ -186,7 +186,7 @@ class TestTheUiAutomationSwitchCoversTheAddressTripwire(_Base):
     def test_vsdc_x_on_still_runs_the_tripwire(self):
         h = Harness(url="https://efile.newtax.gov.in/dashboard", title="Efile - Google Chrome")
         h.router.apply_engine_settings(True, True, False)
-        with patch("core.vsdc.vsdc_router.vsdc_uia_text.read_page_text", return_value={"text": "", "lines": ["E Filing logo"]}) as read:
+        with patch("core.sgt.capture.uia_text.read_page_text", return_value={"text": "", "lines": ["E Filing logo"]}) as read:
             h.tick(advance=6)
         self.assertTrue(read.called)
 

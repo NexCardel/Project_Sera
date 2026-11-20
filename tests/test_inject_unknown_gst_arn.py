@@ -18,8 +18,8 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, ROOT)
 
 import security  # noqa: E402
-from core.sgt.sgt_resolver import resolve_page  # noqa: E402
-from core.sgt.sgt_specs import BUILTIN_FIELDS_PATH, load_registry  # noqa: E402
+from core.sgt.specs.resolver import resolve_page  # noqa: E402
+from core.sgt.specs.specs import BUILTIN_FIELDS_PATH, load_registry  # noqa: E402
 from core.sgt_i.uia_nodes import lines_from_nodes  # noqa: E402
 from database import SeraDatabase  # noqa: E402
 from tools import inject_unknown_gst_arn as inj  # noqa: E402

@@ -10,7 +10,7 @@ import pytest
 
 import security
 from core.dataset_key import compute_dataset_key as key
-from core.sgt.sgt_shadow import SgtShadow, _Session
+from core.sgt.engine import SgtEngine, Session
 from database import SeraDatabase
 from test_sgt_shadow import GST, PROFILE_PAGE, PROFILE_URL, SUBMITTED, WIZ_PI, WIZ_STATUS, Rig
 import test_sgt_gst_fixes as G
@@ -46,13 +46,13 @@ class TestKey:
         assert key("GST Portal", "29ABACD1191FAZK", "GSTR-1", "May").endswith(":MAY")
 
     def test_sgt_live_rows_carry_the_preference(self):
-        s = _Session(portal="Income Tax")
+        s = Session(portal="Income Tax")
         s.confirmed = True
         s.profile = {"pan": {"value": PAN}}
         values = {"form": "ITR-4", "period": "AY 2026-27", "filing_type": "Revised"}
-        assert SgtShadow.live_key(s, values) == "ITR:ABCPD1234E:ITR4:AY_2026_27:REVISED"
-        assert SgtShadow.live_key(s, dict(values, filing_type="Original")) == "ITR:ABCPD1234E:ITR4:AY_2026_27"
-        assert SgtShadow.live_key(s, {"form": "ITR-4", "period": "AY 2026-27"}) == "ITR:ABCPD1234E:ITR4:AY_2026_27"
+        assert SgtEngine.live_key(s, values) == "ITR:ABCPD1234E:ITR4:AY_2026_27:REVISED"
+        assert SgtEngine.live_key(s, dict(values, filing_type="Original")) == "ITR:ABCPD1234E:ITR4:AY_2026_27"
+        assert SgtEngine.live_key(s, {"form": "ITR-4", "period": "AY 2026-27"}) == "ITR:ABCPD1234E:ITR4:AY_2026_27"
 
 
 @pytest.fixture()

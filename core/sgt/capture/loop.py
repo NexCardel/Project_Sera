@@ -1,5 +1,5 @@
 """
-core/vsdc/vsdc_capture.py - the capture loop: SGT's path, out of the router
+core/sgt/capture/loop.py - the capture loop: SGT's path, out of the router
 ============================================================================
 SGT never-miss blueprint sections 4.4, 4.7, 4.8 and WP4, with the review corrections R2, R7 and
 R10. WP10: visible browser windows that are not in front are watched too, each every BG_TICK_SEC,
@@ -8,15 +8,15 @@ by the same rules as the one in front (their own scope gate, lane and reads; ctx
 Before: SGT's page reads ran inside the router's tick, behind the router's own address-bar read
 on the capture thread, and a read that took longer than 3 s was thrown away. Now, each tick:
 
-  1. Every read the reader (core/vsdc/vsdc_reader) finished since the last tick is taken: its URL
+  1. Every read the reader (core/sgt/capture/reader) finished since the last tick is taken: its URL
      and tab update what the loop knows of that window; a clean page read is handed to SGT.
-  2. For each watched window (core/vsdc/vsdc_windows): the scope gate first. The URL is the one
+  2. For each watched window (core/sgt/capture/windows): the scope gate first. The URL is the one
      the window's last read reported (Document first, address bar second), if it is younger than
      URL_FRESH_SEC; the reader's scope worker is asked for a URL-only read often enough to keep it
      so, even while a heavy page read runs (R2). Without a fresh URL, the title grace as before
      (SCOPE_GRACE_SEC, never refreshed by a title). A window never verified on a portal is not
      read and not even screenshotted.
-  3. In scope: one screenshot, one frame signature (core/vsdc/vsdc_gate). A page read is asked for
+  3. In scope: one screenshot, one frame signature (core/sgt/capture/gate). A page read is asked for
      when the URL changed (then BURST_READS reads), the frame changed by GATE_MIN_CELLS or more,
      REREAD_AFTER_SEC passed, a torn read needs asking again, or SGT-I / SCC-U want one - spaced by
      the last read's own duration, and never while the window's previous read is unanswered.
@@ -33,11 +33,13 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, Deque, Dict, List, Optional, Protocol, Tuple
 
-from . import vsdc_gate, vsdc_scope, vsdc_windows
-from .vsdc_ocr_lane import OcrLane
-from .vsdc_reader import (REASON_SCOPE, RESULT_MAX_AGE_SEC, URL_FRESH_SEC, WEDGE_SEC, PageReader, ReadContext,
+from core.sgt.capture import gate
+from core.sgt.capture import scope as sgt_scope
+from core.sgt.capture import windows as sgt_windows
+from core.sgt.capture.ocr_lane import OcrLane
+from core.sgt.capture.reader import (REASON_SCOPE, RESULT_MAX_AGE_SEC, URL_FRESH_SEC, WEDGE_SEC, PageReader, ReadContext,
                           ReadResult)
-from .vsdc_windows import WindowInfo
+from core.sgt.capture.windows import PORTAL_KEYWORDS, WindowInfo
 
 FRAME_TICK_SEC = 0.35         # R10 / D7: the fallback until WP0's gate probe measures a tick under 15 ms
 FRAME_TICK_FAST_SEC = 0.2     # D7's frame tick, once that is measured
@@ -47,7 +49,7 @@ READ_GAP_FACTOR = 1.0         # a 500 ms page is read at most every ~1 s: 50 % d
 BURST_READS = 3               # after a URL change: 3 reads, BURST_GAP_SEC apart, whatever the frame does
 BURST_GAP_SEC = 0.3
 TORN_RETRIES = 3              # a torn read is asked again at most this often per page visit (R1)
-REASON_BLIND_RETRY = "blind-retry"   # SGT's absorb asks for it (sgt_shadow.BLIND_RETRIES, then OCR)
+REASON_BLIND_RETRY = "blind-retry"   # SGT's absorb asks for it (core.sgt.engine.BLIND_RETRIES, then OCR)
 SCOPE_POLL_SEC = 1.0          # a URL-only read is asked once the window's URL is this old (< URL_FRESH_SEC)
 SCOPE_GRACE_SEC = 8.0         # the router's _SCOPE_GRACE_SEC: no readable URL, portal title, verified this recently
 STATE_KEEP_SEC = 600.0        # a window not watched for this long is forgotten (its SGT sessions are not ended)
@@ -80,7 +82,7 @@ class WinPlatform:
         return int(ctypes.windll.user32.GetForegroundWindow() or 0)
 
     def windows(self, foreground: int) -> List[WindowInfo]:
-        return vsdc_windows.browser_windows(foreground)
+        return sgt_windows.browser_windows(foreground)
 
     def screenshot(self, hwnd: int) -> Any:
         return self._ocr.capture_window_image(hwnd)
@@ -143,7 +145,7 @@ class CaptureLoop:
     """One per router while SGT is on. tick() runs on the capture thread and never raises."""
 
     def __init__(self, platform: Platform, reader: PageReader, sgt: Any, ocr: Any, health: Any,
-                 scope: Any = vsdc_scope, clock: Optional[Callable[[], float]] = None,
+                 scope: Any = sgt_scope, clock: Optional[Callable[[], float]] = None,
                  on_out_of_scope: Optional[Callable[[int, str], None]] = None,
                  ocr_lane: Optional[OcrLane] = None):
         """clock must be the reader's clock (a ReadContext's asked_at is checked against it).
@@ -195,7 +197,7 @@ class CaptureLoop:
             if ws is None:
                 ws = self._states[w.hwnd] = WindowState(hwnd=w.hwnd)
             if w.background:                # WP10: a window not in front is looked at every BG_TICK_SEC
-                if now - ws.last_bg_tick < vsdc_windows.BG_TICK_SEC:
+                if now - ws.last_bg_tick < sgt_windows.BG_TICK_SEC:
                     continue
                 ws.last_bg_tick = now
             ws.last_seen = now
@@ -369,7 +371,7 @@ class CaptureLoop:
             ws.blind_retries += 1           # a page that read fine before came back blind: again, 0.3 s on
             ws.retry = ws.retry or REASON_BLIND_RETRY
         else:
-            from core.sgt.sgt_shadow import is_blind
+            from core.sgt.engine import is_blind
             if not is_blind(list(r.lines)):
                 ws.blind_retries = 0
 
@@ -377,7 +379,6 @@ class CaptureLoop:
 
     def _window(self, w: WindowInfo, ws: WindowState, now: float) -> None:
         title_lower = w.title.lower()
-        from .vsdc_router import PORTAL_KEYWORDS
         titled_portal = any(k in title_lower for k in PORTAL_KEYWORDS)
         ws.portal = _title_portal(title_lower) or ws.portal or "Income Tax"
 
@@ -425,7 +426,7 @@ class CaptureLoop:
             img = self._platform.screenshot(w.hwnd)
         except Exception:
             img = None
-        sig = vsdc_gate.frame_signature(img)
+        sig = gate.frame_signature(img)
         self._ocr_trigger(w, ws, img, sig, now, portal, owner)
 
         if ws.pending_seq and now - ws.pending_at > RESULT_MAX_AGE_SEC:
@@ -461,7 +462,7 @@ class CaptureLoop:
         """Blueprint 5.1: "paused" (every frame change over FLASH_MIN_CELLS while UIA is paused) or
         "flash" (the same change while a read of this window runs or the page's last read was slow)."""
         paused = self.paused()
-        if not vsdc_gate.flash_wanted(cells, inflight, last_ms, paused):
+        if not gate.flash_wanted(cells, inflight, last_ms, paused):
             return ""
         return "paused" if paused else "flash"
 
@@ -474,18 +475,18 @@ class CaptureLoop:
         lane = self._ocr_lane
         if lane is None or img is None:
             return
-        boxes = tuple(vsdc_gate.green_boxes(img))
-        green_new = vsdc_gate.new_green_box(ws.green, boxes)
+        boxes = tuple(gate.green_boxes(img))
+        green_new = gate.new_green_box(ws.green, boxes)
         ws.green = boxes
-        cells = vsdc_gate.cells_changed(prev, sig) if prev is not None and sig is not None else 0
+        cells = gate.cells_changed(prev, sig) if prev is not None and sig is not None else 0
         url = self._scope.sanitize_page_url(ws.url) if ws.url else ""
         inflight = bool(ws.pending_seq) or self._reader.inflight(w.hwnd) is not None
-        if cells >= vsdc_gate.FLASH_MIN_CELLS:
+        if cells >= gate.FLASH_MIN_CELLS:
             ws.flash_armed_at = now
         if ws.flash_armed_at and now - ws.flash_armed_at <= OCR_ARM_SEC:
             # A toast comes with the page that carries it: that tick's read was only just asked, so the
             # busy test fails there and passes a tick later, while the toast is still up.
-            cells = max(cells, vsdc_gate.FLASH_MIN_CELLS)
+            cells = max(cells, gate.FLASH_MIN_CELLS)
         reason = self._ocr_wanted(ws, cells, inflight, self._reader.page_ms(w.hwnd, url)) or ("green" if green_new else "")
         if reason in ("flash", "paused"):
             ws.flash_armed_at = 0.0
@@ -514,10 +515,10 @@ class CaptureLoop:
             return "url" if ws.burst_left == BURST_READS else "burst"
         # B4: compute and store the changed-cell count so _urgent can use it without re-comparing.
         if sig is not None and ws.last_sig is not None:
-            ws.frame_cells = vsdc_gate.cells_changed(ws.last_sig, sig)
+            ws.frame_cells = gate.cells_changed(ws.last_sig, sig)
         else:
             ws.frame_cells = 0          # no screenshot evidence: never qualifies as an urgent change
-        if sig is None or ws.last_sig is None or ws.frame_cells >= vsdc_gate.GATE_MIN_CELLS:
+        if sig is None or ws.last_sig is None or ws.frame_cells >= gate.GATE_MIN_CELLS:
             return "frame"
         if ws.wanted:
             return ws.wanted
@@ -538,7 +539,7 @@ class CaptureLoop:
             return True                     # already flagged urgent while waiting behind a pending read
         if now - ws.last_urgent_at < URGENT_COOLDOWN_SEC:
             return False
-        return ws.last_read_ms > vsdc_gate.FLASH_UIA_SLOW_MS and ws.frame_cells >= URGENT_FRAME_CELLS
+        return ws.last_read_ms > gate.FLASH_UIA_SLOW_MS and ws.frame_cells >= URGENT_FRAME_CELLS
 
     @staticmethod
     def _spaced(ws: WindowState, reason: str, now: float, urgent: bool = False) -> bool:

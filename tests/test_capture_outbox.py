@@ -238,8 +238,8 @@ def test_a_dead_letter_that_cannot_be_written_reports_the_disk(tmp_path):
 
 
 def test_the_default_folder_is_the_shadow_folder():
-    from core.sgt.sgt_shadow import shadow_dir
-    assert capture_outbox.default_dir() == shadow_dir()
+    from core.sgt.engine import sgt_data_dir
+    assert capture_outbox.default_dir() == sgt_data_dir()
 
 
 def test_is_retryable_picks_database_failures_only():

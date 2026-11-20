@@ -6,7 +6,7 @@ from dataclasses import replace
 
 import pytest
 
-from core.sgt.sgt_specs import BUILTIN_FIELDS_PATH
+from core.sgt.specs.specs import BUILTIN_FIELDS_PATH
 from tests.sgt_sim.fake_browser import OUTSIDE, PORTAL_GST, PORTAL_ITR, Browser, Page, Tab, Toast
 from tests.sgt_sim.harness import assert_profile, problems, sim  # noqa: F401 - sim is a fixture
 from tests.sgt_sim.pages import (GST_FILE, GST_LOGOUT, GST_RET, GST_SVC, ITR, ITR_LOGIN, ITR_LOGOUT, ITR_PROFILE, ITR_STATUS, ITR_SUCCESS, LOGGED_OUT,
@@ -73,7 +73,7 @@ def _heavy_success(client, serial, read_ms, ack_visible):
 
 def test_r2_scope_stays_fresh_while_a_5s_read_runs(sim):
     """While a 5 s page read is in flight the address is still looked at (the scope worker is never queued behind it)."""
-    from core.vsdc.vsdc_reader import URL_FRESH_SEC
+    from core.sgt.capture.reader import URL_FRESH_SEC
     c = make_client(7)
     b, t, sub = _heavy_success(c, 1, 5000.0, 14.0)
     h = sim(b)

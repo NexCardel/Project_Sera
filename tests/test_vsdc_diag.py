@@ -12,14 +12,14 @@ from unittest.mock import MagicMock
 import pytest
 from PIL import Image
 
-from core.sgt.sgt_shadow import SgtShadow
-from core.sgt.sgt_specs import BUILTIN_FIELDS_PATH, SpecStore
+from core.sgt.engine import SgtEngine
+from core.sgt.specs.specs import BUILTIN_FIELDS_PATH, SpecStore
 from core.vsdc import vsdc_diag
 
 
 @pytest.fixture
 def uia(monkeypatch):
-    import core.vsdc.vsdc_uia_text as u
+    import core.sgt.capture.uia_text as u
     monkeypatch.setattr(u, "_inflight", None)
     monkeypatch.setattr(u, "_paused_until", 0.0)
     monkeypatch.setattr(u, "_disabled_reason", None)
@@ -145,7 +145,7 @@ def test_sgt_reads_again_on_the_next_tick_after_a_busy_skip(tmp_path):
         return answers.pop(0) if answers else {"lines": []}
 
     clock = [1000.0]
-    sgt = SgtShadow(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None), read_uia=read,
+    sgt = SgtEngine(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None), read_uia=read,
                     log_dir=tmp_path, clock=lambda: clock[0], echo=lambda m: None, notify=lambda *a: None)
     frame = Image.new("RGB", (8, 8), (9, 9, 9))
     url = "https://eportal.incometax.gov.in/iec/foservices/#/dashboard/myProfile/profileDetail"
@@ -160,7 +160,7 @@ def test_sgt_reads_again_on_the_next_tick_after_a_busy_skip(tmp_path):
 
 def test_sgt_counts_a_blind_gst_page_as_ocr_read(tmp_path):
     """OCR runs on every portal now (never-miss blueprint 5.2): a blind GST page is read by OCR."""
-    sgt = SgtShadow(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
+    sgt = SgtEngine(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
                     read_uia=lambda h: {"lines": []}, log_dir=tmp_path, echo=lambda m: None,
                     notify=lambda *a: None)
     ocr = MagicMock()
@@ -187,7 +187,7 @@ def test_the_heartbeat_line_carries_ticks_scope_sgt_and_uia(tmp_path):
     class Router:
         diag_tick = {"front": "msedge.exe", "address_bar": "read", "in_scope": "yes",
                      "portal": "GST Portal", "page": "https://services.gst.gov.in/services/auth/fowelcome"}
-        _sgt = SgtShadow(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
+        _sgt = SgtEngine(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
                          read_uia=lambda h: {"lines": []}, log_dir=tmp_path, echo=lambda m: None)
 
     beat = vsdc_diag.Heartbeat(every_sec=0)

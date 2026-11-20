@@ -1,5 +1,5 @@
 """
-core/vsdc/vsdc_ocr_lane.py - the OCR lane: screenshots read on their own thread
+core/sgt/capture/ocr_lane.py - the OCR lane: screenshots read on their own thread
 ================================================================================
 SGT never-miss blueprint section 5.1 / WP7. A toast on a heavy page is gone before the page read
 returns, so the capture loop sends the screenshot it already took to this lane. One worker thread
@@ -15,8 +15,8 @@ import time
 from concurrent.futures import Future
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from . import vsdc_reader
-from .vsdc_reader import ReadContext, ReadResult
+from core.sgt.capture import reader
+from core.sgt.capture.reader import ReadContext, ReadResult
 
 OCR_MIN_GAP_SEC = 1.0           # per window
 MAX_OCR_PENDING = 4             # scans waiting or running; a busier lane refuses (the loop asks again)
@@ -57,7 +57,7 @@ class OcrLane:
         if len(self._last) > 64:
             self._last.pop(next(iter(self._last)))
         if self._thread is None:
-            self._thread = vsdc_reader._OneThread("sgt-ocr-lane")
+            self._thread = reader._OneThread("sgt-ocr-lane")
         self._jobs.append((ctx, self._thread.submit(self._scan, img), now))
         self._scans += 1
         return True

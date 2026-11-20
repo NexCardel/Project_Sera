@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from core.sgt import sgt_specs
+from core.sgt.specs import specs
 from core.sgt_i import lab, miner
 
 
@@ -177,7 +177,7 @@ def test_accept_status_wording_needs_a_level(tmp_path):
     with pytest.raises(ValueError):
         lab.accept(p, override_path=override, proposals_file=_proposals_file(tmp_path, p))
 
-    spec_out = lab.accept(p, level=sgt_specs.SUBMIT_LEVELS[1] if hasattr(sgt_specs, "SUBMIT_LEVELS")
+    spec_out = lab.accept(p, level=specs.SUBMIT_LEVELS[1] if hasattr(specs, "SUBMIT_LEVELS")
                            else "Draft", override_path=override,
                            proposals_file=_proposals_file(tmp_path, p))
     assert spec_out["map"][0][1] is not None

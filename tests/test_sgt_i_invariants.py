@@ -45,7 +45,7 @@ def test_mod36_values_are_discovered_matching_the_gstin_scheme():
     assert match.scheme == "mod36"
     assert match.exceptions == 0
     # sgt_toolbox.c_gstin_checksum is the same algorithm, fixed at 15 characters
-    from core.sgt.sgt_toolbox import c_gstin_checksum
+    from core.sgt.specs.toolbox import c_gstin_checksum
     import datetime
     for v in MOD36:
         assert c_gstin_checksum(v, datetime.date(2026, 1, 1)) is True

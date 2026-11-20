@@ -1,5 +1,5 @@
 """
-core/sgt/sgt_specs.py — loading and policing the field specs
+core/sgt/specs/specs.py — loading and policing the field specs
 =============================================================
 sgt_fields.json holds every datapoint SGT knows about. A regex in an editable file is
 powerful and dangerous - a wrong one captures garbage, a badly written one can hang the
@@ -15,7 +15,7 @@ A spec that fails is refused with a console line naming it and the reason. When 
 edited while the app runs, a refused spec does not take the old one down with it: the last
 good version of that spec keeps running.
 
-Two files are read, in order: the built-in core/sgt/sgt_fields.json, then an optional
+Two files are read, in order: the built-in core/sgt/specs/sgt_fields.json, then an optional
 sgt_fields.json next to the app (or at SGT_FIELDS_PATH). A spec in the second file replaces
 the built-in spec of the same name; "disabled": true removes it. Adding or subtracting a
 datapoint is therefore a file edit, never a code change.
@@ -31,7 +31,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from .sgt_toolbox import CHECKS, MERGES, SUBMIT_LEVELS, TRANSFORMS, ddmmyy_tail_date, is_submit_level, period_start
+from core.sgt.specs.toolbox import CHECKS, MERGES, SUBMIT_LEVELS, TRANSFORMS, ddmmyy_tail_date, is_submit_level, period_start
 
 try:                                    # Python 3.11+
     import re._parser as _sre_parse     # type: ignore[import-not-found]
@@ -527,7 +527,7 @@ def _page_example(ex: Any) -> bool:
 
 
 def self_test_field(spec: FieldSpec) -> None:
-    from .sgt_resolver import extract_value, resolve_single
+    from core.sgt.specs.resolver import extract_value, resolve_single
 
     def run(ex: Dict[str, Any]):
         got = resolve_single(spec, ex.get("lines") or [], SELF_TEST_TODAY,
@@ -560,7 +560,7 @@ def self_test_field(spec: FieldSpec) -> None:
 
 
 def self_test_record(spec: RecordSpec) -> None:
-    from .sgt_resolver import resolve_records
+    from core.sgt.specs.resolver import resolve_records
 
     for f in spec.fields:
         # Field-level examples of a record field are value strings; page examples belong

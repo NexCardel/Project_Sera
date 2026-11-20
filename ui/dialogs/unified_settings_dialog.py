@@ -741,7 +741,7 @@ class UnifiedSettingsDialog(QDialog):
     def _refresh_health_panel(self, *args, snapshot: "dict | None" = None) -> None:
         from datetime import datetime
         from core import fleet_health
-        from core.sgt.sgt_digest import TEXT_KEY
+        from core.sgt.digest import TEXT_KEY
         try:
             if snapshot is None:
                 snapshot = self.db.get_all_settings()
@@ -1178,14 +1178,12 @@ class UnifiedSettingsDialog(QDialog):
         sgt = Card("SGT - Sera Global Tracker", edge="em")
         self.sgt_mode_combo = Select()
         self.sgt_mode_combo.addItem("Live (main capture engine)", "live")
-        self.sgt_mode_combo.addItem("Shadow (separate rows, for comparison)", "shadow")
         self.sgt_mode_combo.addItem("Off", "off")
         sgt.add_row(SettingRow("SGT mode",
             "Reads every portal page and works out every datapoint from its field list, without crosshairs. "
             "Live saves its captures as the tracker's rows (tagged SGT, orange): a filing another engine "
             "already saved is updated in place, and its status never moves down. A submission whose client "
-            "was never identified is saved unassigned and raises the phone alert. Shadow keeps SGT's rows "
-            "separate from the other engines' instead, for comparison. Either way the HUD pill shows its "
+            "was never identified is saved unassigned and raises the phone alert. The HUD pill shows its "
             "captures and a detailed log stays on this PC (sgt_shadow folder).", self.sgt_mode_combo))
         self.sgt_record_check = Switch()
         self.sgt_record_check.setAccessibleName("Record pages for SGT testing")
@@ -1622,7 +1620,8 @@ class UnifiedSettingsDialog(QDialog):
             self.vsdc247_verify_check.setChecked(g("vsdc247_verify", "0") == "1")
             self.vsdc_hud_check.setChecked(g("vsdc_hud_enabled", "1") == "1")
 
-            _set(self.sgt_mode_combo, g("sgt_mode", "live"))
+            from core.vsdc.vsdc_engines import read_sgt_mode
+            _set(self.sgt_mode_combo, read_sgt_mode(g))      # a retired "shadow" shows as Live
             self.sgt_record_check.setChecked(g("sgt_record_pages", "1") == "1")
             self.sdis_record_check.setChecked(g("sdis_record", "1") == "1")
             _set(self.sgt_i_combo, g("sgt_i_mode", "off"))

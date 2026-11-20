@@ -17,8 +17,8 @@ from PIL import Image
 import security
 from database import SeraDatabase
 from core.dataset_key import compute_dataset_key
-from core.sgt.sgt_shadow import CAPTURE_METHODS, MODE_LIVE, SgtShadow
-from core.sgt.sgt_specs import BUILTIN_FIELDS_PATH, SpecStore
+from core.sgt.engine import CAPTURE_METHOD, SgtEngine
+from core.sgt.specs.specs import BUILTIN_FIELDS_PATH, SpecStore
 from core.vsdc.vsdc_engines import (ENGINE_DEFAULTS, SGT_LIVE_ROLLOUT_SETTING, apply_sgt_live_rollout,
                                     read_engine_flags)
 
@@ -26,7 +26,7 @@ ITR = "Income Tax"
 PROFILE_URL = "https://eportal.incometax.gov.in/iec/foservices/#/dashboard/myProfile/profileDetail"
 FILED_URL = "https://eportal.incometax.gov.in/iec/foservices/#/dashboard/itrStatus"
 PROFILE_PAGE = ["Name", "ASHOK KUMAR SEN", "PAN", "ABCPD1234E", "Date of Birth", "12-Mar-1980"]
-LIVE = CAPTURE_METHODS[MODE_LIVE]
+LIVE = CAPTURE_METHOD
 KEY = "ITR:ABCPD1234E:ITR4:AY_2025_26"
 
 
@@ -35,14 +35,14 @@ def filed_page(status="Pending for e-verification", ack="123456789150925"):
 
 
 class Rig:
-    def __init__(self, tmp_path, mode=MODE_LIVE, alert=None):
+    def __init__(self, tmp_path, alert=None):
         self.clock = [1_000_000.0]
         self.page = []
         self.hud = []
-        self.sgt = SgtShadow(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
+        self.sgt = SgtEngine(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
                              read_uia=lambda h: {"lines": list(self.page)}, log_dir=tmp_path / "log",
                              clock=lambda: self.clock[0], today=lambda: date(2026, 7, 15), echo=lambda m: None,
-                             notify=lambda *a: self.hud.append(a), mode=mode, alert_unattributed=alert)
+                             notify=lambda *a: self.hud.append(a), alert_unattributed=alert)
         self.shade = 90
 
     def see(self, url, page):
@@ -81,13 +81,6 @@ class TestLiveRows:
                       profile={"pan": {"value": "ABCPD1234E"}})
         assert r.sgt.live_key(s, {"arn": "123456789150925"}) == "ITR:ABCPD1234E:FORM:ARN_123456789150925"
 
-    def test_shadow_mode_is_unchanged(self, tmp_path):
-        r = Rig(tmp_path, mode="shadow")
-        r.see(PROFILE_URL, PROFILE_PAGE)
-        r.see(FILED_URL, filed_page())
-        row = r.sgt.drain()[0]
-        assert row["capture_method"] == "SGT_shadow" and row["dataset_key"] == "SGT:ITR:ABCPD1234E:ITR4:AY202526"
-
 
 # ── Client never identified: the phone alert (VSDC247's client-unknown path) ─────
 class TestUnknownClientAlert:
@@ -108,13 +101,6 @@ class TestUnknownClientAlert:
         r = Rig(tmp_path, alert=lambda *a: sent.append(a))
         r.see(PROFILE_URL, PROFILE_PAGE)
         r.see(FILED_URL, filed_page())
-        r.sgt.end_all("test")
-        assert sent == []
-
-    def test_shadow_never_alerts(self, tmp_path):
-        sent = []
-        r = Rig(tmp_path, mode="shadow", alert=lambda *a: sent.append(a))
-        r.see(FILED_URL, self.CARD)
         r.sgt.end_all("test")
         assert sent == []
 
@@ -237,14 +223,15 @@ class TestRouter:
         r.apply_engine_settings(False, False, False, sgt="live")
         assert r._sgt_mode == SGT_LIVE and r._sgt_alone and not r._engines_off
 
-    def test_changing_mode_ends_open_sessions_first(self, harness):
+    def test_switching_sgt_off_ends_open_sessions_first(self, harness):
         r = harness.router
-        r.apply_engine_settings(False, False, False, sgt="shadow")
+        r.apply_engine_settings(False, False, False, sgt="live")
         fake = MagicMock()
         r._sgt = fake
-        r.apply_engine_settings(False, False, False, sgt="live")
-        fake.end_all.assert_called_once()
-        fake.set_mode.assert_called_once_with("live")
+        r.apply_engine_settings(False, False, False, sgt="shadow")     # retired: still live, nothing ends
+        fake.end_all.assert_not_called()
+        r.apply_engine_settings(False, False, False, sgt="off")
+        fake.end_all.assert_called_once_with("SGT switched off")
 
     def test_live_observes_in_scope_ticks(self, harness):
         """Through the capture loop's Platform seam (WP4): a URL-only read, a page read, absorbed."""

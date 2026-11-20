@@ -1,5 +1,5 @@
 """
-core/sgt/sgt_resolver.py — lines of text + field specs -> datapoints
+core/sgt/specs/resolver.py — lines of text + field specs -> datapoints
 =====================================================================
 The resolver only ever sees LINES OF TEXT. It does not know or care whether they came from
 UI Automation or from OCR, so a canvas-painted portal read by OCR goes through exactly the
@@ -21,8 +21,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from .sgt_specs import MAX_LINE_LEN, FieldSpec, RecordSpec, Registry
-from .sgt_toolbox import CHECKS, TRANSFORMS, period_sort_key
+from core.sgt.specs.specs import MAX_LINE_LEN, FieldSpec, RecordSpec, Registry
+from core.sgt.specs.toolbox import CHECKS, TRANSFORMS, period_sort_key
 
 # Icon-font glyphs (Unicode private use area) that UIA reports as text on the portals.
 _PRIVATE_USE = re.compile("[-]")

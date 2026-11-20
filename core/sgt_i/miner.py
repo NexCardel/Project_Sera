@@ -40,10 +40,11 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from ..sgt import sgt_specs, sgt_toolbox
-from ..sgt.sgt_resolver import extract_value, prepare_lines
-from ..sgt.sgt_specs import SELF_TEST_TODAY, SpecError
-from ..sgt.sgt_toolbox import CHECKS, SUBMIT_LEVELS, TRANSFORMS, submit_level
+from core.sgt.specs import specs as sgt_specs
+from core.sgt.specs import toolbox
+from core.sgt.specs.resolver import extract_value, prepare_lines
+from core.sgt.specs.specs import SELF_TEST_TODAY, SpecError
+from core.sgt.specs.toolbox import CHECKS, SUBMIT_LEVELS, TRANSFORMS, submit_level
 from .atlas import ATLAS_DIR, SEP, Atlas
 from .pairs import mask_shape
 from .shapes import induce_shape_grammar
@@ -161,7 +162,7 @@ def fictional_ack(n: int = 0, length: int = 15) -> str:
 def fictional_date(shape: str, n: int = 0) -> Optional[str]:
     """A date before the self-test day printed in whichever portal format has `shape`."""
     when = SELF_TEST_TODAY - timedelta(days=20 + n)
-    for fmt in getattr(sgt_toolbox, "_DATE_FORMATS", ()):
+    for fmt in getattr(toolbox, "_DATE_FORMATS", ()):
         text = when.strftime(fmt)
         if mask_shape(text) == shape:
             return text
@@ -681,7 +682,7 @@ def from_status_phrases(pages: Sequence[Dict[str, Any]], replayed: Dict[str, Dic
     lines just before its identifier first appeared are candidate wording. A phrase counts once
     per client; with >= min_clients it is template text and becomes a proposal whose ladder
     level the USER picks (`needs: ["level"]`)."""
-    from ..sgt.sgt_corpus import group_sessions
+    from core.sgt.corpus import group_sessions
 
     dropped = dropped if dropped is not None else Counter()
     clients = _Clients()
@@ -817,8 +818,8 @@ def replay_diff(section: str, spec: Dict[str, Any], pages: Sequence[Dict[str, An
                 base_paths: Sequence[Path], before: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
     """What the proposal would change over the recorded corpus, as counts (diff lines name real
     values, so they never reach proposals.json). `red` = any existing capture changes."""
-    from ..sgt.sgt_replay import diff, replay
-    from ..sgt.sgt_specs import SpecStore
+    from core.sgt.replay import diff, replay
+    from core.sgt.specs.specs import SpecStore
 
     if not pages:
         return {"pages": 0, "adds": 0, "added": 0, "changed": 0, "removed": 0, "held": 0, "red": False}
@@ -841,10 +842,10 @@ def replay_diff(section: str, spec: Dict[str, Any], pages: Sequence[Dict[str, An
         if new is None or not new.applies(str(page.get("portal") or ""), str(page.get("url") or "")):
             continue
         if isinstance(new, sgt_specs.RecordSpec):
-            from ..sgt.sgt_resolver import resolve_records
+            from core.sgt.specs.resolver import resolve_records
             adds += bool(resolve_records(new, lns, SELF_TEST_TODAY))
         else:
-            from ..sgt.sgt_resolver import resolve_single
+            from core.sgt.specs.resolver import resolve_single
             adds += resolve_single(new, lns, SELF_TEST_TODAY, link=str(page.get("url") or ""),
                                    title=str(page.get("title") or "")) is not None
     out = {"pages": len(pages), "adds": adds, "added": counts.get("newly", 0),
@@ -864,8 +865,8 @@ def mine(atlas: Optional[Atlas] = None, portals: Optional[Iterable[str]] = None,
          config: Optional[Dict[str, Any]] = None, base_paths: Optional[Sequence[Path]] = None) -> Dict[str, Any]:
     """Every source, every gate. `pages` = recorded corpus pages (sgt_corpus.load_pages());
     `rows` = tracker payloads carrying raw_payload['sgt_i']. Returns the proposals.json dict."""
-    from ..sgt.sgt_replay import replay
-    from ..sgt.sgt_specs import SpecStore
+    from core.sgt.replay import replay
+    from core.sgt.specs.specs import SpecStore
 
     cfg = dict(load_config())
     cfg.update(config or {})

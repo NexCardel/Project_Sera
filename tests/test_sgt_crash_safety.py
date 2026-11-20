@@ -7,8 +7,8 @@ from datetime import date
 
 from PIL import Image
 
-from core.sgt.sgt_shadow import SgtShadow
-from core.sgt.sgt_specs import BUILTIN_FIELDS_PATH, SpecStore
+from core.sgt.engine import SgtEngine
+from core.sgt.specs.specs import BUILTIN_FIELDS_PATH, SpecStore
 
 GST = "GST Portal"
 URL = "https://return.gst.gov.in/returns/auth/dashboard"
@@ -24,9 +24,9 @@ class Clock:
 
 
 def make(tmp_path, page, clock):
-    return SgtShadow(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
+    return SgtEngine(store=SpecStore([BUILTIN_FIELDS_PATH], log=lambda m: None),
                      read_uia=lambda h: {"lines": list(page)}, log_dir=tmp_path / "log",
-                     state_path=tmp_path / "sessions_state.json", echo=lambda m: None, mode="live",
+                     state_path=tmp_path / "sessions_state.json", echo=lambda m: None,
                      today=lambda: date(2026, 10, 7), clock=clock)
 
 

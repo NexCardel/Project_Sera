@@ -7,8 +7,8 @@ Every page, PAN, name and ack here is made up.
 """
 from unittest.mock import MagicMock
 
-from core.sgt.sgt_shadow import BLIND_RETRIES, BLIND_RETRY, IDLE_END_SEC, MISSING_CLEAR_SEC, RESULT_MAX_AGE_SEC
-from core.vsdc.vsdc_reader import ReadContext, ReadResult
+from core.sgt.engine import BLIND_RETRIES, BLIND_RETRY, IDLE_END_SEC, MISSING_CLEAR_SEC, RESULT_MAX_AGE_SEC
+from core.sgt.capture.reader import ReadContext, ReadResult
 
 from test_sgt_gst_fixes import GSTIN, R3B, client as gst_client, r3b_page
 from test_sgt_shadow import (FILED_URL, GST, ITR, LOGIN_URL, LOGOUT_URL, PROFILE_PAGE, PROFILE_URL, Rig,
@@ -273,7 +273,7 @@ def test_an_ocr_only_arn_makes_a_row_marked_ocr(tmp_path):
 
 def test_an_ocr_only_row_is_counted_for_the_digest_and_a_uia_row_is_not(tmp_path):
     from datetime import date
-    from core.sgt.sgt_health import SpecStats
+    from core.sgt.spec_health import SpecStats
     r = AbsorbRig(tmp_path)
     stats, told = SpecStats(tmp_path / "stats"), []
     r.sgt._stats, r.sgt._on_ocr_row = stats, lambda: told.append(1)

@@ -4,7 +4,7 @@ core/sdis/config.py - sdis_containers.json, the containers and exceptions file (
 Two files are read: the built-in core/sdis/sdis_containers.json (empty), then the office copy at
 <Sera data dir>/sdis_containers.json; a top-level section of the office copy replaces the built-in
 one. check() refuses the whole file with a reason, and the previous good version keeps running
-(the same rule as core/sgt/sgt_specs.py), so a bad edit never takes working scope down.
+(the same rule as core/sgt/specs/specs.py), so a bad edit never takes working scope down.
 
 Every section is checked (S.3 load checks). Completion levels are never in code: no level name or
 threshold is assumed here; level_for() only evaluates what the file says. The checks that need
@@ -61,7 +61,7 @@ def office_path() -> Path:
 def _domain_entry_ok(raw: Any) -> bool:
     """Part T's domain checks: a plain hostname that gives a registered domain (never a bare
     suffix, localhost or a URL)."""
-    from core.vsdc.vsdc_scope import extract_host, registered_domain
+    from core.sgt.capture.scope import extract_host, registered_domain
     if not isinstance(raw, str):
         return False
     dom = raw.strip().lower().rstrip(".")
@@ -233,7 +233,7 @@ def _check_levels(levels: Any, where: str) -> List[str]:
 
 
 def _check_level_map(lmap: Any, levels: Sequence[str], where: str) -> None:
-    from core.sgt.sgt_toolbox import SUBMIT_LEVELS
+    from core.sgt.specs.toolbox import SUBMIT_LEVELS
     if not isinstance(lmap, dict):
         raise ConfigError(f"{where} must be an object {{level: ladder status}}")
     for lv, status in lmap.items():

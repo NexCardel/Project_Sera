@@ -22,7 +22,7 @@ from .rules import FEED_FILE, FormRule, form_matches, load_rules
 
 FIELDS = ["PAN", "Name", "Return form", "Current period", "Submit status", "Capture date & time"]
 
-# Same vocabulary as core/sgt/sgt_toolbox.SUBMIT_LEVELS (a test keeps the two equal).
+# Same vocabulary as core/sgt/specs/toolbox.SUBMIT_LEVELS (a test keeps the two equal).
 LEVELS = ("Not Submitted", "Draft", "Submitted (Not Verified)", "Submitted & Verified")
 NOT_APPLICABLE = "Not applicable"          # a portal said so; outside the ladder
 

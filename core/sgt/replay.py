@@ -1,8 +1,8 @@
 """
-core/sgt/sgt_replay.py - running recorded pages through SGT again
+core/sgt/replay.py - running recorded pages through SGT again
 =================================================================
 Feeds recorded pages (sgt_corpus.py, or the fictional golden pages under tests/sgt_golden/) to a
-fresh SgtShadow, one recorded session at a time, with the recorded time and date. Nothing real is
+fresh SgtEngine, one recorded session at a time, with the recorded time and date. Nothing real is
 touched: no tracker, no crash snapshot, no page recording, and the SGT log goes to a temporary
 folder. The result is what SGT would have written - so a spec change can be compared with the
 result before it (diff()) before it goes live.
@@ -14,11 +14,11 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from core.vsdc.vsdc_reader import ReadContext, ReadResult
+from core.sgt.capture.reader import ReadContext, ReadResult
 
-from .sgt_corpus import group_sessions
-from .sgt_shadow import BLIND_RETRIES, SgtShadow
-from .sgt_specs import SpecStore
+from core.sgt.corpus import group_sessions
+from core.sgt.engine import BLIND_RETRIES, SgtEngine
+from core.sgt.specs.specs import SpecStore
 
 ROW_FIELDS = ("pan", "gstin", "client_name", "filing_type", "period_label", "arn", "status", "filing_preference")
 
@@ -48,7 +48,7 @@ def replay_session(pages: List[Dict[str, Any]], store: Optional[SpecStore] = Non
              "today": date.fromisoformat(pages[0]["today"]) if pages and pages[0].get("today") else date.today()}
     ocr = _FakeOcr()
     with tempfile.TemporaryDirectory() as tmp:
-        sgt = SgtShadow(store=store, read_uia=lambda h: {"lines": list(state["uia"])}, log_dir=Path(tmp),
+        sgt = SgtEngine(store=store, read_uia=lambda h: {"lines": list(state["uia"])}, log_dir=Path(tmp),
                         clock=lambda: state["ts"], today=lambda: state["today"], echo=lambda m: None,
                         intelligence=intelligence, scc=scc)
         rows: Dict[str, Dict[str, Any]] = {}

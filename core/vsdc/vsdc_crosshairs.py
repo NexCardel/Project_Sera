@@ -287,7 +287,7 @@ def match_url_crosshair(url: str, portal_hint: Optional[str] = None) -> Optional
     if not url:
         return None
 
-    from .vsdc_scope import extract_host, is_in_scope_url
+    from core.sgt.capture.scope import extract_host, is_in_scope_url
     host = extract_host(url)
     if host and ("://" in url or "." in host) and not is_in_scope_url(url):
         return None

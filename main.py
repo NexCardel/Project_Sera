@@ -753,9 +753,10 @@ class SeraApp:
                 if sys._MEIPASS not in sys.path:
                     sys.path.insert(0, sys._MEIPASS)
 
-            from core.vsdc import VSDCWorker, vsdc_scope
+            from core.vsdc import VSDCWorker
+            from core.sgt.capture import scope
             # SDIS Part T: portals registered from service login links join the scope gate (read lazily).
-            vsdc_scope.set_services_source(self.db.get_services)
+            scope.set_services_source(self.db.get_services)
             # SDIS Part Q / S.3: the synced sdis_fields table -> sdis_fields.json, SGT's third spec
             # file; the sdis_config row -> sdis_containers.json.
             threading.Thread(target=self._write_sdis_files, name="sdis-fields", daemon=True).start()
@@ -770,7 +771,7 @@ class SeraApp:
             # Settings -> Tracker decides which of VSDC / VSDC-X / VSDC 24/7 run; the worker
             # itself only starts when at least one of them is on.
             self.vsdc_worker.router.set_scc_handlers(self._make_scc_handlers)
-            from core.sgt.sgt_client_link import ClientLink
+            from core.sgt.client_link import ClientLink
             self.vsdc_worker.router.set_client_lookup(ClientLink(self.db))   # portal user ID -> saved client
             self.vsdc_worker.router.on_demotion = self.sync_bridge.sgt_demotion_signal.emit
             self.vsdc_worker.router.health.set_writer(self._share_capture_health)
@@ -956,8 +957,8 @@ class SeraApp:
                     _time.sleep(1.0)
 
     def _make_capture_digest(self):
-        """The daily capture digest SGT runs on its first tick of the day (core/sgt/sgt_digest.py)."""
-        from core.sgt import sgt_digest
+        """The daily capture digest SGT runs on its first tick of the day (core/sgt/digest.py)."""
+        from core.sgt import digest
 
         def is_admin():
             import sync_admin
@@ -965,9 +966,9 @@ class SeraApp:
 
         def unverified():
             containers = self.db.get_srpf_containers(limit=1_000_000, slim=True)
-            return sgt_digest.count_old_unverified(containers)
+            return digest.count_old_unverified(containers)
 
-        return sgt_digest.DailyDigest(self.db.get_all_settings, self.db.set_setting, is_admin, unverified)
+        return digest.DailyDigest(self.db.get_all_settings, self.db.set_setting, is_admin, unverified)
 
     def _queue_outbox_replay(self):
         from core import capture_outbox
@@ -987,7 +988,7 @@ class SeraApp:
         portal = msg.get("portal", "Portal")
         arn = msg.get("arn", "N/A")
         capture_method = msg.get("capture_method", "DOM_Tracker")
-        # SGT rows are shown on the HUD pill as SGT sees them (tagged "SGT (Live)" / "SGT (Shadow)");
+        # SGT rows are shown on the HUD pill as SGT sees them (tagged "SGT (Live)");
         # SGT re-sends a row every time its dataset changes, so a toast / tray balloon per row
         # would only double the noise.
         if str(capture_method).startswith("SGT"):
@@ -2930,8 +2931,8 @@ class SeraApp:
         """Called from SyncPeerService background TCP thread when an incoming
         database push has been accepted and written to disk. Emits Qt signal for main thread handling."""
         try:
-            from core.vsdc import vsdc_scope
-            vsdc_scope.reload_extra_domains()   # another PC may have saved or deleted a service (Part T)
+            from core.sgt.capture import scope
+            scope.reload_extra_domains()   # another PC may have saved or deleted a service (Part T)
         except Exception:
             pass
         self.sync_bridge.sync_received_signal.emit()

@@ -2,7 +2,7 @@
 tools/sgt_lines_equivalence.py - the 14.2 gate: are node-rebuilt lines identical to today's?
 ================================================================================================
 Blueprint 14.2 "the one shared part": the Core reads *lines*
-(core/vsdc/vsdc_uia_text._collect_descendant_lines), SGT-I wants *nodes*
+(core/sgt/capture/uia_text._collect_descendant_lines), SGT-I wants *nodes*
 (core/sgt_i/uia_nodes.read_page_nodes). Both must already agree - W2-1's
 uia_nodes.lines_from_nodes() rebuilds today's lines from a node read - before the Core is
 allowed to switch reader. This tool is the actual gate check, in three modes:
@@ -11,11 +11,11 @@ allowed to switch reader. This tool is the actual gate check, in three modes:
                               in-memory element tree (a fake UIA layer, no browser or COM). No
                               window needed, so this mode always has something to check and is
                               the one tests/test_sgt_lines_equivalence.py runs on every commit.
-  corpus    (best effort)  - pages already recorded by core/sgt/sgt_corpus.py that also carry a
+  corpus    (best effort)  - pages already recorded by core/sgt/corpus.py that also carry a
                               node dump. Nothing does yet (that's W2-4); until then this mode
                               reports 0 comparable records rather than failing.
   live      (best effort)  - an already-open window matched by --title, read with BOTH real
-                              readers, then with the reader v2 (core/vsdc/vsdc_reader, never-miss
+                              readers, then with the reader v2 (core/sgt/capture/reader, never-miss
                               WP3), whose lines must equal today's too. Strictly a read of what is
                               already on screen - this tool never opens, clicks or types anything.
 
@@ -36,9 +36,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.sgt.sgt_corpus import corpus_dir, load_pages   # noqa: E402
+from core.sgt.corpus import corpus_dir, load_pages   # noqa: E402
 from core.sgt_i import uia_nodes as nodes_mod             # noqa: E402
-from core.vsdc import vsdc_uia_text as text_mod           # noqa: E402
+from core.sgt.capture import uia_text as text_mod           # noqa: E402
 
 Diff = Tuple[int, Optional[str], Optional[str]]   # index, today's line, node line ("" side if missing)
 
@@ -325,10 +325,10 @@ def check_live(title: str) -> Optional[Tuple[str, List[Diff]]]:
 
 
 def read_with_reader_v2(hwnd: int, timeout_sec: float = 15.0):
-    """The same window read by core/vsdc/vsdc_reader (MTA lane, Document URL first, one cached
+    """The same window read by core/sgt/capture/reader (MTA lane, Document URL first, one cached
     call per in-scope Document). Prints which scope rule applied and the error, never the URL."""
     import time
-    from core.vsdc.vsdc_reader import PageReader, ReadContext
+    from core.sgt.capture.reader import PageReader, ReadContext
 
     reader = PageReader(diag=lambda _text: None)
     try:

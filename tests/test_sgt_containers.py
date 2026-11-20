@@ -9,9 +9,9 @@ from datetime import date
 import pytest
 
 from core.sdis import config
-from core.sgt import sgt_containers as sc
-from core.sgt.sgt_shadow import SgtShadow
-from core.sgt.sgt_specs import BUILTIN_FIELDS_PATH, SpecStore
+from core.sgt import containers as sc
+from core.sgt.engine import SgtEngine
+from core.sgt.specs.specs import BUILTIN_FIELDS_PATH, SpecStore
 from core.sgt_i import miner
 
 PORTAL = "Fictional Portal"
@@ -176,8 +176,8 @@ def rig(tmp_path, monkeypatch):
     assert not [e for e in store.get().errors if "sdis." in e]
     page = []
     clock = [1_000_000.0]
-    sgt = SgtShadow(store=store, read_uia=lambda h: {"lines": list(page)}, log_dir=tmp_path / "log",
-                    clock=lambda: clock[0], today=lambda: date(2026, 7, 15), echo=lambda m: None, mode="live")
+    sgt = SgtEngine(store=store, read_uia=lambda h: {"lines": list(page)}, log_dir=tmp_path / "log",
+                    clock=lambda: clock[0], today=lambda: date(2026, 7, 15), echo=lambda m: None)
 
     def see(lines, url=URL_A):
         clock[0] += 1

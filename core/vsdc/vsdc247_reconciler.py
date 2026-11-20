@@ -284,7 +284,7 @@ def _parse_epoch(entry: Dict[str, Any], default: float) -> float:
 
 
 def find_sgt_in_router(sgt_router: Any, arn: str) -> Optional[SgtRecord]:
-    """Look up an ARN in an active SgtShadow/SgtRouter's in-memory outbox and session slots."""
+    """Look up an ARN in an active SgtEngine/SgtRouter's in-memory outbox and session slots."""
     if not sgt_router or not arn:
         return None
     clean_arn = arn.strip().upper()

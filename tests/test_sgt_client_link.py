@@ -7,9 +7,9 @@ from datetime import date
 
 from PIL import Image
 
-from core.sgt.sgt_client_link import ClientLink
-from core.sgt.sgt_shadow import CLIENT_LINK_SPEC, SgtShadow
-from core.sgt.sgt_specs import BUILTIN_FIELDS_PATH, SpecStore
+from core.sgt.client_link import ClientLink
+from core.sgt.engine import CLIENT_LINK_SPEC, SgtEngine
+from core.sgt.specs.specs import BUILTIN_FIELDS_PATH, SpecStore
 
 GST = "GST Portal"
 URL = "https://services.gst.gov.in/services/auth/fowelcome"
@@ -100,9 +100,9 @@ class Rig:
             self.calls.append((portal, user_id))
             return lookup
 
-        self.sgt = SgtShadow(store=SpecStore([BUILTIN_FIELDS_PATH, extra], log=lambda m: None),
+        self.sgt = SgtEngine(store=SpecStore([BUILTIN_FIELDS_PATH, extra], log=lambda m: None),
                              read_uia=lambda h: {"lines": list(self.page)}, log_dir=tmp_path / "shadow",
-                             echo=self.echoes.append, mode="live", today=lambda: date(2026, 10, 7),
+                             echo=self.echoes.append, today=lambda: date(2026, 10, 7),
                              resolve_client=resolve)
 
     def see(self, lines, url=URL):

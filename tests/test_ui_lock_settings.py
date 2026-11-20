@@ -73,7 +73,7 @@ def _apply_fixed_inputs(d):
     d.vsdc_x_check.setChecked(True)
     d.vsdc247_check.setChecked(True)
     d.vsdc_hud_check.setChecked(False)
-    _combo_pick(d.sgt_mode_combo, "shadow")
+    _combo_pick(d.sgt_mode_combo, "off")
     d.sgt_record_check.setChecked(False)
     d.sdis_record_check.setChecked(False)
     _combo_pick(d.sgt_i_combo, "on")
@@ -148,7 +148,7 @@ def test_a_saved_value_is_what_the_next_dialog_shows(env):
         assert (again.reveal_count_spin.value(), again.clipboard_spin.value()) == (3, 45)
         assert again.sca_mode_combo.currentData() == "widget" and again.sca_max_uses_spin.value() == 5
         assert again.scc_opt1_label_edit.text() == "Combo A" and again.scc_opt2_label_edit.text() == "Combo 2"
-        assert again.sgt_mode_combo.currentData() == "shadow" and again.sgt_i_combo.currentData() == "on"
+        assert again.sgt_mode_combo.currentData() == "off" and again.sgt_i_combo.currentData() == "on"
         assert again._capture_state() == again._initial_state
     finally:
         S.dispose(again)

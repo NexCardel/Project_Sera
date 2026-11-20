@@ -9,7 +9,7 @@ import sys
 
 import pytest
 
-from core.sgt import sgt_specs
+from core.sgt.specs import specs
 from core.vsdc import vsdc_alerts
 
 
@@ -23,13 +23,13 @@ def installed(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "executable", str(program / "Amas_Sera.exe"))
     monkeypatch.setattr("pathlib.Path.home", lambda: home)
     monkeypatch.delenv(vsdc_alerts.ALERT_CONFIG_ENV, raising=False)
-    monkeypatch.delenv(sgt_specs.FIELDS_PATH_ENV, raising=False)
+    monkeypatch.delenv(specs.FIELDS_PATH_ENV, raising=False)
     return program, home / "AmanAssociates_Sera"
 
 
 @pytest.mark.parametrize("name, locate", [
     ("vsdc_alert.json", lambda: vsdc_alerts._config_path()),
-    ("sgt_fields.json", lambda: sgt_specs.override_path()),
+    ("sgt_fields.json", lambda: specs.override_path()),
 ])
 def test_data_folder_when_nothing_is_beside_the_program(installed, name, locate):
     program, data = installed
@@ -38,7 +38,7 @@ def test_data_folder_when_nothing_is_beside_the_program(installed, name, locate)
 
 @pytest.mark.parametrize("name, locate", [
     ("vsdc_alert.json", lambda: vsdc_alerts._config_path()),
-    ("sgt_fields.json", lambda: sgt_specs.override_path()),
+    ("sgt_fields.json", lambda: specs.override_path()),
 ])
 def test_a_file_beside_the_program_wins(installed, name, locate):
     program, data = installed

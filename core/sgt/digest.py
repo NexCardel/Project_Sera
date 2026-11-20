@@ -1,12 +1,12 @@
 """
-core/sgt/sgt_digest.py - the daily capture digest (layer 4: what Sera cannot watch is listed).
+core/sgt/digest.py - the daily capture digest (layer 4: what Sera cannot watch is listed).
 =============================================================================================
 Once a day, on the admin PC (every PC when the office has no admin), the digest counts what the
 other layers could only notice, not fix: PCs with blind or stalled minutes, rows without a client,
 rows only OCR found, rows that could not be saved, ITR returns still "Submitted (Not Verified)"
 after DIGEST_UNVERIFIED_DAYS days, PCs on an old build and PCs with phone alerts not set up.
 
-The text holds device names and counts, never a client value. SgtShadow runs it on its first tick
+The text holds device names and counts, never a client value. SgtEngine runs it on its first tick
 of each day (set_digest); the app keeps the text for Settings -> Tracker -> Capture health.
 """
 
@@ -114,7 +114,7 @@ def count_old_unverified(containers: List[dict], now: Optional[datetime] = None,
 
 
 class DailyDigest:
-    """The callable SgtShadow runs once a day. Everything it needs comes in as functions so a test
+    """The callable SgtEngine runs once a day. Everything it needs comes in as functions so a test
     needs no database: settings() -> the whole settings dict, save(key, value), is_admin() ->
     bool, unverified() -> the count from count_old_unverified."""
 

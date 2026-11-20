@@ -1,5 +1,5 @@
 """
-core/sgt/sgt_health.py - noticing that a portal changed
+core/sgt/spec_health.py - noticing that a portal changed
 =======================================================
 Portals change their wording and their pages without notice. SGT then does not fail loudly: a
 spec simply stops matching and SGT goes quiet. This keeps, per portal and per day, how many pages

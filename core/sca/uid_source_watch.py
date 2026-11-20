@@ -108,12 +108,12 @@ class ForegroundHook:
 def _foreground_browser() -> int:
     """The window in front when it is a browser, else 0."""
     import ctypes
-    from core.vsdc import vsdc_windows
-    from core.vsdc.vsdc_router import BROWSER_EXE_NAMES
+    from core.sgt.capture import windows
+    from core.sgt.capture.windows import BROWSER_EXE_NAMES
     hwnd = int(ctypes.windll.user32.GetForegroundWindow() or 0)
     if not hwnd:
         return 0
-    info = vsdc_windows.window_info(hwnd)
+    info = windows.window_info(hwnd)
     return hwnd if info.title and any(b in info.proc_name for b in BROWSER_EXE_NAMES) else 0
 
 
