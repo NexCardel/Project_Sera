@@ -470,7 +470,9 @@ def main(argv=None) -> int:
                          f"(default {card_match.GROUP_MIN:g})")
     a = ap.parse_args(argv)
     src = Path(a.src)
-    docs, meta = render.load(src, snapshot=a.snapshot, record=a.record)
+    # A comp page with pages (snapshot_diff.py, PAGES) stays one doc here: the map draws one doc, and every node
+    # of every page must be in it.
+    docs, meta = render.load(src, snapshot=a.snapshot, record=a.record, split=False)
     k = render._pick_docs(docs, a.doc if a.doc in ("auto", "all") else int(a.doc))[0]
     pc = page_containers(docs[k], a.comp_view)
     inf = infer(pc, match=not a.no_match, match_min=a.match_min, group_min=a.group_min)

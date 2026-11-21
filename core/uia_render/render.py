@@ -89,18 +89,45 @@ def _load_record(path, record):
     return rec.get("docs") or [], meta
 
 
-def _comp_docs(rec):
-    """One merged doc. Each comp entry: its raw node, plus where it sits (parent indexes this list) and
-    how it came and went (origin, present, first/last snapshot, values)."""
-    merged = []
-    for e in rec.get("nodes") or []:
-        node = dict(e.get("node") or {})
-        node["parent"] = e.get("parent", -1)
-        for key in ("key", "origin", "first", "last", "values", "present"):
-            if key in e:
-                node[key] = e[key]
-        merged.append(node)
-    return [merged]
+def _comp_docs(rec, split=True):
+    """One merged doc per page of the comp page (snapshot_diff.py, PAGES; one page = one doc). Each comp
+    entry: its raw node, plus where it sits (parent indexes this doc's list) and how it came and went
+    (origin, present, first/last snapshot, values). On a page doc, present = still there at that page's
+    last snapshot, and a node's parent is its nearest ancestor on that page. split=False: one doc of every
+    node, indexed like rec["nodes"] (the page map needs that)."""
+    nodes = rec.get("nodes") or []
+    pages = [p.get("page") for p in rec.get("pages") or []]
+    if len(pages) < 2 or not split:
+        pages = [None]
+    docs = []
+    for pg in pages:
+        keep = [k for k, e in enumerate(nodes) if pg is None or pg in (e.get("pages") or [1])]
+        at = {k: n for n, k in enumerate(keep)}
+        merged = []
+        for k in keep:
+            e = nodes[k]
+            node = dict(e.get("node") or {})
+            p, hops = e.get("parent", -1), 0
+            while p is not None and p >= 0 and p not in at and hops < 256:
+                p, hops = nodes[p].get("parent", -1), hops + 1
+            node["parent"] = at.get(p, -1)
+            for key in ("key", "origin", "first", "last", "values", "present"):
+                if key in e:
+                    node[key] = e[key]
+            if pg is not None:
+                node["present"] = pg in (e.get("present_pages") or [])
+            merged.append(node)
+        docs.append(merged)
+    return docs
+
+
+def _comp_labels(rec):
+    """'page N' per doc of a comp page with more than one page (with its snapshot stamps), else None."""
+    pages = rec.get("pages") or []
+    if len(pages) < 2:
+        return None
+    return [f"page {p.get('page')} (snapshots {p.get('first', '?')} - {p.get('last', '?')}"
+            + (f", {len(p['visits'])} visits" if len(p.get("visits") or []) > 1 else "") + ")" for p in pages]
 
 
 def _meta(rec, path, kind, index, label):
@@ -110,7 +137,7 @@ def _meta(rec, path, kind, index, label):
             "anchor": str(rec.get("anchor") or "")}
 
 
-def load(path, snapshot=None, record=None):
+def load(path, snapshot=None, record=None, split=True):
     """(docs, meta). docs: a list of docs, each a list of raw nodes (the read's own fields).
     Kinds (plan 2), found from the content: a record line (jsonl: a dict with v and docs), a capture
     (capture true, snapshots), a comp page (comp_page true), or a single read (docs at the top level)."""
@@ -126,7 +153,12 @@ def load(path, snapshot=None, record=None):
 
     rec = json.loads(path.read_text(encoding="utf-8"))
     if rec.get("comp_page"):
-        return _comp_docs(rec), _meta(rec, path, "comp", None, "comp page")
+        meta = _meta(rec, path, "comp", None, "comp page")
+        labels = _comp_labels(rec) if split else None     # split=False: the whole comp page as one doc
+        if labels:
+            meta["doc_labels"] = labels
+            meta["label"] = f"comp page, {len(labels)} pages"
+        return _comp_docs(rec, split=split), meta
     if rec.get("capture") or "snapshots" in rec:
         snaps = rec["snapshots"]
         idx = len(snaps) - 1 if snapshot is None else snapshot
@@ -507,7 +539,13 @@ def build(docs, meta, doc="auto", comp_view="present", groups=False, arrange=Fal
 
     cards=True (pre-dev, shape_map.py + card_match.py): every card of every record set outlined, every slot
     node clickable; clicking one picks that slot in all cards, and the bar lists the picks to copy."""
+    labels = meta.get("doc_labels")
+    if labels and doc == "auto":
+        doc = "all"                                   # a comp page's pages: every page, one after the other
     sections = [_section(k, docs[k], comp_view, groups, arrange, outline, cards) for k in _pick_docs(docs, doc)]
+    for s in sections:
+        if labels and s["k"] < len(labels):
+            s["label"] = f"{labels[s['k']]}: {s['n']} nodes"
     data = {"title": meta.get("title", ""), "page": meta.get("page", ""), "browser": meta.get("browser", ""),
             "source": meta.get("source", ""), "index": meta.get("label", ""), "comp_view": comp_view,
             "anchor": meta.get("anchor", ""), "outline": bool(outline), "docs": sections}

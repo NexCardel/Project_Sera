@@ -165,7 +165,7 @@ def timeline(rec, items):
 
 def build(rec, source="", note=""):
     """(html, summary). summary holds counts only."""
-    docs = render._comp_docs(rec)
+    docs = render._comp_docs(rec, split=False)     # every node, indexed like rec["nodes"] (not per page)
     raw = docs[0]
     nodes = render._norm(raw)
     render._decide(nodes, "all")

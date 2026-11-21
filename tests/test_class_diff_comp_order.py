@@ -57,12 +57,14 @@ def _comp(*reads, anchor="settled"):
 
 
 def test_a_card_that_loads_after_the_anchor_is_fixed_sits_beside_the_other_cards():
+    # Since 2026-11-21 a card this big (a fifth of the texts) also starts page 2 (snapshot_diff.py, PAGES):
+    # its nodes are that page's anchor, not "attached" - so the late nodes are found by when they appeared.
     ap, fl = _comp(_page(3), _page(3), _page(4))
     assert ap.settled_at == "+0.0s"
-    assert sum(1 for e in fl if e["origin"] == "attached" and e["text"]) > 0
+    assert sum(1 for e in fl if e["first"] == "+2.0s" and e["text"]) > 0
     assert _contiguous_subtrees(fl)
     footer = [i for i, e in enumerate(fl) if e["text"] == "Footer"]
-    attached = [i for i, e in enumerate(fl) if e["origin"] == "attached"]
+    attached = [i for i, e in enumerate(fl) if e["first"] == "+2.0s"]
     assert footer and max(attached) < footer[0]            # the new card comes before the footer, not after
     cards = [g for g in A.arrange(fl).groups if g.parent is None and g.period >= 27]
     assert len(cards) == 1 and len(cards[0].members) == 4

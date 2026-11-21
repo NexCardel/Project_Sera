@@ -54,6 +54,17 @@ ONE complete page (AnchorPage). key_probe.py hands each kept snapshot to it whil
                   ([snapshot, text] at each text change), so comp_map.py can rebuild the page at any
                   snapshot.
 
+PAGES (2026-11-21): the same page link can show a different screen (a single-page app moving on to its next
+step, a search filling the area under a form). Once the anchor page is fixed, a snapshot where at least a
+fifth (SPLIT_SHARE) of its texts, and at least MIN_PAGE_TEXTS, are new to the current page (never on it,
+or on it with another text) is a SIGNIFICANT change - whether or not the old part stayed: it starts page
+2, 3... of the same comp page - or, when more than half (BACK_SHARE) of those new texts match an earlier page,
+goes back to that page. Parts that stay (a header, a menu) are on every page they showed on. Nodes paired across the change with a
+different text become nodes of the new page (the old page keeps its own values). Every node lists the pages
+it was on (pages) and the pages it was still on at that page's last snapshot (present_pages); the record
+lists each page's visits (pages) and each log row its page. render.py draws one section per page in the same
+HTML (shape_map.py, one page only, reads the whole comp page). A popup with that many texts is a page too.
+
 compare.py --comp compares one client's comp page with another client's of the same link.
 Not handled yet: variable list rows / cards (a separate mechanism will come).
 
@@ -183,6 +194,9 @@ def diff(latest: Dict[str, Any], previous: Dict[str, Any], known: Optional[Set[s
 
 
 ANCHOR, ATTACHED = "anchor", "attached"
+SPLIT_SHARE = 0.20    # a page change: at least this share of the snapshot's texts are new to the page ...
+MIN_PAGE_TEXTS = 10   # ... and at least this many
+BACK_SHARE = 0.5      # back to an earlier page: more than this share of the snapshot's texts match it
 
 
 def _everything(e: Dict[str, Any]) -> bool:
@@ -229,13 +243,44 @@ class AnchorPage:
         self.prev: List[Dict[str, Any]] = []      # the previous snapshot (flat) ...
         self.prev_ids: List[int] = []             # ... and the entry of each of its nodes
         self.log: List[Dict[str, Any]] = []       # one row per snapshot
+        # PAGES (2026-11-21): the same link can show a wholly different screen (a single-page app moving on).
+        # Such a snapshot starts page 2, 3... of this comp page instead of piling onto page 1.
+        self.page_no = 1                          # the page the snapshots show now
+        self.n_pages = 1
+        self.page_open = False                    # a page after the first, still loading: its nodes are anchor
+        self.snap_page: List[int] = []            # the page of each snapshot
 
-    def _returned(self, flat: List[Dict[str, Any]], ids: List[Optional[int]]) -> None:
+    def _page_change(self, flat: List[Dict[str, Any]], ids: List[Optional[int]]) -> Optional[int]:
+        """A SIGNIFICANT change (module doc, PAGES): None, or the page this snapshot shows instead of the
+        current one - an earlier page it matches, else a new page number."""
+        texts = [i for i, e in enumerate(flat) if e["text"]]
+        fresh = [i for i in texts if ids[i] is None or self.page_no not in self.entries[ids[i]]["pages"]
+                 or self.entries[ids[i]].get("text") != flat[i]["text"]]
+        if len(fresh) < MIN_PAGE_TEXTS or len(fresh) < SPLIT_SHARE * len(texts):
+            return None
+        # An earlier page the NEW texts match (key + text, the same test _returned starts with). Only the new
+        # texts: a part every page shows (a header, a form) must not pull the snapshot back to page 1.
+        faces = Counter((flat[i]["key"], flat[i]["text"]) for i in fresh)
+        best, score = None, 0
+        for p in range(1, self.n_pages + 1):
+            if p == self.page_no:
+                continue
+            on_p = {(e["key"], e["text"]) for e in self.entries if p in e["pages"] and e.get("text")}
+            s = sum(c for f, c in faces.items() if f in on_p)
+            if s > score:
+                best, score = p, s
+        if best is not None and score > BACK_SHARE * len(fresh):
+            return best
+        return self.n_pages + 1
+
+    def _returned(self, flat: List[Dict[str, Any]], ids: List[Optional[int]],
+                  gone: Optional[List[int]] = None) -> None:
         """Nodes the previous snapshot did not have, paired with entries that LEFT the anchor
         page: same key + text, else a unique shape + text, else the same key (a value that
-        changed while it was hidden)."""
-        live = set(self.live)
-        gone = [k for k in range(len(self.entries)) if k not in live]
+        changed while it was hidden). gone: the entries to pair with (default: every entry not live)."""
+        if gone is None:
+            live = set(self.live)
+            gone = [k for k in range(len(self.entries)) if k not in live]
         rest = [i for i, x in enumerate(ids) if x is None]
         if not gone or not rest:
             return
@@ -316,18 +361,39 @@ class AnchorPage:
                 ids[i] = self.prev_ids[j]
         paired = {x for x in ids if x is not None}
         self._returned(flat, ids)
-        returned = [i for i, x in enumerate(ids) if x is not None and x not in paired]
+        page_change = self._page_change(flat, ids) if self.settled and self.log else None
+        change_kind = ""
+        if page_change is not None:
+            # The page left behind keeps its own texts: a node paired across the change with another text
+            # belongs to the other page - it is not a value change.
+            for i, e in enumerate(flat):
+                if ids[i] is not None and e["text"] and self.entries[ids[i]].get("text") != e["text"]:
+                    ids[i] = None
+            if page_change <= self.n_pages:          # back to an earlier page: pair with its nodes
+                taken = {x for x in ids if x is not None}
+                self._returned(flat, ids, [k for k, ent in enumerate(self.entries)
+                                           if page_change in ent["pages"] and k not in taken])
+                self.page_open, change_kind = False, "back"
+            else:
+                self.n_pages, self.page_open, change_kind = page_change, True, "new"
+            self.page_no = page_change
+        elif self.page_open and quiet_before:
+            self.page_open = False
+        prev_set = set(self.prev_ids)
+        returned = [i for i, x in enumerate(ids) if x is not None and x not in prev_set]
         open_ = not self.settled
         first = not self.entries
         new = []
         for i, e in enumerate(flat):
             if ids[i] is None:
                 ids[i] = len(self.entries)
-                self.entries.append({"first": stamp, "origin": ANCHOR if open_ else ATTACHED,
+                self.entries.append({"first": stamp, "origin": ANCHOR if open_ or self.page_open else ATTACHED,
                                      "batch": len(self.log), "values": [], "left": 0, "came_back": 0,
-                                     "seen": [], "steps": [],
+                                     "seen": [], "steps": [], "pages": [], "page0": self.page_no,
                                      "parent0": ids[e["parent"]] if e["parent"] >= 0 else -1})
                 new.append(i)
+        if self.page_open and page_change is None and not new:
+            self.page_open = False
         now = set(ids)
         left = [k for k in self.live if k not in now]
         for k in left:
@@ -367,6 +433,9 @@ class AnchorPage:
             if e["text"] and e["text"] not in ent["values"] and len(ent["values"]) < link_map.MAX_VALUES:
                 ent["values"].append(e["text"])
             _mark_seen(ent, si, e["text"])
+            if self.page_no not in ent["pages"]:
+                ent["pages"].append(self.page_no)
+        self.snap_page.append(self.page_no)
         self.prev, self.prev_ids = flat, ids
 
         def texts(idx):
@@ -374,6 +443,7 @@ class AnchorPage:
         row = {"snapshot": stamp, "phase": "anchor" if open_ else "attach", "nodes": len(flat),
                "paired": len(paired), "rescued": rescued, "attached": len(new), "left": len(left),
                "returned": len(returned), "text_changed": changed,
+               "page": self.page_no, "page_change": change_kind,
                "attached_texts": [] if first else texts(new), "returned_texts": texts(returned),
                "left_texts": [self.entries[k]["text"] for k in left if self.entries[k]["text"]]}
         self.log.append(row)
@@ -420,23 +490,43 @@ class AnchorPage:
                 p = self.entries[k]["parent0"]
                 depth[k] = 0 if p < 0 or guard > 200 else d(p, guard + 1) + 1
             return depth[k]
+        last_of: Dict[int, int] = {}              # each page's last snapshot
+        for si, pg in enumerate(self.snap_page):
+            last_of[pg] = si
         out = []
         for n, k in enumerate(order):
             ent = self.entries[k]
             p = ent["parent0"]
+            pages = sorted(ent.get("pages") or [1])
+            present_pages = [pg for pg in pages if pg in last_of
+                             and any(a <= last_of[pg] <= b for a, b in ent["seen"])]
             out.append({"id": n, "key": ent["key"], "loose": ent["loose"], "parent": pos[p] if p >= 0 else -1,
                         "depth": d(k), "cls": ent["cls"],
                         "type": ent["type"], "text": ent["text"], "node": ent["node"], "values": ent["values"],
                         "first": ent["first"], "last": ent["last"], "origin": ent["origin"],
                         "batch": ent["batch"], "present": k in live, "left": ent["left"],
-                        "came_back": ent["came_back"], "seen": ent["seen"], "steps": ent["steps"]})
+                        "came_back": ent["came_back"], "seen": ent["seen"], "steps": ent["steps"],
+                        "pages": pages, "present_pages": present_pages})
         return out
+
+    def page_summary(self) -> List[Dict[str, Any]]:
+        """One row per page: its number, its visits (runs [first, last] of snapshot numbers) and stamps."""
+        rows: Dict[int, Dict[str, Any]] = {}
+        for si, pg in enumerate(self.snap_page):
+            r = rows.setdefault(pg, {"page": pg, "visits": [], "snapshots": 0, "first": self.log[si]["snapshot"]})
+            if r["visits"] and r["visits"][-1][1] == si - 1:
+                r["visits"][-1][1] = si
+            else:
+                r["visits"].append([si, si])
+            r["snapshots"] += 1
+            r["last"] = self.log[si]["snapshot"]
+        return [rows[p] for p in sorted(rows)]
 
 
 def comp_record(ap: AnchorPage) -> Dict[str, Any]:
     return {"comp_page": True, "session": ap.session, "page": ap.page, "browser": ap.browser,
             "anchor": ap.anchor_mode, "settled_at": ap.settled_at,
-            "snapshots": len(ap.log), "nodes": ap.comp_flat(), "log": ap.log}
+            "snapshots": len(ap.log), "nodes": ap.comp_flat(), "log": ap.log, "pages": ap.page_summary()}
 
 
 COMP_FIELDS = ["order", "origin", "batch", "first", "last", "present", "left", "came_back", "element", "value_type",
@@ -461,9 +551,15 @@ def write_comp(ap: AnchorPage, base: Path) -> Dict[str, Path]:
              f"Comp page  : {len(nodes)} nodes, {sum(1 for e in nodes if e['text'])} with text   "
              f"anchor {sum(1 for e in nodes if e['origin'] == ANCHOR)}, "
              f"attached {sum(1 for e in nodes if e['origin'] == ATTACHED)}, "
-             f"gone by the end {sum(1 for e in nodes if not e['present'])}", "=" * 100,
+             f"gone by the end {sum(1 for e in nodes if not e['present'])}",
+             f"Pages      : {len(rec['pages'])}   " + "   ".join(
+                 f"page {p['page']}: {p['snapshots']} snapshot(s), {sum(1 for e in nodes if p['page'] in e['pages'])} nodes"
+                 for p in rec["pages"]), "=" * 100,
              f"{'snapshot':>9s} {'phase':6s} {'nodes':>6s} {'paired':>6s} {'rescue':>6s} {'new':>5s} {'left':>5s} {'back':>5s} {'text~':>5s}"]
     for r in ap.log:
+        if r.get("page_change"):
+            lines.append(f"{'':10s}== page {r['page']} " + ("starts (the screen changed)" if r["page_change"] == "new"
+                                                         else "again (back to an earlier screen)") + " ==")
         lines.append(f"{r['snapshot']:>9s} {r['phase']:6s} {r['nodes']:6d} {r['paired']:6d} {r['rescued']:6d} "
                      f"{r['attached']:5d} {r['left']:5d} {r['returned']:5d} {r['text_changed']:5d}")
         for tag, key in (("+ attached", "attached_texts"), ("- left    ", "left_texts"), ("< back    ", "returned_texts")):

@@ -1,5 +1,5 @@
 @echo off
-REM SDIS pre-dev views: one window for render / groups / arrangement / outline / shape map / card match / tables.
+REM SDIS pre-dev views: one window for render / outline / shape map / card match / tables / page map.
 REM Pick a capture or comp page from output\, tick the views, press Make views.
 cd /d "%~dp0..\..\.."
 set PYTHONIOENCODING=utf-8

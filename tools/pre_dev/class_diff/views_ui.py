@@ -1,15 +1,13 @@
 """
-tools/pre_dev/class_diff/views_ui.py - PRE-DEV: one small window for the eight HTML views
-=========================================================================================
+tools/pre_dev/class_diff/views_ui.py - PRE-DEV: one small window for the six HTML views
+=======================================================================================
 Pick a capture or comp page from output/ (newest first), tick the views, press Make views. Each
 view runs its own tool (render.py, shape_map.py, tables.py) as a child process, exactly the command
 you would type, and the pages it writes open in the default browser. The log shows the tools' console
 lines, which hold counts only.
 
   render                render.py FILE
-  groups (cards)        render.py FILE --groups
-  arrangement           render.py FILE --arrange
-  outline               render.py FILE --outline
+  outline              render.py FILE --outline
   shape map             shape_map.py FILE --no-match
   card match            shape_map.py FILE   (the shape map plus card_match.py's percentages and structure;
                                              with both ticked only this one runs: same page)
@@ -25,7 +23,8 @@ many pairs lined up, how many matched and the highest score that was turned down
 
 New capture runs key_probe.py in its own console window (switch to the browser within 8 s); the list
 refreshes when it ends. Clear all captures sends every capture, comp page and view page in output/ to the
-Recycle Bin after a yes (CLEAR_PREFIXES; other files and sub-folders stay). Launch with views.bat (tools/pre_dev/class_diff/views.bat).
+Recycle Bin after a yes (CLEAR_PREFIXES; other files and sub-folders stay). The groups and arrangement
+views left the window on 2026-11-21 (card match replaced them); render.py --groups / --arrange still work. Launch with views.bat (tools/pre_dev/class_diff/views.bat).
 """
 
 import os
@@ -45,8 +44,6 @@ OUT = HERE / "output"
 # (label, script, extra args, needs a capture/read rather than a comp page)
 VIEWS = [
     ("render", "render.py", [], False),
-    ("groups (cards.py)", "render.py", ["--groups"], False),
-    ("arrangement (arrange.py)", "render.py", ["--arrange"], False),
     ("outline (container shapes)", "render.py", ["--outline"], False),
     ("shape map (record sets)", "shape_map.py", ["--no-match"], False),
     ("card match (shape map + %)", "shape_map.py", [], False),
