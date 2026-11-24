@@ -324,10 +324,11 @@ def test_every_column_sorts(world):
 
 # ---- R1.1/R1.6 header + the actions act on the intended client ------------------------------
 
-def test_header_is_every_visible_mcl_column_plus_services(world):
+def test_header_is_every_visible_mcl_column_plus_filing_status(world):
     db, ids, win = world
-    assert _header(win) == [c["label"] for c in db.get_mcl_columns()] + ["Services"]
-    services_col = _col(win, "Services")
+    assert _header(win) == [c["label"] for c in db.get_mcl_columns()] + ["Filing status"]
+    # with nothing tracked yet the cell falls back to the client's services
+    services_col = _col(win, "Filing status")
     assert win.results_table.item(_row_of(win, ids["A"]), services_col).text() == "GST, Income Tax"
     assert win.results_table.item(_row_of(win, ids["B"]), services_col).text() == ""
 

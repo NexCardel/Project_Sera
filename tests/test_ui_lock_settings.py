@@ -205,7 +205,7 @@ def test_main_screen_visibility_reaches_the_search_grid_after_save(env):
     win = SearchWindow(db)
     try:
         heads = [win.results_table.horizontalHeaderItem(i).text() for i in range(win.results_table.columnCount())]
-        assert heads == ["NAME OF COMPANY", "PAN", "Services"]
+        assert heads == ["NAME OF COMPANY", "PAN", "Filing status"]
     finally:
         S.dispose(win)
 

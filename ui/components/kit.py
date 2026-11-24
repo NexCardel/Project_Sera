@@ -135,6 +135,9 @@ DataGrid(rows=0, columns=0, parent=None, *, tone="white", list_mode=False)
       ROLE_ACTIONS  [CellAction, ...]      buttons drawn in the cell; a click emits
                                            actionTriggered(row, column, key); hover tooltip per button
       ROLE_SUB      "second line"          two-line cell: bold first line, muted mono second line
+      ROLE_FILINGS  [(text, fill, ink, tip)] filing-status chips, left to right; fill None draws a
+                                           hollow chip outlined in ink; "+N" when they do not fit;
+                                           hover shows the chip's tip
       Checkable items with a check state (item.setCheckState) draw a kit checkbox; a click on it or
       Space toggles CheckStateRole.
       Any other cell: DisplayRole text, elided, full text as tooltip when cut (ToolTipRole wins).
@@ -2624,6 +2627,7 @@ ROLE_PILL = Qt.UserRole + 0x101       # (text, tone) or (text, tone, dot): statu
 ROLE_TAG = Qt.UserRole + 0x102        # (text, tone): mono tag (list tables)
 ROLE_ACTIONS = Qt.UserRole + 0x103    # [CellAction, ...]: buttons drawn in the cell
 ROLE_SUB = Qt.UserRole + 0x104        # muted mono second line: makes the cell a two-line "tall" cell
+ROLE_FILINGS = Qt.UserRole + 0x105    # [(text, fill or None, ink, tooltip), ...]: filing-status chips
 
 GRID_KINDS = ("text", "num", "mono", "strong")
 
@@ -2867,8 +2871,11 @@ class GridDelegate(QStyledItemDelegate):
         services = index.data(ROLE_SERVICES)
         pill = index.data(ROLE_PILL)
         tag = index.data(ROLE_TAG)
+        filings = index.data(ROLE_FILINGS)
         if actions:
             self._paint_actions(painter, rect, actions)
+        elif filings:
+            self._paint_filings(painter, option, cr, filings)
         elif services:
             self._paint_services(painter, option, cr, services)
         elif pill:
@@ -3072,6 +3079,69 @@ class GridDelegate(QStyledItemDelegate):
             painter.drawText(QRect(x, cr.top(), max(cr.right() - x, 0), cr.height()),
                              Qt.AlignLeft | Qt.AlignVCenter, f"+{len(items) - shown}")
 
+    # ---- filing-status chips (ROLE_FILINGS)
+    _FILING_GAP = 4
+    _FILING_PAD = 7
+
+    def _filing_layout(self, option, cr, chips):
+        """(font, [(QRectF, chip), ...], more rect or None, hidden count): chips left to right while they
+        fit, keeping room for the "+N" counter when some do not."""
+        font = self._small_font(option, T["f_xs"])
+        fm = QFontMetrics(font)
+        h = K["h_gpill"]
+        top = cr.top() + (cr.height() - h) / 2
+        widths = [fm.horizontalAdvance(c[0]) + 2 * self._FILING_PAD for c in chips]
+        placed, x = [], cr.left()
+        for i, (w, chip) in enumerate(zip(widths, chips)):
+            rest = len(chips) - i - 1
+            need = w + (self._FILING_GAP + fm.horizontalAdvance(f"+{rest}") + 2 * self._FILING_PAD if rest else 0)
+            if x + need > cr.right() + 1 and (i or rest):
+                break
+            placed.append((QRectF(x, top, min(w, cr.right() + 1 - x), h), chip))
+            x += w + self._FILING_GAP
+        hidden = len(chips) - len(placed)
+        more = None
+        if hidden:
+            more = QRectF(x, top, fm.horizontalAdvance(f"+{hidden}") + 2 * self._FILING_PAD, h)
+        return font, placed, more, hidden
+
+    def _paint_filings(self, painter, option, cr, chips):
+        font, placed, more, hidden = self._filing_layout(option, cr, chips)
+        fm = QFontMetrics(font)
+        painter.setFont(font)
+        radius = K["h_gpill"] / 2
+        for r, (text, fill, ink, _tip) in placed:
+            ink_c = QColor(ink)
+            if fill:
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QColor(fill))
+            else:
+                pen = QPen(ink_c, 1.2, Qt.DashLine)
+                painter.setPen(pen)
+                painter.setBrush(Qt.NoBrush)
+            painter.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
+            painter.setPen(ink_c)
+            room = int(r.width()) - 2 * self._FILING_PAD
+            painter.drawText(r.adjusted(self._FILING_PAD, 0, -self._FILING_PAD, 0), Qt.AlignLeft | Qt.AlignVCenter,
+                             fm.elidedText(text, Qt.ElideRight, max(room, 0)))
+        if more is not None:
+            painter.setPen(QPen(QColor(self._pal()["line"]), 1))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRoundedRect(more.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
+            painter.setPen(QColor(self._pal()["mute"]))
+            painter.drawText(more, Qt.AlignCenter, f"+{hidden}")
+
+    def _filing_tooltip(self, option, cr, chips, pos):
+        _font, placed, more, hidden = self._filing_layout(option, cr, chips)
+        if pos is not None:
+            for r, chip in placed:
+                if r.contains(pos):
+                    return chip[3] or chip[0]
+            if more is not None and more.contains(pos):
+                return "\n\n".join(c[3] or c[0] for c in chips[len(placed):])
+            return ""
+        return "\n\n".join(c[3] or c[0] for c in chips) if hidden else ""
+
     def _pill_metrics(self):
         """(font px, padding, dot diameter) of a cell pill."""
         if self.large_pills:
@@ -3161,6 +3231,9 @@ class GridDelegate(QStyledItemDelegate):
             hit = self._action_at(option.rect, actions, pos) if pos is not None else None
             return hit.tooltip if hit else ""
         cr = self._content_rect(option.rect, index)
+        filings = index.data(ROLE_FILINGS)
+        if filings:
+            return self._filing_tooltip(option, cr, filings, QPointF(pos) if pos is not None else None)
         services = index.data(ROLE_SERVICES)
         if services:
             fm = QFontMetrics(self._small_font(option, T["f_s"]))

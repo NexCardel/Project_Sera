@@ -26,12 +26,13 @@ try:
 except Exception:
     qta = None
 from ui.components.kit import (
-    ROLE_SERVICES, Card, ChipBar, DataGrid, GridFooter, GridFrame, IconButton, Input, LabelledAction,
+    ROLE_FILINGS, ROLE_SERVICES, Card, ChipBar, DataGrid, GridFooter, GridFrame, IconButton, Input, LabelledAction,
     PageHeader, SelectionBar, SettingRow, Switch, set_page_margins,
 )
 from ui.utils.responsive import WidthAware, WidthMode
 from ui.utils.theme import SmartTableWidgetItem
 from ui.utils.tokens import KIT, TOKENS as T
+from core.drs.strip import build_filing_strips, strip_text
 
 # Quick-filter chips: chip id -> service_filter data (the hidden combo stays the source of truth).
 _QUICK_FILTERS = (
@@ -553,7 +554,7 @@ class SearchWindow(WidthAware, QWidget):
             self._cached_services = services
         
         headers = [col["label"] for col in mcl_cols]
-        headers.append("Services")
+        headers.append("Filing status")
 
         self.results_table.setUpdatesEnabled(False)
         self.results_table.setSortingEnabled(False)
@@ -562,7 +563,7 @@ class SearchWindow(WidthAware, QWidget):
             self.results_table.setHorizontalHeaderLabels(headers)
             for c_idx, col in enumerate(mcl_cols):
                 self.results_table.set_column(c_idx, **_column_spec(col))
-            self.results_table.set_column(len(mcl_cols), kind="text", stretch=2, minimum=140)
+            self.results_table.set_column(len(mcl_cols), kind="text", stretch=4, minimum=220)
 
             if isinstance(svc_val, int):
                 clients = self.db.search_clients(text, service_id=svc_val)
@@ -576,6 +577,7 @@ class SearchWindow(WidthAware, QWidget):
             service_dots = {s["id"]: _SERVICE_DOTS[i % len(_SERVICE_DOTS)] for i, s in enumerate(services)}
 
             client_ids = [c["id"] for c in clients]
+            strips = self._filing_strips(clients)
             fmt_map = self.db.get_cell_formatting_for_clients(client_ids)
             recent_acts = self.db.get_recent_client_activities(max_age_seconds=1800)
             
@@ -648,15 +650,21 @@ class SearchWindow(WidthAware, QWidget):
 
                     self.results_table.setItem(r, c_idx, item)
                     
-                # Services column
+                # Filing status column (one-row DRS); a client with nothing tracked keeps its service dots.
+                # The cell keeps the old "services" key so existing cell formats still apply.
                 client_svc_ids = client.get("service_ids", [])
                 svc_names = [services_map[s_id] for s_id in client_svc_ids if s_id in services_map]
-                svc_val_str = ", ".join(svc_names)
-                svc_item = SmartTableWidgetItem(svc_val_str)
+                chips = strips.get(client_id) or []
+                svc_item = SmartTableWidgetItem(strip_text(chips) if chips else ", ".join(svc_names))
                 svc_item.setData(Qt.UserRole, client_id)
                 svc_item.setData(Qt.UserRole + 1, "services")
-                svc_item.setData(ROLE_SERVICES, [
-                    (services_map[s_id], service_dots[s_id]) for s_id in client_svc_ids if s_id in services_map])
+                if chips:
+                    svc_item.setData(ROLE_FILINGS, [
+                        (c.text + (f" ×{c.registrations}" if c.registrations > 1 else ""), c.colours[0],
+                         c.colours[1], c.detail) for c in chips])
+                else:
+                    svc_item.setData(ROLE_SERVICES, [
+                        (services_map[s_id], service_dots[s_id]) for s_id in client_svc_ids if s_id in services_map])
 
                 svc_fmt = fmt_map.get((client_id, "services"))
                 if svc_fmt:
@@ -704,6 +712,36 @@ class SearchWindow(WidthAware, QWidget):
             self.results_table.horizontalHeader().setSortIndicatorShown(True)
             self.results_table.horizontalHeader().setSectionsClickable(True)
             self.results_table.setUpdatesEnabled(True)
+
+    # The strips read every tracker capture; reuse them until master.db or rawPayload.db is written
+    # in this process, and for at most this long (another PC's sync is not seen otherwise).
+    STRIPS_FOR_S = 60.0
+
+    def _filing_strips(self, clients):
+        gen = getattr(self.db, "data_generation", None)
+        raw = getattr(self.db, "raw_generation", None)
+        key = (gen() if callable(gen) else None, raw() if callable(raw) else None)
+        cached = getattr(self, "_strip_cache", None)
+        if cached and cached[0] == key and time.monotonic() - cached[1] < self.STRIPS_FOR_S:
+            strips = cached[2]
+            missing = [c for c in clients if c["id"] not in strips]
+            if not missing:
+                return strips
+        try:
+            everyone = self.db.search_clients("", include_archived=True)
+        except TypeError:
+            everyone = self.db.search_clients("")
+        except Exception:
+            everyone = []
+        ids = {c["id"] for c in everyone}
+        try:
+            strips = build_filing_strips(self.db, everyone + [c for c in clients if c["id"] not in ids])
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("filing strips failed")
+            strips = {}
+        self._strip_cache = (key, time.monotonic(), strips)
+        return strips
 
     def set_sidebar_collapsed(self, collapsed):
         """The title-row sidebar button shows only while the sidebar (which has its own) is collapsed."""
