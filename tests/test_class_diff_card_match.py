@@ -135,7 +135,7 @@ def test_a_sets_cards_carry_their_match_group():
     doc = _page(extra_button=3)                      # card 3 against the others: 83.3 %
     pc = shape_map.page_containers(doc)
     m = shape_map.infer(pc)["sets"][0]["match"]
-    assert m["group_min"] == card_match.GROUP_MIN == 80.0
+    assert m["group_min"] == card_match.GROUP_MIN == 50.0
     assert [g["cards"] for g in m["groups"]] == [[0, 1, 2, 3]] and {c["group"] for c in m["cards"]} == {0}
     inf = shape_map.infer(pc, group_min=90)
     m = inf["sets"][0]["match"]
@@ -257,3 +257,48 @@ def test_clear_all_asks_first_and_refreshes(tmp_path, monkeypatch):
         assert app.files == [] and app.list.size() == 0
     finally:
         root.destroy()
+
+
+def _gs(doc, group_min=None):
+    pc = shape_map.page_containers(doc)
+    sets = [s for s in shape_map.infer(pc, group_min=group_min)["sets"] if s["tail"].endswith("card")]
+    return sets[0]["match"]
+
+
+def test_one_group_structure_per_match_group():
+    m = _gs(_page(extra_button=3), group_min=90)
+    gss = m["group_structures"]
+    assert [g["cards"] for g in gss] == [g["cards"] for g in m["groups"]] == [[0, 1, 2], [3]]
+    assert all(len(g["own"]) == len(g["cards"]) for g in gss)
+    assert gss[1]["ref"] == 3 and gss[1]["extras"] == []
+
+
+def test_generalized_card_places_each_slot_relative_to_the_card():
+    gs = _gs(_page())["group_structures"][0]
+    assert (gs["W"], gs["H"]) == (700, 280) and gs["cards"] == [0, 1, 2, 3]
+    boxes = [sl["box"] for sl in gs["slots"]]
+    assert boxes == [[20, 15, 120, 20], [20, 65, 100, 20], [130, 65, 100, 20], [20, 95, 100, 20],
+                     [130, 95, 100, 20], [20, 205, 80, 30]]
+    assert all(sl["jitter"] == 0 and sl["found"] == 4 for sl in gs["slots"])
+    assert [sl["role"] for sl in gs["slots"]] == ["value", "label", "value", "label", "value", "label"]
+    # each card's own leaves carry their slot
+    assert [b[4] for b in gs["own"][2]["leaves"]] == [0, 1, 2, 3, 4, 5]
+
+
+def test_generalized_card_shows_missing_slots_and_extras():
+    gs = _gs(_page(extra_button=3, drop_date=1))["group_structures"][0]
+    assert gs["cards"] == [0, 1, 2, 3]
+    date = [sl for sl in gs["slots"] if sl["kind"] == "date"]
+    assert len(date) == 1 and date[0]["found"] == 3 and date[0]["box"] == [130, 95, 100, 20]
+    assert [(e["kind"], e["cards"], e["box"]) for e in gs["extras"]] == [("button", [3], [110, 205, 80, 30])]
+    assert [b[4] for b in gs["own"][3]["leaves"]][-1] == -1          # the extra button: no slot
+
+
+def test_shape_map_html_has_the_group_structure_tab():
+    doc = _page(extra_button=3)
+    pc = shape_map.page_containers(doc)
+    html = shape_map.build_html(pc, shape_map.infer(pc), {})
+    assert 'id="tb-groups"' in html and 'id="tab-groups"' in html
+    data = json.loads(re.search(r"const D = (\{.*?\});\n", html, re.S).group(1))
+    assert data["sets"][0]["match"]["group_structures"][0]["slots"]
+    assert "Download" not in html and "Filed on" not in html          # no page text in the page

@@ -31,6 +31,10 @@ child it sits in). Leaves no reference leaf took are extra slots, grouped by (ki
 extra also lists its node indexes (a slot: one per card, None where the card lacks it), so a picker can
 light the same slot in every card (render.py --cards).
 
+group_structure() does the same for the cards of one match group and places it: every slot gets a
+generalized box (the lower median of x, y, w and h over the group's cards, relative to the card) and a
+jitter (how far the cards' copies stray from it). shape_map.py draws it as the group's generalized card.
+
 Texts are compared in memory only. Nothing returned holds a text: kinds, paths, counts, percentages and
 node indexes.
 Deterministic: the same input gives the same output.
@@ -237,7 +241,7 @@ def structure(leaves: List[List[Dict[str, Any]]], ref: int) -> Dict[str, Any]:
             "always": sum(sl["found"] == n for sl in slots)}
 
 
-GROUP_MIN = 80.0        # PROVISIONAL: two cards of one set are in one match group when their pair matches
+GROUP_MIN = 50.0       # PROVISIONAL: two cards of one set are in one match group when their pair matches
                         # this much (compare()'s overall, percent)
 
 
@@ -270,6 +274,70 @@ def match_groups(n: int, pairs: Dict[str, Dict[str, Any]], group_min: float = GR
         out.append({"cards": cards, "link_min": min(links) if links else None,
                     "pair_min": min(inside) if inside else None})
     return out
+
+
+def _rel_box(k: Optional[int], card: int, nodes: List[Dict[str, Any]]) -> Optional[List[int]]:
+    """Node k's box relative to the card's top-left corner, or None (no node, no box)."""
+    if k is None:
+        return None
+    r, c = nodes[k].get("rect"), nodes[card].get("rect")
+    if not r or not c or r[2] <= 0 or r[3] <= 0:
+        return None
+    return [r[0] - c[0], r[1] - c[1], r[2], r[3]]
+
+
+def _general_box(boxes: List[Optional[List[int]]]) -> Tuple[Optional[List[int]], Optional[int]]:
+    """The generalized box of one slot: the lower median of each of x, y, w, h over the cards that have it,
+    and its jitter (the farthest any card's top-left corner sits from that box, px)."""
+    from statistics import median_low
+    bs = [b for b in boxes if b]
+    if not bs:
+        return None, None
+    med = [median_low([b[i] for b in bs]) for i in range(4)]
+    return med, max(max(abs(b[0] - med[0]), abs(b[1] - med[1])) for b in bs)
+
+
+def group_structure(leaves: List[List[Dict[str, Any]]], members: List[int], cards: List[int],
+                    pairs: Dict[str, Dict[str, Any]], nodes: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """The generalized card of one match group: structure() over the group's cards only (the reference is
+    the group's medoid), with every slot placed at its generalized box (_general_box, relative to the card),
+    the card's median size, and each card's own leaves (box + slot, -1 = an extra) to draw beside it.
+    cards: set card indexes of the group. Boxes, kinds, counts and node indexes only, no text."""
+    from statistics import median_low
+    n = len(cards)
+
+    def score(a, b):
+        return pairs[f"{min(a, b)}-{max(a, b)}"]["overall"]
+    ref = max(range(n), key=lambda x: (sum(score(cards[x], cards[y]) for y in range(n) if y != x), -x))
+    st = structure([leaves[c] for c in cards], ref)
+    rects = [nodes[members[c]].get("rect") or [0, 0, 0, 0] for c in cards]
+    W, H = median_low([r[2] for r in rects]), median_low([r[3] for r in rects])
+    slot_of: Dict[int, int] = {}
+    slots = []
+    for sl in st["slots"]:
+        box, jit = _general_box([_rel_box(k, members[cards[li]], nodes) for li, k in enumerate(sl["nodes"])])
+        for k in sl["nodes"]:
+            if k is not None:
+                slot_of[k] = sl["slot"]
+        slots.append({"slot": sl["slot"], "kind": sl["kind"], "role": sl["role"], "path": sl["path"],
+                      "found": sl["found"], "of": sl["of"], "label": sl["label"], "block": sl["block"],
+                      "box": box, "jitter": jit, "nodes": sl["nodes"]})
+    extras = []
+    for e in st["extras"]:
+        box, jit = _general_box([_rel_box(k, members[cards[li]], nodes) for k, li in zip(e["nodes"], e["node_cards"])])
+        extras.append({"kind": e["kind"], "path": e["path"], "count": e["count"],
+                       "cards": [cards[li] for li in e["cards"]], "box": box, "jitter": jit, "nodes": e["nodes"]})
+    own = []
+    for li, c in enumerate(cards):
+        r = rects[li]
+        ls = []
+        for x in leaves[c]:
+            b = _rel_box(x["k"], members[c], nodes)
+            if b:
+                ls.append(b + [slot_of.get(x["k"], -1)])
+        own.append({"card": c, "w": r[2], "h": r[3], "leaves": ls})
+    return {"cards": list(cards), "ref": cards[ref], "W": W, "H": H, "slots": slots, "extras": extras,
+            "own": own, "always": st["always"], "labels": st["labels"], "values": st["values"]}
 
 
 def match_set(members: List[int], nodes: List[Dict[str, Any]], flat: List[Dict[str, Any]],
@@ -309,7 +377,8 @@ def match_set(members: List[int], nodes: List[Dict[str, Any]], flat: List[Dict[s
             cards[i]["group"] = g
     return {"layer_names": names, "pairs": pairs, "cards": cards, "layers": set_layers, "overall": set_overall,
             "groups": groups, "group_min": group_min,
-            "structure": structure(leaves, ref) if n else None}
+            "structure": structure(leaves, ref) if n else None,
+            "group_structures": [group_structure(leaves, members, grp["cards"], pairs, nodes) for grp in groups]}
 
 
 def _counts(leaves: List[Dict[str, Any]]) -> Dict[str, int]:
