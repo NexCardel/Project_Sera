@@ -23,6 +23,10 @@ groups the containers of one page by shape and reads the groups the way a person
   card match   card_match.py compares the members of each record set node by node, in layers (node kinds,
                then nodes against their neighbours), gives each pair and each card a match percentage,
                and reads the structure the cards share (slots, labels, values, extras).
+  group        the HTML's "Group structure" tab draws one generalized card per match group
+  structure    (card_match.group_structure): each slot at the median box of its copies, coloured by role,
+               dashed when not in every card, extras in orange, with each card of the group beside it.
+               Hovering a slot lights it in every card. Kinds and boxes only, no page text.
 
 Nothing here knows a portal, a class name or a wording. Deterministic: the same input gives the same
 bytes. The console gets counts, sizes and the last two steps of each shape (template class names) - no
@@ -529,6 +533,21 @@ TEMPLATE = r"""<!doctype html>
   .how b { font-weight:600; }
   .found { color:var(--muted); font:12px/1.4 ui-monospace, Consolas, monospace; margin-top:2px; }
   .bar { display:inline-block; height:8px; background:#2f9e44; vertical-align:middle; border-radius:2px; margin-left:4px; }
+  .tabs { display:flex; gap:4px; margin-top:8px; }
+  .tabs button { font:inherit; padding:4px 12px; border:1px solid var(--line); border-radius:6px 6px 0 0; background:var(--bg); color:var(--ink); cursor:pointer; }
+  .tabs button.on { background:var(--card); font-weight:600; border-bottom-color:var(--card); }
+  .tab[hidden] { display:none !important; }
+  .gs { padding:12px 16px; }
+  .gs .gset { background:var(--card); border:1px solid var(--line); border-left:6px solid; border-radius:6px; padding:10px 12px; margin-bottom:12px; }
+  .gs .ggrp { border-top:1px dashed var(--line); margin-top:10px; padding-top:8px; }
+  .gs .row { display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start; margin-top:6px; }
+  .gs .gen { background:#fff; box-shadow:0 1px 4px rgba(0,0,0,.15); max-width:100%; height:auto; }
+  .gs .thumbs { display:flex; gap:8px; flex-wrap:wrap; align-items:flex-start; flex:1 1 240px; }
+  .gs .thumb { text-align:center; font:11px/1.3 ui-monospace, Consolas, monospace; color:var(--muted); }
+  .gs .thumb svg { background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.15); display:block; }
+  .gs .info { font:12px/1.4 ui-monospace, Consolas, monospace; color:var(--muted); min-height:1.4em; margin-top:4px; overflow-wrap:anywhere; }
+  .gs .legend { font-size:12px; color:var(--muted); margin-bottom:10px; }
+  .sw { display:inline-block; width:12px; height:10px; border:1.5px solid; vertical-align:middle; margin:0 3px 0 8px; }
 </style>
 </head>
 <body>
@@ -537,10 +556,23 @@ TEMPLATE = r"""<!doctype html>
   <label><input type="checkbox" id="showlift" checked> lifted records</label>
   <label><input type="checkbox" id="showpct" checked> card match %</label>
   <span class="meta">click a set to show only it · click again to show all</span>
+  <div class="tabs"><button id="tb-map" class="on">Map</button><button id="tb-groups">Group structure</button></div>
 </header>
+<div class="tab" id="tab-map">
 <div class="wrap">
   <svg class="map" id="map"></svg>
   <div class="side"><div class="how" id="how"></div><div id="sets"></div><pre id="rep"></pre></div>
+</div>
+</div>
+<div class="tab gs" id="tab-groups" hidden>
+  <div class="legend">One generalized card per match group: each slot sits at the median box of its copies in the group's cards.
+    <span class="sw" style="border-color:#2f9e44;background:rgba(47,158,68,.25)"></span>value (text differs)
+    <span class="sw" style="border-color:#868e96;background:rgba(134,142,150,.25)"></span>label (same text)
+    <span class="sw" style="border-color:#1971c2;background:rgba(25,113,194,.15)"></span>one card only
+    <span class="sw" style="border-color:#868e96;border-style:dashed"></span>not in every card
+    <span class="sw" style="border-color:#e8590c;border-style:dashed"></span>extra (no slot)
+    · hover a slot to light it in every card</div>
+  <div id="groups"></div>
 </div>
 <script>
 const D = /*DATA*/null;
@@ -740,6 +772,133 @@ document.getElementById('showpct').addEventListener('change', apply);
 document.getElementById('rep').textContent = D.report.join('\n');
 document.getElementById('meta').textContent = [D.page, D.source].filter(Boolean).join(' · ');
 apply();
+
+// ── Group structure tab: one generalized card per match group ──
+const ROLE = {value: ['#2f9e44', .25], label: ['#868e96', .25], '?': ['#1971c2', .15]};
+function sv(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+function canvas(w, h, maxW) {
+  // an svg in card pixels, shown at most maxW screen px wide; returns [svg, px per card px]
+  const sc = Math.min(1, maxW / Math.max(1, w));
+  const s = sv('svg', {viewBox: '0 0 ' + Math.max(1, w) + ' ' + Math.max(1, h),
+    width: Math.round(Math.max(1, w) * sc), height: Math.round(Math.max(1, h) * sc)});
+  return [s, sc];
+}
+function bounds(gs) {
+  // the card's size, grown to hold any slot that sits outside it
+  let w = gs.W, h = gs.H;
+  for (const x of gs.slots.concat(gs.extras)) if (x.box) { w = Math.max(w, x.box[0] + x.box[2]); h = Math.max(h, x.box[1] + x.box[3]); }
+  return [w, h];
+}
+function groupPanel(s, si, gs, gi, col) {
+  const el = el_('div', 'ggrp');
+  const n = gs.cards.length;
+  el.appendChild(el_('div', 'big', 'group ' + (gi + 1) + ' · ' + n + ' card' + (n > 1 ? 's' : '') + ' (' + gs.cards.map(c => 'c' + c).join(', ') + ')'
+    + ' · reference c' + gs.ref + ' · ' + gs.slots.length + ' slots, in every card ' + gs.always + ' · labels ' + gs.labels
+    + ' · values ' + gs.values + ' · extras ' + gs.extras.reduce((a, e) => a + e.count, 0)));
+  const row = el_('div', 'row');
+  const [bw, bh] = bounds(gs);
+  const [gen, sc] = canvas(bw, bh, 460);
+  gen.classList.add('gen');
+  sv('rect', {x: 0, y: 0, width: gs.W, height: gs.H, fill: 'none', stroke: col, 'stroke-width': 3 / sc}, gen);
+  const info = el_('div', 'info', n > 1 ? 'hover a slot' : 'one card: nothing to generalize, its own layout is shown');
+  const thumbs = el_('div', 'thumbs');
+  const lit = [];                                   // per card: slot -> its rects
+  const general = {};                               // slot -> generalized rect
+  function light(slot) {
+    for (const m of lit) for (const [k, rs] of Object.entries(m)) for (const r of rs) {
+      r.setAttribute('stroke-width', (+k === slot ? 4 : 1.5) / r._sc);
+      r.setAttribute('stroke', +k === slot ? '#e8590c' : r._col);
+    }
+    for (const [k, r] of Object.entries(general)) r.setAttribute('stroke', +k === slot ? '#e8590c' : r._col);
+  }
+  function draw(svg, b, colr, op, dashed, scl, label) {
+    const r = sv('rect', {x: b[0], y: b[1], width: Math.max(1, b[2]), height: Math.max(1, b[3]), fill: colr, 'fill-opacity': op,
+      stroke: colr, 'stroke-width': 1.5 / scl}, svg);
+    if (dashed) r.setAttribute('stroke-dasharray', (5 / scl) + ' ' + (3 / scl));
+    r._col = colr; r._sc = scl;
+    if (label) {
+      const f = Math.min(12, (b[2] * scl - 4) / (label.length * 0.62), b[3] * scl - 2);
+      if (f >= 7) {
+        const t = sv('text', {x: b[0] + 2 / scl, y: b[1] + (f * 0.85 + 1) / scl, 'font-size': f / scl, fill: colr, 'pointer-events': 'none',
+          'font-family': 'ui-monospace, Consolas, monospace'}, svg);
+        t.textContent = label;
+      }
+    }
+    return r;
+  }
+  for (const x of gs.slots) {
+    if (!x.box) continue;
+    const [c, op] = ROLE[x.role] || ROLE['?'];
+    const part = x.found < x.of;
+    const r = draw(gen, x.box, c, part ? op * .5 : op, part, sc, x.slot + ' ' + x.kind);
+    general[x.slot] = r;
+    const tip = 'slot ' + x.slot + ': ' + x.kind + ', ' + x.role + ', in ' + x.found + ' of ' + x.of + ' cards'
+      + (x.label !== null ? ', label = slot ' + x.label : '') + ' · box ' + x.box.join(',') + ' · jitter ' + x.jitter + ' px';
+    sv('title', {}, r).textContent = tip + '\n…' + x.path;
+    r.addEventListener('mouseenter', () => { light(x.slot); info.textContent = tip; });
+    r.addEventListener('mouseleave', () => { light(null); });
+  }
+  for (const e of gs.extras) {
+    if (!e.box) continue;
+    const r = draw(gen, e.box, '#e8590c', .12, true, sc, '+' + e.kind);
+    const tip = 'extra: ' + e.kind + ' ×' + e.count + ' in cards ' + e.cards.map(c => 'c' + c).join(', ') + ' · jitter ' + e.jitter + ' px';
+    sv('title', {}, r).textContent = tip + '\n…' + e.path;
+    r.addEventListener('mouseenter', () => { info.textContent = tip; });
+  }
+  row.appendChild(gen);
+  if (n > 1) for (const o of gs.own) {
+    const t = el_('div', 'thumb');
+    let w = o.w, h = o.h;
+    for (const b of o.leaves) { w = Math.max(w, b[0] + b[2]); h = Math.max(h, b[1] + b[3]); }
+    const [ts, tsc] = canvas(w, h, 150);
+    sv('rect', {x: 0, y: 0, width: o.w, height: o.h, fill: 'none', stroke: col, 'stroke-width': 2 / tsc}, ts);
+    const m = {};
+    for (const b of o.leaves) {
+      const slot = b[4], x = slot >= 0 ? gs.slots[slot] : null;
+      const [c, op] = x ? (ROLE[x.role] || ROLE['?']) : ['#e8590c', .12];
+      const r = draw(ts, b, c, op, !x, tsc, '');
+      if (x) (m[slot] = m[slot] || []).push(r);
+    }
+    lit.push(m);
+    t.appendChild(ts);
+    t.appendChild(el_('div', '', 'c' + o.card + (o.card === gs.ref ? ' (ref)' : '')));
+    thumbs.appendChild(t);
+  }
+  row.appendChild(thumbs);
+  el.appendChild(row);
+  el.appendChild(info);
+  return el;
+}
+const gbox = document.getElementById('groups');
+let anyGroup = false;
+D.sets.forEach((s, i) => {
+  const m = s.match;
+  if (!m || !m.group_structures) return;
+  anyGroup = true;
+  const col = PAL[i % PAL.length];
+  const el = el_('div', 'gset');
+  el.style.borderLeftColor = col;
+  el.appendChild(el_('div', 'h', 'set ' + i + ': ' + s.count + ' × ' + s.type + ' · ' + s.layout.kind + ' · '
+    + m.groups.length + ' match group' + (m.groups.length > 1 ? 's' : '') + ' (pairs ≥ ' + m.group_min + '% linked)'));
+  m.group_structures.forEach((gs, gi) => el.appendChild(groupPanel(s, i, gs, gi, col)));
+  gbox.appendChild(el);
+});
+if (!anyGroup) gbox.appendChild(el_('div', 'info', 'No record set with a card match on this page.'));
+function showTab(name) {
+  for (const t of ['map', 'groups']) {
+    document.getElementById('tab-' + t).hidden = t !== name;
+    document.getElementById('tb-' + t).classList.toggle('on', t === name);
+  }
+  try { localStorage.setItem('shape_map_tab', name); } catch (e) {}
+}
+document.getElementById('tb-map').addEventListener('click', () => showTab('map'));
+document.getElementById('tb-groups').addEventListener('click', () => showTab('groups'));
+try { if (localStorage.getItem('shape_map_tab') === 'groups') showTab('groups'); } catch (e) {}
 </script>
 </body>
 </html>
