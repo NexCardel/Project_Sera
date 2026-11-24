@@ -58,6 +58,9 @@ which builds the link's COMP PAGE (the anchor page plus every node attached late
 snapshot_diff.py) and writes comp_<start>_<n>__<page>.json/.csv/.txt for compare.py --comp. One capture = one session (one client): compare.py
 compares the latest capture of a link with the previous one. Files: capture_<start>_<n>.txt/.json
 (n = the n-th page link the capture visited).
+EVERY poll's read (changed or not) also goes to reads_<start>.jsonl in full and to changelog_<start>.jsonl as
+a changelog line (changelog.py); at the end the changelog is replayed and checked against the full reads
+(--no-changelog: neither file).
 
 --once report: tools/pre_dev/class_diff/output/key_probe_YYYYMMDD_HHMMSS.txt + .json (git-ignored - it holds what the
 page shows, client data included; keep it on this PC). A password field's content is never read.
@@ -428,15 +431,22 @@ def _typed(docs: List[List[Dict[str, Any]]], in_control: Optional[set] = None) -
 
 
 def capture(hwnd: int, seconds: float, interval: float, session: str = "",
-            anchor: str = "settled") -> Dict[str, Dict[str, Any]]:
+            anchor: str = "settled", log_to: Optional[tuple] = None) -> Dict[str, Dict[str, Any]]:
     """Poll the window for `seconds`, like SGT: every `interval` read the page (raw view); keep the
     read only when its keys or texts changed since the last kept read OF THAT PAGE LINK, and merge
     every kept read into that link's map AND hand it to snapshot_diff.AnchorPage, which builds the
-    link's comp page (anchor page + attached nodes). Returns {page link: state}. Ctrl+C ends it early."""
+    link's comp page (anchor page + attached nodes). Returns {page link: state}. Ctrl+C ends it early.
+    log_to = (reads path, changelog path): EVERY poll's raw read (changed or not) is appended to both
+    - in full to the first, as a changelog line (changelog.py) to the second."""
     import link_map
     from snapshot_diff import AnchorPage
 
     pages: Dict[str, Dict[str, Any]] = {}
+    writer = None
+    if log_to:
+        from changelog import ChangelogWriter, dumps
+        writer = ChangelogWriter()
+    started_at = datetime.now().isoformat(timespec="milliseconds")
     start = time.monotonic()
     try:
         while True:
@@ -454,6 +464,14 @@ def capture(hwnd: int, seconds: float, interval: float, session: str = "",
             st["polls"] += 1
             if raw:
                 docs = _typed(raw)
+                if writer is not None:
+                    rec = {"v": 1, "ts": datetime.now().isoformat(timespec="milliseconds"), "started": started_at,
+                           "session": session, "portal": "", "url": url, "link": page, "title": title,
+                           "browser": browser, "docs": docs}
+                    with open(log_to[0], "a", encoding="utf-8") as f:
+                        f.write(dumps(rec) + "\n")
+                    with open(log_to[1], "a", encoding="utf-8") as f:
+                        f.write(writer.line(rec))
                 sig = tuple((e["key"], e["text"]) for e in key_flatten({"docs": docs}))
                 if sig != st["last"]:
                     control = read_keys(hwnd, False)
@@ -559,6 +577,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--anchor", choices=("settled", "first"), default="settled",
                     help="comp page: settled (default) = the anchor page is fixed once the loaded page sits still "
                          "for a poll; first = the first snapshot alone")
+    ap.add_argument("--no-changelog", action="store_true",
+                    help="capture: do not write reads_<start>.jsonl + changelog_<start>.jsonl (every poll, changelog.py)")
     ap.add_argument("--timing", action="store_true", help="time SGT's reader in control vs raw view; writes nothing")
     ap.add_argument("--rounds", type=int, default=15, help="reads per view for --timing (default 15)")
     args = ap.parse_args(argv)
@@ -589,8 +609,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         started = datetime.now()
         session = f"{started:%Y%m%d_%H%M%S}"
         _say(f"Capturing for {args.seconds:g} s - use the page normally (type, open popups, submit). Ctrl+C stops early.")
-        pages = capture(hwnd, args.seconds, args.interval, session, args.anchor)
+        log_to = None
+        if not args.no_changelog:
+            log_to = (os.path.join(OUT_DIR, f"reads_{session}.jsonl"), os.path.join(OUT_DIR, f"changelog_{session}.jsonl"))
+        pages = capture(hwnd, args.seconds, args.interval, session, args.anchor, log_to)
         _say("Done.")
+        if log_to and os.path.exists(log_to[1]):
+            from changelog import check
+            _say("Changelog (every poll's read; changelog.py):")
+            check(*log_to)
+            _say(f"  See what changed: python tools/pre_dev/class_diff/changelog.py show {log_to[1]} --nodes")
         for n, (page, st) in enumerate(pages.items(), 1):
             if not st["snapshots"]:
                 continue
