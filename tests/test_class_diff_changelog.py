@@ -224,14 +224,12 @@ def test_view_escapes_page_text(tmp_path):
     assert "<script>x" not in page and "&lt;script&gt;x" in page
 
 
-def test_views_window_has_the_changelog_view():
+def test_views_window_no_longer_has_the_changelog_view_but_clears_its_files():
+    """The changelog view left the views window on 2026-11-25 (changelog.py FILE still writes it); key_probe
+    still writes reads_ / changelog_ files, and Clear all captures still takes them and old view pages."""
     import views_ui
-    by = {v[0]: v for v in views_ui.VIEWS}
-    assert by[views_ui.CHANGELOG][1:3] == ("changelog.py", [])
-    assert views_ui.CHANGELOG in views_ui.DEFAULT_TICKS
-    cmd = views_ui.command(by[views_ui.CHANGELOG], Path("output/comp_20260101_100000_1__p.json"))
-    assert cmd[1].endswith("changelog.py") and cmd[2].endswith("comp_20260101_100000_1__p.json") and len(cmd) == 3
+    assert not any(v[1] == "changelog.py" for v in views_ui.VIEWS)
+    assert not any("changelog" in t for t in views_ui.DEFAULT_TICKS)
     for name in ("reads_20260101_100000.jsonl", "changelog_20260101_100000.jsonl",
                  "changelog_view_capture_20260101_100000_1__p.html"):
         assert name.startswith(views_ui.CLEAR_PREFIXES)
-    assert views_ui.WROTE.match("-> C:/x/output/changelog_view_a.html")

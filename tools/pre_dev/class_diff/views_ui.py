@@ -1,6 +1,6 @@
 """
-tools/pre_dev/class_diff/views_ui.py - PRE-DEV: one small window for the seven HTML views
-=========================================================================================
+tools/pre_dev/class_diff/views_ui.py - PRE-DEV: one small window for the six HTML views and the two-client diff
+=============================================================================================
 Pick a capture or comp page from output/ (newest first), tick the views, press Make views. Each
 view runs its own tool (render.py, shape_map.py, tables.py) as a child process, exactly the command
 you would type, and the pages it writes open in the default browser. The log shows the tools' console
@@ -15,11 +15,12 @@ lines, which hold counts only.
   page map              comp_map.py FILE   (the comp page over time, for a non-technical reader: everything
                                             it showed, a slider to any moment, what happened in plain words;
                                             comp_ and capture_ files only)
-  changelog             changelog.py FILE   (every read of the capture stored as only what changed: the replay
-                                            check SAME / NOT THE SAME, the sizes, and per read what changed -
-                                            texts, new, gone, moved; a capture_ / comp_ file shows its own page
-                                            from the capture's changelog_<start>.jsonl; Browse... also takes a
-                                            changelog_ file or any .jsonl of full reads, e.g. a recorder day)
+
+DIFFERENTIAL ANALYSIS (page_diff.py A B): the file picked in the list is client A; client B is picked in the
+box below it - by default the newest capture / comp page of the SAME page link from ANOTHER session (told
+from the file names, comp_ before capture_). "Compare A with B" writes page_diff_<A>_vs_<B>__<page>.txt
+(every difference, then a summary) and opens it. The changelog view left the window on 2026-11-25
+(changelog.py FILE still writes it).
 
 Both shape map views find the record sets from the boxes (lined up, and matching inside). "match inside"
 is that percentage: it goes to shape_map.py as --match-min when it is not shape_map.MATCH_MIN. Lower it
@@ -54,11 +55,9 @@ VIEWS = [
     ("card match (shape map + %)", "shape_map.py", [], False),
     ("tables (tables.py)", "tables.py", ["--html"], True),
     ("page map (changes over time)", "comp_map.py", [], False),
-    ("changelog (what changed per read)", "changelog.py", [], False),
 ]
 SHAPE_MAP, CARD_MATCH, PAGE_MAP = "shape map (record sets)", "card match (shape map + %)", "page map (changes over time)"
-CHANGELOG = "changelog (what changed per read)"
-DEFAULT_TICKS = ("outline (container shapes)", CARD_MATCH, PAGE_MAP, CHANGELOG)
+DEFAULT_TICKS = ("outline (container shapes)", CARD_MATCH, PAGE_MAP)
 MATCH_MIN = 50.0        # shape_map.MATCH_MIN (a test keeps the two equal; this window imports no tool)
 
 
@@ -84,7 +83,7 @@ def picked(views):
 # Clear all captures: the captures and comp pages, and every page or table the tools made from them.
 # Files with other names in output/ and any sub-folder stay.
 CLEAR_PREFIXES = ("capture_", "comp_", "key_probe_", "record_", "render_", "shape_map_", "tables_", "groups_",
-                  "arrange_", "compare_", "cards_", "map_", "reads_", "changelog_")
+                  "arrange_", "compare_", "cards_", "map_", "reads_", "changelog_", "page_diff_")
 
 
 # Of those, the captures themselves (the rest are pages made from them).
@@ -119,6 +118,8 @@ def to_recycle_bin(paths) -> bool:
 
 
 WROTE = re.compile(r"^(?:->|HTML:)\s*(.+\.html)\s*$")
+REPORT = re.compile(r"^Report\s*:\s*(.+\.txt)\s*$")          # page_diff.py's report line
+_NAME = re.compile(r"^(?:comp|capture)_(\d{8}_\d{6})_\d+__(.+)\.json$")
 
 
 def child_python() -> str:
@@ -152,12 +153,36 @@ def command(view, path: Path, match_min=None):
     return [child_python(), str(HERE / script), str(src)] + extra + more
 
 
+def page_of(path: Path):
+    """(session stamp, page slug) of a comp_ / capture_ file name, else (None, None). Same slug = same link."""
+    m = _NAME.match(Path(path).name)
+    return (m.group(1), m.group(2)) if m else (None, None)
+
+
+def partner(a: Path, files):
+    """Client B for client A: the first (newest) file of the same page link from another session, its comp
+    page before its capture; None when there is none."""
+    stamp, slug = page_of(a)
+    if slug is None:
+        return None
+    same = [p for p in files if p != a and page_of(p)[1] == slug and page_of(p)[0] != stamp]
+    if not same:
+        return None
+    newest = page_of(same[0])[0]
+    return next((p for p in same if page_of(p)[0] == newest and p.name.startswith("comp_")), same[0])
+
+
+def diff_command(a: Path, b: Path):
+    """The differential analysis: page_diff.py A B (it writes the .txt report and prints its path)."""
+    return [child_python(), str(HERE / "page_diff.py"), str(a), str(b)]
+
+
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
         root.title("SDIS pre-dev views")
-        root.geometry("900x620")
-        root.minsize(640, 420)
+        root.geometry("900x700")
+        root.minsize(640, 500)
         self.files = []
         self.busy = False
 
@@ -165,7 +190,7 @@ class App:
         top.pack(fill="both", expand=True)
         top.columnconfigure(0, weight=1)
         top.rowconfigure(1, weight=1)
-        top.rowconfigure(4, weight=1)
+        top.rowconfigure(5, weight=1)
 
         bar = ttk.Frame(top)
         bar.grid(row=0, column=0, sticky="ew")
@@ -186,6 +211,7 @@ class App:
         sb.grid(row=0, column=1, sticky="ns")
         self.list.configure(yscrollcommand=sb.set)
         self.list.bind("<Double-Button-1>", lambda e: self.run())
+        self.list.bind("<<ListboxSelect>>", lambda e: self.pick_partner())
 
         vf = ttk.LabelFrame(top, text="Views", padding=6)
         vf.grid(row=2, column=0, sticky="ew")
@@ -202,7 +228,7 @@ class App:
         ttk.Spinbox(mf, from_=0, to=100, increment=5, width=5, textvariable=self.match_var).pack(side="left", padx=4)
         ttk.Label(mf, text=f"%  (default {MATCH_MIN:g}; shape map and card match views)").pack(side="left")
         self.open_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(vf, text="open pages when done", variable=self.open_var).grid(row=last + 1, column=0, sticky="w", pady=(6, 0))
+        ttk.Checkbutton(vf, text="open pages / report when done", variable=self.open_var).grid(row=last + 1, column=0, sticky="w", pady=(6, 0))
         btns = ttk.Frame(vf)
         btns.grid(row=last + 1, column=1, columnspan=2, sticky="e", pady=(6, 0))
         ttk.Button(btns, text="All", command=lambda: [t.set(True) for t in self.ticks]).pack(side="left")
@@ -210,9 +236,22 @@ class App:
         self.go = ttk.Button(btns, text="Make views", command=self.run)
         self.go.pack(side="left", padx=(12, 0))
 
-        ttk.Label(top, text="Log (the tools print counts only)").grid(row=3, column=0, sticky="w", pady=(8, 0))
+        df = ttk.LabelFrame(top, text="Differential analysis: the same page, two clients (page_diff.py)", padding=6)
+        df.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        df.columnconfigure(1, weight=1)
+        ttk.Label(df, text="Client A:").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        self.a_label = ttk.Label(df, text="(the file picked above)", font=("Consolas", 9))
+        self.a_label.grid(row=0, column=1, columnspan=2, sticky="w")
+        ttk.Label(df, text="Client B:").grid(row=1, column=0, sticky="w", padx=(0, 6), pady=(4, 0))
+        self.b_var = tk.StringVar()
+        self.b_box = ttk.Combobox(df, textvariable=self.b_var, state="readonly", font=("Consolas", 9))
+        self.b_box.grid(row=1, column=1, sticky="ew", pady=(4, 0))
+        self.diff_go = ttk.Button(df, text="Compare A with B", command=self.diff)
+        self.diff_go.grid(row=1, column=2, sticky="e", padx=(8, 0), pady=(4, 0))
+
+        ttk.Label(top, text="Log (the tools print counts only)").grid(row=4, column=0, sticky="w", pady=(8, 0))
         self.log = tk.Text(top, height=10, font=("Consolas", 9), wrap="none", state="disabled")
-        self.log.grid(row=4, column=0, sticky="nsew")
+        self.log.grid(row=5, column=0, sticky="nsew")
         self.refresh()
 
     # ── list ─────────────────────────────────────────────────────────────────
@@ -225,6 +264,15 @@ class App:
             self.list.insert("end", p.name)
         if self.files:
             self.list.selection_set(0)
+        self.b_box.configure(values=[p.name for p in self.files])
+        self.pick_partner()
+
+    def pick_partner(self):
+        """Client A = the picked file; client B = its default partner (same page link, another session)."""
+        a = self.selected()
+        self.a_label.configure(text=a.name if a else "(the file picked above)")
+        b = partner(a, self.files) if a else None
+        self.b_var.set(b.name if b else "")
 
     def browse(self):
         f = filedialog.askopenfilename(initialdir=OUT, title="A capture, comp page, read or record file",
@@ -233,6 +281,7 @@ class App:
             self.refresh(keep=Path(f))
             self.list.selection_clear(0, "end")
             self.list.selection_set(self.files.index(Path(f)))
+            self.pick_partner()
 
     def selected(self):
         sel = self.list.curselection()
@@ -282,16 +331,55 @@ class App:
                 self.root.after(0, self.say, f"   failed (exit {r.returncode})")
         self.root.after(0, self._done)
 
+    def diff(self):
+        """Client A (the list) vs client B (the box): page_diff.py's .txt report, opened when it is written."""
+        a = self.selected()
+        b = next((p for p in self.files if p.name == self.b_var.get()), None)
+        if self.busy:
+            return
+        if not a:
+            self.say("pick client A's file in the list first")
+            return
+        if not b:
+            self.say("pick client B in the box (no capture of this page from another session yet?)")
+            return
+        if a == b:
+            self.say("client A and client B are the same file")
+            return
+        self.busy = True
+        self.go.configure(state="disabled")
+        self.diff_go.configure(state="disabled")
+        threading.Thread(target=self._diff_work, args=(a, b, self.open_var.get()), daemon=True).start()
+
+    def _diff_work(self, a, b, open_report):
+        self.root.after(0, self.say, f"== differential analysis: A {a.name}  vs  B {b.name}")
+        try:
+            r = subprocess.run(diff_command(a, b), cwd=REPO, env=dict(os.environ, PYTHONIOENCODING="utf-8"),
+                               capture_output=True, text=True, encoding="utf-8", errors="replace",
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except OSError as e:
+            self.root.after(0, self.say, f"   could not start: {e}")
+        else:
+            for line in (r.stdout + r.stderr).splitlines():
+                self.root.after(0, self.say, "   " + line)
+                m = REPORT.match(line.strip())
+                if m and r.returncode == 0 and open_report:
+                    os.startfile(m.group(1))
+            if r.returncode != 0:
+                self.root.after(0, self.say, f"   failed (exit {r.returncode})")
+        self.root.after(0, self._done)
+
     def _done(self):
         self.busy = False
         self.go.configure(state="normal")
+        self.diff_go.configure(state="normal")
         self.say("done")
 
     def clear_all(self):
         """Every capture and comp page in output/ and the views made from them, to the Recycle Bin, after a yes."""
         from tkinter import messagebox
         if self.busy:
-            self.say("wait until the views are made")
+            self.say("wait until the views or the diff are made")
             return
         files = clearable()
         if not files:
