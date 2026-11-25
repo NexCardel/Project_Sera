@@ -57,18 +57,20 @@ SCC_DETECT_SETTING = "scc_detect_mode"
 SCC_DETECT_DEFAULT = "off"
 SCC_DETECT_MODES = ("off", "on")
 
-# UCW (docs/ucw/ucw-plan.md): where SGT's UI Automation reads run. "process" = the capture worker
-# process (core/capture/worker_main); "inproc" = the reader inside Sera, as before UCW. A kill switch,
-# not a comparison: only one runs. SERA_CAPTURE_WORKER overrides it (developer / support).
+# UCW (docs/ucw/ucw-plan.md): where SGT's UI Automation reads run. "csharp" (default) = the capture worker
+# written in C# (core/capture/cs_worker, native/capture_worker; no fallback to Python);
+# "process" = the Python capture worker
+# (core/capture/worker_main); "inproc" = the reader inside Sera, as before UCW. A kill switch, not a
+# comparison: only one runs. SERA_CAPTURE_WORKER overrides it.
 CAPTURE_WORKER_SETTING = "capture_worker"
-CAPTURE_WORKER_DEFAULT = "process"
-CAPTURE_WORKER_MODES = ("process", "inproc")
+CAPTURE_WORKER_DEFAULT = "csharp"
+CAPTURE_WORKER_MODES = ("process", "csharp", "inproc")
 
 _TRUE = ("1", "true", "yes", "on")
 
 
 def read_capture_worker(get_setting: Optional[Callable[..., object]] = None) -> str:
-    """"process" or "inproc": SERA_CAPTURE_WORKER first, then the setting; anything else is the default."""
+    """"process", "csharp" or "inproc": SERA_CAPTURE_WORKER first, then the setting; anything else is the default."""
     import os
     env = os.environ.get("SERA_CAPTURE_WORKER", "").strip().lower()
     if env in CAPTURE_WORKER_MODES:

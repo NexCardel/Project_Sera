@@ -93,6 +93,21 @@ def preflight():
     print(f"Preflight OK - building version {next(iter(versions.values()))} with {sys.executable}")
 
 
+def build_cs_capture_worker(dist_dir: Path) -> None:
+    """The C# capture worker (native/capture_worker, setting capture_worker = csharp): built with the C#
+    compiler inside Windows' .NET Framework and copied next to Amas_Sera.exe, where core/capture/cs_worker
+    looks for it. It is the default worker with no Python fallback, so a failed build stops the package."""
+    src = APP_DIR / "native" / "capture_worker"
+    res = subprocess.run(["cmd", "/c", str(src / "build.bat")], cwd=str(src))
+    built = src / "bin" / "SeraCaptureWorker.exe"
+    if res.returncode != 0 or not built.exists():
+        print("\nERROR: the C# capture worker did not build - an installer without it would read no pages.")
+        sys.exit(1)
+    if dist_dir.exists():
+        shutil.copy2(built, dist_dir / built.name)
+        print(f"C# capture worker: {dist_dir / built.name}")
+
+
 def build():
     print("====================================================")
     print("   Building Amas Sera Standalone Executable Bundle  ")
@@ -129,7 +144,9 @@ def build():
         sys.exit(res.returncode)
         
     exe_file = dist_dir / "Amas_Sera.exe"
-    
+
+    build_cs_capture_worker(dist_dir)
+
     if exe_file.exists():
         print("\n====================================================")
         print(" SUCCESS! Amas Sera Executable Bundle Created!")

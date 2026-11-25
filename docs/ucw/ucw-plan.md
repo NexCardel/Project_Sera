@@ -210,6 +210,44 @@ WP3 and WP5 changes; `loop.py` and `router_link.py` carry both the move's import
 | Pipe round trip with the heavy page's raw nodes both ways | 13.6-14.2 ms (about 7 ms one way for 4,533 nodes); empty frame 0.13 ms |
 | Reader cost per read on the heavy page, in Sera vs in the worker | the same (frame read 2,016 vs 2,078 ms): the worker adds no read time |
 
+## C# worker (2026-11-22)
+
+The same worker written in C# (`native/capture_worker`, `SeraCaptureWorker.exe`, 60 KB): reader lanes and
+wedge rules, Document-first scope, tab id, address bar, cached node reads, SDIS raw reads and SGT-I's flash
+listener, ported line for line from `core/capture/reader.py`, `uia_text.py`, `core/sgt_i/uia_nodes.py` and
+`uia_events.py`. Page-change events stay off, as the Python worker's default (`SERA_CAPTURE_EVENTS`).
+
+- **Build:** `native\capture_worker\build.bat` uses the C# compiler inside Windows' .NET Framework 4.x -
+  nothing to install on a build PC, and the exe runs on any Windows 10/11 PC. `build_tools/build_package.py`
+  builds it and copies it next to `Amas_Sera.exe`.
+- **Picking it:** the default (setting `capture_worker` = `csharp`; `process` forces the Python worker,
+  `SERA_CAPTURE_WORKER` overrides both). No fallback to the Python worker (owner, 2026-11-23): a C# worker
+  that cannot start or dies is restarted by the supervisor (3 restarts in 60 s: 30 s wait, health
+  `uia-restarting`); a missing exe is noted in vsdc.log and nothing reads until it is there.
+- **Frames:** JSON instead of pickle. `core/capture/cs_worker.CsWorkerProcess` (a `WorkerProcess`) keeps each
+  request's `ReadContext` and turns the frames back into the same tuples and `ReadResult` objects, so
+  `RemoteReader`, the supervisor, SGT and the SDIS recorder are unchanged.
+- **Scope in the worker:** built-in portals, `vsdc_scope.json` and local test pages, exactly what the Python
+  worker sees (neither worker opens the database, so neither knows portals registered from services).
+
+Measured on this PC (Edge, fictional local pages, 15 reads each, `compare_workers.py` in the session's
+scratchpad):
+
+| Measure | Python worker | C# worker |
+| --- | --- | --- |
+| Start to ready | 313-451 ms | 56-285 ms |
+| Light page (32 nodes) read | 16 ms | 17 ms |
+| Heavy page (2,710 nodes) read, p50 | 360 ms | 285 ms |
+| Heavy page, worker CPU per read | 129 ms | 54 ms |
+| Heavy page SDIS raw read | 455-532 ms | 350 ms |
+| Worker memory (working set / private) | 64 / 50 MB | 45 / 35 MB |
+| Lines, nodes, raw nodes, URLs, tab ids | | identical on both pages |
+| SGT-I flashes (live region, 6 s) | 6 | 6, same lines |
+| Decoding the heavy result in Sera | 1.0 ms (pickle) | 3.3 ms (JSON) |
+
+Most of a heavy read is the browser building its cache (about 230 ms here), which no worker can make
+faster; the C# worker removes most of the worker's own CPU, which is what a 4-thread office PC is short of.
+
 **Open for WP9:** run `python tools/ucw_probe.py --exe <Sera.exe> --out probe.json` on an office PC with
 portal pages open; if every page says `same = yes`, switch WP5 to one raw read per page. Watch vsdc.log for
 `loop_slow_shots` (the PrintWindow suspect) and `uia_restarts`. Put a PC back with `capture_worker = inproc`.

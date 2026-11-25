@@ -494,8 +494,9 @@ def test_health_names_the_restarting_state():
 def test_the_setting_and_its_override(monkeypatch):
     from core.vsdc.vsdc_engines import read_capture_worker
     monkeypatch.delenv("SERA_CAPTURE_WORKER", raising=False)
-    assert read_capture_worker(lambda k, d: d) == "process"
+    assert read_capture_worker(lambda k, d: d) == "csharp"          # the C# worker is the default
+    assert read_capture_worker(lambda k, d: "process") == "process"
     assert read_capture_worker(lambda k, d: "inproc") == "inproc"
-    assert read_capture_worker(lambda k, d: "nonsense") == "process"
+    assert read_capture_worker(lambda k, d: "nonsense") == "csharp"
     monkeypatch.setenv("SERA_CAPTURE_WORKER", "inproc")
     assert read_capture_worker(lambda k, d: "process") == "inproc"

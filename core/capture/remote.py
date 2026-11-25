@@ -111,6 +111,13 @@ class WorkerProcess:
         self._echo.pop(n, None)
         return (time.perf_counter() - t0) * 1000.0 if ok else -1.0
 
+    # The frame codec; core/capture/cs_worker.CsWorkerProcess overrides both for the C# worker's JSON frames.
+    def _write_msg(self, stream: Any, msg: Any) -> None:
+        protocol.write(stream, msg)
+
+    def _read_msg(self, stream: Any) -> Any:
+        return protocol.read(stream)
+
     def _write_loop(self) -> None:
         stream = self.proc.stdin
         while True:
@@ -118,7 +125,7 @@ class WorkerProcess:
             if msg is None:
                 break
             try:
-                protocol.write(stream, msg)
+                self._write_msg(stream, msg)
             except Exception:
                 break
         try:
@@ -130,7 +137,7 @@ class WorkerProcess:
         stream = self.proc.stdout
         while True:
             try:
-                msg = protocol.read(stream)
+                msg = self._read_msg(stream)
             except Exception:
                 msg = None
             if msg is None:

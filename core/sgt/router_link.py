@@ -204,7 +204,7 @@ class SgtLink:
         """UCW: "process" (the capture worker) or "inproc". A test or tool that hands the router its own
         backend (capture_backend) reads in-process unless capture_worker_override says otherwise."""
         override = getattr(self, "capture_worker_override", None)
-        if override in ("process", "inproc"):
+        if override in ("process", "csharp", "inproc"):
             return override
         if self.capture_backend is not None:
             return "inproc"
@@ -217,11 +217,24 @@ class SgtLink:
         read - SGT's, the SDIS recorder's raw reads (WP5) and SGT-I's flash events (WP6) - runs in the
         capture worker process."""
         mode = self.capture_worker_mode()
-        if mode == "process":
+        if mode in ("process", "csharp"):
             from core.capture.remote import RemoteReader
             from core.sgt.capture import loop as capture_loop
-            reader = RemoteReader(clock=clock, seq=lambda: next(capture_loop._seq))
-            print("[SGT] page reads run in the capture worker process (capture_worker = process)")
+            spawn = None
+            if mode == "csharp":
+                # The C# worker only - no fallback to the Python worker (owner, 2026-11-23). Without its exe
+                # the supervisor keeps retrying and reports it; capture_worker = process picks Python.
+                from core.capture import cs_worker
+                spawn = cs_worker.spawn
+                if cs_worker.exe_path() is None:
+                    try:
+                        from core.vsdc import vsdc_diag
+                        vsdc_diag.note(f"capture worker: {cs_worker.EXE_NAME} not found - no page reads until it "
+                                       "is there (set capture_worker = process for the Python worker)")
+                    except Exception:
+                        pass
+            reader = RemoteReader(spawn=spawn, clock=clock, seq=lambda: next(capture_loop._seq))
+            print(f"[SGT] page reads run in the capture worker process (capture_worker = {mode})")
         else:
             from core.capture.reader import PageReader
             reader = PageReader(backend=self.capture_backend, clock=clock)

@@ -740,6 +740,10 @@ class SeraApp:
         # A frozen window ("Not responding") writes every thread's stack to logs/hang.log.
         from core import hang_watchdog
         hang_watchdog.start(self.app)
+        # Smaller hitches (100 ms and up) and what caused them: logs/ui_lag.log, ranked by
+        # tools/ui_lag_report.py. SERA_UI_LAG=off switches it off.
+        from core import ui_lag
+        ui_lag.start(self.app)
 
         # Heavy historical repair/report work is intentionally deferred until
         # after the main window and extension listener are available.

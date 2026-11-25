@@ -137,8 +137,10 @@ class Worker:
                 return
             factory = self._events_factory
             if factory is None:
-                from core.capture.page_events import PageEvents
-                factory = PageEvents
+                # Off unless SERA_CAPTURE_EVENTS=on: the desktop-wide WinEvent hook made Edge stop answering
+                # UIA in stress tests (hook off 5/5 clean, hook on 5/5 stalled). Polling covers page changes.
+                from core.capture.page_events import NullEvents, PageEvents
+                factory = PageEvents if os.environ.get("SERA_CAPTURE_EVENTS", "").strip().lower() == "on" else NullEvents
             self._events = factory(lambda hwnd, kind: self.send(("event", hwnd, kind)), diag=self._note)
         self._events.watch(hwnds)
 
