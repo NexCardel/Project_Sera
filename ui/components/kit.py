@@ -136,7 +136,7 @@ DataGrid(rows=0, columns=0, parent=None, *, tone="white", list_mode=False)
                                            actionTriggered(row, column, key); hover tooltip per button
       ROLE_SUB      "second line"          two-line cell: bold first line, muted mono second line
       ROLE_FILINGS  [(text, fill, ink, tip)] filing-status chips, left to right; fill None draws a
-                                           hollow chip outlined in ink; "+N" when they do not fit;
+                                           muted "not captured" chip (ink ignored); "+N" when they do not fit;
                                            hover shows the chip's tip
       Checkable items with a check state (item.setCheckState) draw a kit checkbox; a click on it or
       Space toggles CheckStateRole.
@@ -149,6 +149,8 @@ DataGrid(rows=0, columns=0, parent=None, *, tone="white", list_mode=False)
     fit_columns(available=None) -> hidden columns  (runs on every viewport resize once a column has
         a spec; columns hidden by the screen stay hidden; widths the user dragged win until
         reset_manual_widths()). signal columnsFitted(list). hidden_by_fit(), manual_widths().
+    content_width(col) -> px the column needs to show its header (sort arrow included) and every
+        DisplayRole text whole, in the heavier selected weight, plus the cell padding.
     set_compact(on) / apply_width_mode(mode) refit. fit_column_widths(...) is the pure function.
 CellAction(key, icon, tooltip, *, primary=False, colour=None, enabled=True)
     One drawn 26 px button; primary is emerald (or `colour`, e.g. the service colour). tooltip required.
@@ -218,11 +220,12 @@ Every clickable piece: hover, mint focus edge, disabled at 40 % (a disabled widg
 its tooltip). No timers, no animation. qtawesome is imported only when an icon is drawn.
 """
 
+import math
 from functools import lru_cache
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
-    QBrush, QColor, QFont, QFontMetrics, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap,
+    QBrush, QColor, QFont, QFontMetrics, QFontMetricsF, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap,
     QPolygonF, QRegion, QTextBlockFormat, QTextCharFormat, QTextCursor,
 )
 from PySide6.QtWidgets import (
@@ -3090,7 +3093,10 @@ class GridDelegate(QStyledItemDelegate):
         fm = QFontMetrics(font)
         h = K["h_gpill"]
         top = cr.top() + (cr.height() - h) / 2
-        widths = [fm.horizontalAdvance(c[0]) + 2 * self._FILING_PAD for c in chips]
+        # fractional advance rounded up plus 2 px slack: the screen's hinted text can run a pixel or
+        # two wider than the integer metrics, which elided "Oct 26" to "Oct ..." with room to spare
+        fmf = QFontMetricsF(font)
+        widths = [math.ceil(fmf.horizontalAdvance(c[0])) + 2 + 2 * self._FILING_PAD for c in chips]
         placed, x = [], cr.left()
         for i, (w, chip) in enumerate(zip(widths, chips)):
             rest = len(chips) - i - 1
@@ -3111,19 +3117,23 @@ class GridDelegate(QStyledItemDelegate):
         painter.setFont(font)
         radius = K["h_gpill"] / 2
         for r, (text, fill, ink, _tip) in placed:
-            ink_c = QColor(ink)
             if fill:
+                ink_c = QColor(ink)
                 painter.setPen(Qt.NoPen)
                 painter.setBrush(QColor(fill))
             else:
-                pen = QPen(ink_c, 1.2, Qt.DashLine)
-                painter.setPen(pen)
-                painter.setBrush(Qt.NoBrush)
+                # not captured: a quiet muted chip (faint tint, thin solid edge) so captured chips stand out
+                mute = self._pal()["mute"]
+                ink_c = QColor(mute)
+                painter.setPen(QPen(_qcolor(mute, 0.35), 1))
+                painter.setBrush(_qcolor(mute, 0.08))
             painter.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
             painter.setPen(ink_c)
             room = int(r.width()) - 2 * self._FILING_PAD
-            painter.drawText(r.adjusted(self._FILING_PAD, 0, -self._FILING_PAD, 0), Qt.AlignLeft | Qt.AlignVCenter,
-                             fm.elidedText(text, Qt.ElideRight, max(room, 0)))
+            full = fm.horizontalAdvance(text) <= room + 2
+            painter.drawText(r.adjusted(self._FILING_PAD, 0, -self._FILING_PAD, 0),
+                             Qt.AlignLeft | Qt.AlignVCenter | (Qt.TextDontClip if full else 0),
+                             text if full else fm.elidedText(text, Qt.ElideRight, max(room, 0)))
         if more is not None:
             painter.setPen(QPen(QColor(self._pal()["line"]), 1))
             painter.setBrush(Qt.NoBrush)
@@ -3534,6 +3544,33 @@ class DataGrid(QTableWidget):
     def column_kind(self, col):
         spec = self._specs.get(col)
         return spec["kind"] if spec else "text"
+
+    def content_width(self, col):
+        """The width column `col` needs to show its header and every plain-text cell whole: the widest
+        text in the cell font (the heavier selected weight included) or the header label with its sort
+        arrow, plus the cell padding."""
+        from PySide6.QtWidgets import QStyleOptionViewItem
+        option = QStyleOptionViewItem()
+        option.font = self.font()
+        pad = self.delegate._pad()
+        header = self.horizontalHeader()
+        hfm = QFontMetricsF(header._font())
+        best = hfm.horizontalAdvance(header.section_text(col)) + 12
+        model = self.model()
+        metrics = {}
+        for row in range(self.rowCount()):
+            index = model.index(row, col)
+            text = index.data(Qt.DisplayRole)
+            if not text:
+                continue
+            font = self.delegate._text_font(option, index, selected=True)
+            key = font.key()
+            fm = metrics.get(key)
+            if fm is None:
+                fm = metrics[key] = QFontMetricsF(font)
+            extra = K["d_cell_cb"] + T["s_2"] if self.delegate._has_check(index) else 0
+            best = max(best, fm.horizontalAdvance(str(text)) + extra)
+        return math.ceil(best) + 2 * pad + 4
 
     def _spec(self, col):
         return self._specs.get(col) or {"kind": "text", "width": None, "minimum": None, "stretch": 1,

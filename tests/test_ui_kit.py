@@ -1060,6 +1060,22 @@ def test_grid_fit_columns_compact_signal_and_user_hidden(app):
     assert g.columnWidth(0) + g.columnWidth(1) + g.columnWidth(2) == width
 
 
+def test_grid_content_width_covers_header_and_longest_text(app):
+    g = _grid(rows=2, cols=2)
+    short = g.content_width(0)
+    assert short > g.delegate._pad() * 2                     # header "COLUMN 0" at least
+    g.item(1, 0).setText("A much longer company name than the rest")
+    longer = g.content_width(0)
+    fm = kit.QFontMetricsF(g.font())
+    assert longer > short and longer >= fm.horizontalAdvance("A much longer company name than the rest")
+    for r in range(2):
+        g.item(r, 1).setText("")
+    header = g.horizontalHeader()                            # empty cells: the header decides
+    hfm = kit.QFontMetricsF(header._font())
+    expected = kit.math.ceil(hfm.horizontalAdvance(header.section_text(1)) + 12) + 2 * g.delegate._pad() + 4
+    assert g.content_width(1) == expected
+
+
 def test_grid_manual_width_wins_until_reset(app):
     g = _grid()
     for c in range(3):

@@ -71,6 +71,21 @@ def test_typing_filters_live_after_the_debounce(world):
     assert _shown_ids(win) == [ids["B"]]
 
 
+def test_columns_fit_their_content_and_hold_while_searching(world):
+    db, ids, win = world
+    t = win.results_table
+    n = len(win._current_mcl_cols)
+    widths = [t._spec(c)["width"] for c in range(n)]
+    for c in range(n):
+        assert widths[c] == max(min(t.content_width(c), win.CONTENT_CAP), t._spec(c)["minimum"] or 0)
+        assert t._spec(c)["max_share"] is None
+    assert t._spec(n)["width"] is None                                   # Filing status flexes
+    QTest.keyClicks(win.search_box, "Bravo")
+    QTest.qWait(300)
+    assert _shown_ids(win) == [ids["B"]]
+    assert [t._spec(c)["width"] for c in range(n)] == widths             # no jump while typing
+
+
 def test_search_matches_any_column_value(world):
     db, ids, win = world
     QTest.keyClicks(win.search_box, "ABCDE1003F")                        # a PAN, not a name

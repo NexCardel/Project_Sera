@@ -150,6 +150,26 @@ class SearchWindow(WidthAware, QWidget):
         self._panel_open = bool(on)
         self._fit_grid()
 
+    # widest a text column grows to fit its content; longer values elide (hover shows them)
+    CONTENT_CAP = 380
+
+    def _size_to_content(self, mcl_cols, remeasure=True):
+        """Every column but Filing status takes the width its content needs (header included, capped
+        at CONTENT_CAP, never under its minimum); Filing status, the one flexible column, gets the rest.
+        When the grid is too narrow for all of that, the fitted columns shrink toward their minimums.
+        A search keeps the widths measured on the full list, so columns do not jump while typing."""
+        t = self.results_table
+        key = tuple(col.get("field_name") or col.get("label") for col in mcl_cols)
+        cached = getattr(self, "_content_widths", None)
+        if remeasure or not cached or cached[0] != key:
+            cached = self._content_widths = (key, [t.content_width(c) for c in range(len(mcl_cols))])
+        for c_idx, col in enumerate(mcl_cols):
+            spec = _column_spec(col)
+            need = min(cached[1][c_idx], self.CONTENT_CAP)
+            spec["width"] = max(need, spec.get("minimum") or 0)
+            spec.pop("max_share", None)
+            t.set_column(c_idx, **spec)
+
     def _fit_grid(self):
         t = getattr(self, "results_table", None)
         if t is None or not t.columnCount():
@@ -698,6 +718,7 @@ class SearchWindow(WidthAware, QWidget):
             self._drawn_grid = (state_at_start, time.monotonic()) if not text else None
 
             self._current_mcl_cols = mcl_cols
+            self._size_to_content(mcl_cols, remeasure=not text)
             self._fit_grid()
             self._update_counts(len(clients), text, svc_val)
             self._update_selection_bar()
